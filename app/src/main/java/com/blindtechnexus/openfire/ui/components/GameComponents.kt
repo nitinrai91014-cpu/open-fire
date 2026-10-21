@@ -247,7 +247,7 @@ fun HpBar(current: Int, max: Int, isDevil: Boolean, modifier: Modifier = Modifie
 }
 
 @Composable
-fun RadarBar(distance: Float, modifier: Modifier = Modifier) {
+fun RadarBar(distance: Float, modifier: Modifier = Modifier, extraDesc: String = "") {
     val prox = (1.0f - distance / 100.0f).coerceIn(0f, 1f)
     val animatedProx by animateFloatAsState(targetValue = prox, label = "radar_anim")
 
@@ -255,7 +255,8 @@ fun RadarBar(distance: Float, modifier: Modifier = Modifier) {
         listOf(HpPlayerStart, WarnBright, DangerBright)
     )
 
-    val desc = "Enemy proximity ${(prox * 100).roundToInt()} percent, distance ${distance.roundToInt()} meters"
+    val baseDesc = "Enemy proximity ${(prox * 100).roundToInt()} percent, distance ${distance.roundToInt()} meters"
+    val desc = if (extraDesc.isEmpty()) baseDesc else "$baseDesc. $extraDesc"
 
     Box(
         modifier = modifier

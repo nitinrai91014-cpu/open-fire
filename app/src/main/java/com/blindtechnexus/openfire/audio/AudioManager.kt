@@ -38,6 +38,15 @@ class AudioManager(private val context: Context) {
     companion object {
         private const val TAG = "OpenFireAudio"
         val LONG_TRACK_KEYS = setOf("win", "lose", "parachute", "airplane", "music", "walk")
+
+        /** Pending play requests older than this are dropped (stale intent). */
+        private const val PENDING_PLAY_TTL_MS = 5_000L
+
+        /** Max queued play requests waiting for their sound to finish loading. */
+        private const val MAX_PENDING_PLAYS = 32
+
+        /** Max load attempts (asset retry + synthetic fallback) per sound key. */
+        private const val MAX_LOAD_ATTEMPTS = 3
     }
 
     private val soundPool: SoundPool = SoundPool.Builder()
@@ -54,6 +63,25 @@ class AudioManager(private val context: Context) {
     private val soundMap = ConcurrentHashMap<String, Int>()
     private val loadedSounds = ConcurrentHashMap.newKeySet<Int>()
     private val activeSfxStreams = ConcurrentHashMap<String, MutableSet<Int>>()
+
+    // Reliable playback pipeline: map every sample id back to its key, count
+    // load attempts for retries, and queue play requests that arrive while a
+    // sound is still loading so no sound is ever silently dropped.
+    private val sampleToKey = ConcurrentHashMap<Int, String>()
+    private val loadAttempts = ConcurrentHashMap<String, Int>()
+    private val pendingLock = Any()
+    private val pendingPlays = ArrayDeque<PendingPlay>()
+
+    private data class PendingPlay(
+        val key: String,
+        val volume: Float,
+        val rate: Float,
+        val posX: Float,
+        val posY: Float,
+        val posZ: Float,
+        val loop: Boolean,
+        val enqueuedAt: Long
+    )
 
     // Managed MediaPlayers for long / streaming audio
     private val managedPlayers = ConcurrentHashMap<String, MediaPlayer>()
@@ -84,7 +112,8 @@ class AudioManager(private val context: Context) {
         "gloowall" to listOf("49h9c0.mp3", "gloowall.mp3"),
         "medkit" to listOf("oqvwpr.mp3", "medkit.mp3"),
         "ammo" to listOf("onm1jd.mp3", "ammo.mp3"),
-        "spend" to listOf("spend-sound.mp3"),
+        "spend" to listOf("money-spend.mp3", "spend-sound.mp3"),
+        "cover" to listOf("cover-sound.mp3", "cover.mp3"),
         "jump" to listOf("yz2t5x.mp3", "jump.mp3"),
         "land" to listOf("yz2t5x.mp3", "land.mp3"),
         "airplane" to listOf("w3abgf.mp3", "airplane.mp3"),
@@ -97,8 +126,16 @@ class AudioManager(private val context: Context) {
 
     init {
         soundPool.setOnLoadCompleteListener { _, sampleId, status ->
+            val key = sampleToKey[sampleId]
             if (status == 0) {
                 loadedSounds.add(sampleId)
+                if (key != null) {
+                    flushPendingPlays(key)
+                }
+            } else if (key != null) {
+                handleLoadFailure(key, sampleId)
+            } else {
+                loadedSounds.remove(sampleId)
             }
         }
         preloadShortSounds()
@@ -109,30 +146,124 @@ class AudioManager(private val context: Context) {
             for ((key, files) in soundAliases) {
                 // Preload only short SFX into SoundPool. Long audio tracks are streamed via MediaPlayer on-demand.
                 if (key in LONG_TRACK_KEYS) continue
-
-                var loaded = false
-                for (fileName in files) {
-                    try {
-                        val afd = context.assets.openFd("sounds/$fileName")
-                        val soundId = soundPool.load(afd, 1)
-                        soundMap[key] = soundId
-                        loaded = true
-                        break
-                    } catch (_: Exception) {}
-                }
-                if (!loaded) {
-                    try {
-                        val synthFile = generateSyntheticSoundFile(key)
-                        if (synthFile != null && synthFile.exists()) {
-                            val soundId = soundPool.load(synthFile.absolutePath, 1)
-                            soundMap[key] = soundId
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error generating fallback for $key", e)
-                    }
-                }
+                loadShortSound(key, files, allowSynthetic = true)
             }
         }
+    }
+
+    /**
+     * Loads one short SFX into the SoundPool from the first asset file that
+     * opens, optionally falling back to a procedurally generated WAV so the
+     * key is always playable.
+     */
+    private fun loadShortSound(key: String, files: List<String>, allowSynthetic: Boolean) {
+        for (fileName in files) {
+            try {
+                val afd = context.assets.openFd("sounds/$fileName")
+                val soundId = soundPool.load(afd, 1)
+                if (soundId != 0) {
+                    soundMap[key] = soundId
+                    sampleToKey[soundId] = key
+                    return
+                }
+            } catch (_: Exception) {}
+        }
+        if (allowSynthetic) {
+            try {
+                val synthFile = generateSyntheticSoundFile(key)
+                if (synthFile != null && synthFile.exists()) {
+                    val soundId = soundPool.load(synthFile.absolutePath, 1)
+                    if (soundId != 0) {
+                        soundMap[key] = soundId
+                        sampleToKey[soundId] = key
+                        return
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error generating fallback for $key", e)
+            }
+        }
+    }
+
+    /**
+     * A sample failed to decode/load inside SoundPool. Retry once from the
+     * asset files, then once from the synthetic generator, then give up —
+     * this guarantees sounds like reload/money-spend keep playing even if a
+     * single decode hiccups, instead of failing silently forever.
+     */
+    private fun handleLoadFailure(key: String, failedSampleId: Int) {
+        loadedSounds.remove(failedSampleId)
+        soundMap.remove(key, failedSampleId)
+        val attempts = loadAttempts.merge(key, 1) { old, one -> old + one } ?: 1
+        if (attempts >= MAX_LOAD_ATTEMPTS) {
+            Log.e(TAG, "Giving up loading sound '$key' after $attempts attempts")
+            return
+        }
+        val files = soundAliases[key] ?: emptyList()
+        CoroutineScope(Dispatchers.IO).launch {
+            if (attempts <= 1) {
+                loadShortSound(key, files, allowSynthetic = false)
+            } else {
+                loadShortSound(key, files, allowSynthetic = true)
+            }
+        }
+    }
+
+    /**
+     * Kicks off an on-demand load when a sound is requested before the
+     * preload pass has mapped it (or after a failed load was cleared).
+     */
+    private fun maybeLoadOnDemand(key: String) {
+        if (key in LONG_TRACK_KEYS) return
+        if (soundMap.containsKey(key)) return
+        val files = soundAliases[key] ?: return
+        val attempts = loadAttempts[key] ?: 0
+        if (attempts >= MAX_LOAD_ATTEMPTS) return
+        CoroutineScope(Dispatchers.IO).launch {
+            if (!soundMap.containsKey(key)) {
+                loadShortSound(key, files, allowSynthetic = true)
+            }
+        }
+    }
+
+    private fun queuePendingPlay(pending: PendingPlay) {
+        synchronized(pendingLock) {
+            val now = System.currentTimeMillis()
+            pendingPlays.removeAll { now - it.enqueuedAt > PENDING_PLAY_TTL_MS }
+            if (pendingPlays.size >= MAX_PENDING_PLAYS) {
+                pendingPlays.removeFirstOrNull()
+            }
+            pendingPlays.addLast(pending)
+        }
+    }
+
+    /** Replays (as a simultaneous mix) every queued request for [key]. */
+    private fun flushPendingPlays(key: String) {
+        val now = System.currentTimeMillis()
+        val ready = synchronized(pendingLock) {
+            val matched = pendingPlays.filter { it.key == key }
+            pendingPlays.removeAll(matched.toSet())
+            matched
+        }
+        for (pending in ready) {
+            if (now - pending.enqueuedAt > PENDING_PLAY_TTL_MS) continue
+            if (pending.loop) {
+                playLoop(pending.key, pending.volume, pending.rate, pending.posX, pending.posY, pending.posZ)
+            } else {
+                playSound(pending.key, pending.volume, pending.rate, pending.posX, pending.posY, pending.posZ)
+            }
+        }
+    }
+
+    private fun dropPendingPlays(key: String) {
+        synchronized(pendingLock) {
+            pendingPlays.removeAll { it.key == key }
+        }
+    }
+
+    private fun isReady(key: String): Boolean {
+        val soundId = soundMap[key] ?: return false
+        return soundId in loadedSounds
     }
 
     private fun getAssetFd(key: String): AssetFileDescriptor? {
@@ -176,6 +307,10 @@ class AudioManager(private val context: Context) {
     /**
      * Plays a sound effect with optional 3D spatial coordinates.
      * Routes short sounds through SoundPool and long sounds through managed MediaPlayer.
+     *
+     * If the underlying sample has not finished loading yet, the request is
+     * queued and played automatically the moment the sound is ready, so a
+     * requested effect is never silently dropped.
      */
     fun playSound(
         key: String,
@@ -190,6 +325,12 @@ class AudioManager(private val context: Context) {
             return 1
         }
 
+        if (!isReady(key)) {
+            queuePendingPlay(PendingPlay(key, volume, rate, posX, posY, posZ, loop = false, enqueuedAt = System.currentTimeMillis()))
+            maybeLoadOnDemand(key)
+            return -1
+        }
+
         val soundId = soundMap[key] ?: return -1
         val (left, right) = calculate3dVolume(posX, posY, posZ, volume)
         val pitch = when (soundTheme) {
@@ -201,9 +342,23 @@ class AudioManager(private val context: Context) {
         val streamId = soundPool.play(soundId, left, right, 1, 0, pitch)
         if (streamId != 0) {
             activeSfxStreams.getOrPut(key) { ConcurrentHashMap.newKeySet() }.add(streamId)
+        } else {
+            // The pool could not hand out a stream right now — retry on the next load tick.
+            queuePendingPlay(PendingPlay(key, volume, rate, posX, posY, posZ, loop = false, enqueuedAt = System.currentTimeMillis()))
+            return -1
         }
         triggerHapticForSound(key)
         return streamId
+    }
+
+    /**
+     * Plays several sound effects at the same time so they are mixed together
+     * (e.g. the coin "money spent" sound together with the reload sound).
+     */
+    fun playMixed(keys: List<String>, volume: Float = 1.0f, posX: Float = 0f, posY: Float = 0f, posZ: Float = 0f) {
+        for (key in keys) {
+            playSound(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
+        }
     }
 
     /**
@@ -219,6 +374,12 @@ class AudioManager(private val context: Context) {
     ) {
         if (key in LONG_TRACK_KEYS) {
             playManagedTrack(key, volume, posX, posY, posZ, loop = true)
+            return
+        }
+
+        if (!isReady(key)) {
+            queuePendingPlay(PendingPlay(key, volume, rate, posX, posY, posZ, loop = true, enqueuedAt = System.currentTimeMillis()))
+            maybeLoadOnDemand(key)
             return
         }
 
@@ -317,6 +478,7 @@ class AudioManager(private val context: Context) {
      * Immediately stops playback of a specific sound.
      */
     fun stopSound(key: String) {
+        dropPendingPlays(key)
         stopManagedTrack(key)
         val streams = activeSfxStreams.remove(key)
         if (streams != null) {
@@ -424,7 +586,7 @@ class AudioManager(private val context: Context) {
                     "hit", "enemyHit" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(30, 180))
                     }
-                    "gloowall" -> {
+                    "gloowall", "cover" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(60, 200))
                     }
                     "medkit" -> {
@@ -444,7 +606,7 @@ class AudioManager(private val context: Context) {
                 @Suppress("DEPRECATION")
                 when (key) {
                     "fire", "shotgun", "pistol", "damage" -> vibrator.vibrate(60)
-                    "hit", "gloowall", "reload" -> vibrator.vibrate(35)
+                    "hit", "gloowall", "cover", "reload" -> vibrator.vibrate(35)
                 }
             }
         } catch (_: Exception) {}
@@ -472,6 +634,7 @@ class AudioManager(private val context: Context) {
             "walk" -> generateFootstepWave(sampleRate, 0.14f)
             "medkit" -> generateChimeWave(sampleRate, 0.35f, doubleArrayOf(523.25, 659.25, 783.99))
             "gloowall" -> generateWallClankWave(sampleRate, 0.3f)
+            "cover" -> generateCoverWave(sampleRate, 0.5f)
             "ammo" -> generateBeepWave(sampleRate, 0.08f, 900f)
             "spend" -> generateCoinWave(sampleRate, 0.18f)
             "win" -> generateFanfareWave(sampleRate, 0.7f, true)
@@ -648,6 +811,50 @@ class AudioManager(private val context: Context) {
             val metallic = sin(2.0 * Math.PI * 1120.0 * i / sr).toFloat() * 0.4f
             val noise = (Math.random() * 2.0 - 1.0).toFloat() * 0.3f
             data[i] = ((tone + metallic + noise) * env * 26000).toInt().coerceIn(-32767, 32767).toShort()
+        }
+        return data
+    }
+
+    /**
+     * Cover / Gloo Wall deployment: a low slam, a rising energy whoosh and a
+     * metallic shimmer that locks the wall in place.
+     */
+    private fun generateCoverWave(sr: Int, duration: Float): ShortArray {
+        val samples = (sr * duration).toInt()
+        val data = ShortArray(samples)
+        val thunkLen = (sr * 0.18f).toInt()
+        val whooshStart = (sr * 0.03f).toInt()
+        val whooshEnd = (sr * 0.40f).toInt()
+        val shimmerStart = (sr * 0.12f).toInt()
+        for (i in 0 until samples) {
+            val t = i.toFloat() / sr
+            var v = 0f
+
+            if (i < thunkLen) {
+                val env = kotlin.math.exp(-t * 26f)
+                val freq = 145f - 120f * (i.toFloat() / thunkLen)
+                v += 0.85f * sin(2.0 * Math.PI * freq * t).toFloat() * env
+            }
+
+            if (i in whooshStart until whooshEnd) {
+                val p = (i - whooshStart).toFloat() / (whooshEnd - whooshStart)
+                val env = sin(p * Math.PI.toFloat()) * (0.35f + 0.65f * p)
+                val freq = 320f + 1150f * p
+                val noise = (Math.random() * 2.0 - 1.0).toFloat()
+                v += 0.34f * env * (0.55f * sin(2.0 * Math.PI * freq * t).toFloat() + 0.27f * noise)
+            }
+
+            if (i >= shimmerStart) {
+                val p = (i - shimmerStart).toFloat() / (samples - shimmerStart)
+                val env = kotlin.math.exp(-p * 4.2f)
+                v += 0.30f * env * (
+                    0.5f * sin(2.0 * Math.PI * 988.0 * t).toFloat() +
+                        0.35f * sin(2.0 * Math.PI * 1318.5 * t).toFloat() +
+                        0.25f * sin(2.0 * Math.PI * 1568.0 * t).toFloat()
+                    )
+            }
+
+            data[i] = (kotlin.math.tanh(v * 1.15f) * 28000f).toInt().coerceIn(-32767, 32767).toShort()
         }
         return data
     }

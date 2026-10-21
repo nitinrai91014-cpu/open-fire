@@ -250,17 +250,19 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(8.dp))
             val v12Notes = listOf(
                 "Sound Player Mixer: Re-engineered reliable audio architecture with dedicated streaming channels for victory, defeat, parachute, airplane, and ambient music without buffer starvation.",
+                "Never-Dropped SFX: Sound effects that are requested before they finish loading are queued and played automatically; failed loads retry and fall back to generated audio — the reload sound (gun-reload.mp3) now always plays.",
+                "Money-Spend Mixer: Every coin payment (reload 30, Gloo Wall 100, medkit 100) plays the money-spend.mp3 coin sound mixed together with the action's own sound — reload now plays money-spend and gun-reload together.",
+                "Cover Sound Effect: A brand-new cover-sound.mp3 effect has been added to the assets and plays together with the gloo wall sound whenever a Gloo Wall is deployed.",
+                "Gloo Wall Gesture: Swiping up with two fingers deploys the Gloo Wall for 100 coins (the quick double swipe-up shortcut still works too).",
                 "Sound Overlap Fix: Screen transition sounds (victory menu, defeat menu, parachute) immediately stop on swipe-up or navigation.",
                 "Evil Character Walking & 3D Audio: Realistically approaching spatial footsteps with distance attenuation and binaural lateral movement.",
-                "Combat Range & Hit Balance: Hits between 70%-100% proximity deal 30% damage; hits between 40%-70% inflict light 10% damage; hits below 40% miss. Devil and player have identical symmetrical power.",
-                "Zero-HP Death Rule: Player and devil die only when health reaches exactly zero.",
+                "Combat Range & Hit Balance: The three zones are now exact — 0% to 40% misses, 40% to 70% removes exactly 10% of the enemy's health, 70% to 100% is a proper hit removing exactly 20%. Devil and player use the same symmetrical rules.",
+                "Zero-HP Death Rule: Player and devil die only when health reaches exactly zero — no fixed number of hits can end the fight.",
                 "Level-Based HP Progression: 200 HP up to level 10, 300 HP up to level 20, 500 HP up to level 25, 800 HP from level 25 to 30.",
                 "Round Cycle: Completing level 30 finishes the round and begins the next round.",
-                "Pistol Reload Fix: Fixed 6-bullet pistol magazine; requires reload only after all 6 rounds are discharged.",
-                "Reload Audio: Integrated authentic 'gun reload.mp3' sound effect.",
-                "Gloo Wall Gesture: Double swipe-up deploys Gloo Wall (100 coins).",
-                "Voice Announcements: System announces 'Not enough coins' whenever coins are insufficient for reload, Gloo Wall, or medkit.",
-                "Screen Reader & TTS Fix: Resolved Devanagari Hindi and Nepali pronunciation issues and cleaned up text layout semantics.",
+                "Six-Bullet Magazines: The pistol, assault rifle and shotgun each hold exactly 6 rounds; one round per shot; reload required only after all six are fired (stale-snapshot ammo bugs fixed).",
+                "Voice Announcements: System announces 'Not enough coins' whenever coins are insufficient for reload, Gloo Wall, or medkit, and 'Magazine already full' when reloading a full gun.",
+                "Screen Reader & TTS Fix: English pronunciation no longer distorted — voices are strictly matched to the selected language (mismatched Nepali/Hindi voices are never applied to English), with proper locale fallback and symbol-free announcements for all three languages.",
                 "Community Links: Direct Telegram channel and WhatsApp contact buttons added in About section."
             )
             v12Notes.forEach { note ->

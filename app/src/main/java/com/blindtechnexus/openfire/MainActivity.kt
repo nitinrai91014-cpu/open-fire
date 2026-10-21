@@ -32,7 +32,8 @@ class MainActivity : ComponentActivity() {
             com.blindtechnexus.openfire.model.Screen.SETTINGS,
             com.blindtechnexus.openfire.model.Screen.GUIDE,
             com.blindtechnexus.openfire.model.Screen.PROFILE,
-            com.blindtechnexus.openfire.model.Screen.ABOUT -> {
+            com.blindtechnexus.openfire.model.Screen.ABOUT,
+            com.blindtechnexus.openfire.model.Screen.CHANGELOG -> {
                 viewModel.audioManager.startMusic(viewModel.settings.value.musicVolume * 0.35f)
             }
             else -> {}

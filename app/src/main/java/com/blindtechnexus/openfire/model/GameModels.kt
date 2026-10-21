@@ -35,10 +35,13 @@ data class Gun(
     val sound: String
 )
 
+// Strict rule: all three guns (pistol, assault rifle, shotgun) hold exactly
+// six bullets. One bullet is consumed per shot; reload is required only after
+// all six bullets of the active gun have been fired.
 val DEFAULT_GUNS = listOf(
     Gun("gunPistol", 25, 6, "pistol"),
     Gun("gunRifle", 35, 6, "fire"),
-    Gun("gunShotgun", 50, 4, "shotgun")
+    Gun("gunShotgun", 50, 6, "shotgun")
 )
 
 fun getHpForLevel(level: Int): Int {
@@ -84,7 +87,7 @@ data class GameState(
     val devilHp: Int = 200,
     val devilMaxHp: Int = 200,
     val gunIndex: Int = 0,
-    val ammo: List<Int> = listOf(6, 6, 4),
+    val ammo: List<Int> = listOf(6, 6, 6),
     val medkits: Int = 3,
     val inCover: Boolean = false,
     val distance: Float = 100f,

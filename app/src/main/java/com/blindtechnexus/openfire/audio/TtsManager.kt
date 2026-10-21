@@ -5,6 +5,7 @@ import android.media.AudioAttributes
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import android.util.Log
 import com.blindtechnexus.openfire.model.TtsEngineInfo
 import com.blindtechnexus.openfire.model.TtsVoiceInfo
@@ -92,16 +93,50 @@ class TtsManager(private val context: Context) {
             }
             voiceList.sortBy { it.displayName }
         } catch (e: Exception) {
-            Log.e(TAG, "Error fetching voices", e)
+            Log.e(TAG, "Error fetching TTS voices", e)
         }
-        _availableVoices.value = voiceList
+
+        // Only offer voices that can actually speak the selected app language.
+        // Picking a voice from another language family is what garbles English
+        // pronunciation (and vice versa).
+        val wanted = when (currentLanguage) {
+            "hi" -> setOf("hi")
+            "ne" -> setOf("ne", "hi") // Hindi voices read Devanagari as fallback
+            else -> setOf("en")
+        }
+        val filtered = voiceList.filter { it.language.lowercase() in wanted }
+        _availableVoices.value = if (filtered.isNotEmpty()) filtered else voiceList
+    }
+
+    /**
+     * Resolves the locale that should speak the current app language.
+     * If Nepali ("ne_NP") is missing from the installed TTS engine (common on
+     * Android), automatically fall back to Hindi ("hi_IN") which shares the
+     * Devanagari script, so English phonetics never attempt to spell
+     * Devanagari characters.
+     */
+    private fun resolveTargetLocale(currentTts: TextToSpeech): Locale {
+        var targetLocale = when (currentLanguage) {
+            "hi" -> Locale("hi", "IN")
+            "ne" -> Locale("ne", "NP")
+            else -> Locale.US
+        }
+        val avail = currentTts.isLanguageAvailable(targetLocale)
+        if (currentLanguage == "ne" &&
+            (avail == TextToSpeech.LANG_MISSING_DATA || avail == TextToSpeech.LANG_NOT_SUPPORTED)
+        ) {
+            targetLocale = Locale("hi", "IN")
+        }
+        return targetLocale
     }
 
     /**
      * Applies voice and language settings.
-     * Crucial Fix: If Nepali ("ne_NP") is missing from the installed TTS engine (common on Android),
-     * automatically fallback to Hindi ("hi_IN") which shares the Devanagari script.
-     * This eliminates the severe pronunciation corruption where English phonetics attempted to spell Devanagari characters.
+     *
+     * English-specific fix: a persisted voice from another language (e.g. a
+     * Nepali/Hindi voice saved earlier) is never applied to English text, and
+     * the engine never silently falls back to the device locale — both were
+     * distorting English pronunciation while Devanagari languages sounded fine.
      */
     fun applyVoiceSettings() {
         if (!isInitialized || tts == null) return
@@ -109,76 +144,96 @@ class TtsManager(private val context: Context) {
 
         currentTts.setSpeechRate(speechRate.coerceIn(0.5f, 2.0f))
 
-        var targetLocale = when (currentLanguage) {
-            "hi" -> Locale("hi", "IN")
-            "ne" -> Locale("ne", "NP")
-            else -> Locale.US
-        }
-
-        var avail = currentTts.isLanguageAvailable(targetLocale)
-        if (currentLanguage == "ne" && (avail == TextToSpeech.LANG_MISSING_DATA || avail == TextToSpeech.LANG_NOT_SUPPORTED)) {
-            // Fallback to Hindi locale for accurate Devanagari speech
-            targetLocale = Locale("hi", "IN")
-            avail = currentTts.isLanguageAvailable(targetLocale)
-        }
-
+        val targetLocale = resolveTargetLocale(currentTts)
+        val avail = currentTts.isLanguageAvailable(targetLocale)
         if (avail >= TextToSpeech.LANG_AVAILABLE) {
             currentTts.language = targetLocale
         } else {
-            currentTts.language = Locale.getDefault()
-        }
-
-        // Apply custom voice if selected
-        if (currentVoiceName.isNotEmpty()) {
+            // Keep the requested locale anyway: falling back to the device locale
+            // can switch the whole language (e.g. device set to Nepali while the
+            // app is in English) which garbles every English announcement.
             try {
-                val match = currentTts.voices?.find { it.name == currentVoiceName }
-                if (match != null) {
-                    currentTts.voice = match
-                    return
-                }
-            } catch (_: Exception) {}
+                currentTts.language = targetLocale
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed setting locale $targetLocale", e)
+            }
         }
 
-        // Auto select best matching voice for current locale
-        try {
-            val voices = currentTts.voices ?: return
-            val match = voices.find {
-                it.locale.language.equals(targetLocale.language, ignoreCase = true)
-            }
-            if (match != null) {
-                currentTts.voice = match
-            }
-        } catch (_: Exception) {}
+        applyBestVoice(currentTts, targetLocale)
     }
 
     /**
-     * Sanitizes game strings before sending to speech synthesis to prevent TTS engines
-     * from pronouncing raw punctuation, pipes, slashes, or English abbreviations in Indic contexts.
+     * Picks the best voice that can speak [target]:
+     *  1. the user-selected voice, but only when it speaks the target language;
+     *  2. the engine default voice when it matches;
+     *  3. otherwise the highest-quality matching voice (same country preferred).
      */
-    private fun sanitizeTextForSpeech(raw: String): String {
-        var clean = raw
-            .replace("|", ", ")
-            .replace("_", " ")
-            .replace(":", " ")
-            .replace("*", " ")
-            .replace("#", " ")
+    private fun applyBestVoice(currentTts: TextToSpeech, target: Locale) {
+        val voices = try {
+            currentTts.voices
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading voices", e)
+            null
+        } ?: return
 
-        when (currentLanguage) {
-            "hi", "ne" -> {
-                clean = clean
-                    .replace(Regex("(?i)\\bHP\\b"), "हेल्थ")
-                    .replace("/", " में से ")
-            }
-            else -> {
-                clean = clean
-                    .replace(Regex("(?i)\\bHP\\b"), "Health")
-                    .replace("/", " out of ")
+        fun speaksTarget(voice: Voice): Boolean =
+            voice.locale.language.equals(target.language, ignoreCase = true)
+
+        // 1. Explicitly chosen voice — honored only if it speaks the current language.
+        if (currentVoiceName.isNotEmpty()) {
+            val selected = voices.find { it.name == currentVoiceName }
+            if (selected != null && speaksTarget(selected)) {
+                setVoiceIfChanged(currentTts, selected)
+                return
             }
         }
 
-        // Normalize spaces
-        return clean.replace(Regex("\\s+"), " ").trim()
+        // 2. Engine default voice is usually the best match for its own language.
+        val default = try {
+            currentTts.defaultVoice
+        } catch (e: Exception) {
+            null
+        }
+        if (default != null && speaksTarget(default)) {
+            setVoiceIfChanged(currentTts, default)
+            return
+        }
+
+        // 3. Best remaining match: same country first, then highest quality.
+        val candidates = voices.filter { speaksTarget(it) }
+        val sameCountry = candidates.filter {
+            it.locale.country.isNotEmpty() && it.locale.country.equals(target.country, ignoreCase = true)
+        }
+        val pool = if (sameCountry.isNotEmpty()) sameCountry else candidates
+        val best = pool.sortedWith(
+            compareByDescending<Voice> { it.quality }.thenBy { it.name }
+        ).firstOrNull()
+        if (best != null) {
+            setVoiceIfChanged(currentTts, best)
+        }
     }
+
+    private fun setVoiceIfChanged(currentTts: TextToSpeech, voice: Voice) {
+        val current = try {
+            currentTts.voice
+        } catch (e: Exception) {
+            null
+        }
+        if (current?.name != voice.name) {
+            try {
+                currentTts.voice = voice
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed setting voice ${voice.name}", e)
+            }
+        }
+    }
+
+    /**
+     * Sanitizes game strings before sending them to speech synthesis so TTS
+     * engines never pronounce raw punctuation, pipes, slashes or abbreviations.
+     */
+    private fun sanitizeTextForSpeech(raw: String): String =
+        SpeechSanitizer.sanitize(raw, currentLanguage)
 
     fun speak(text: String, interrupt: Boolean = true) {
         if (!isInitialized || tts == null || text.isBlank()) return
@@ -203,17 +258,34 @@ class TtsManager(private val context: Context) {
 
     fun previewVoice(text: String, rate: Float, voiceName: String) {
         if (!isInitialized || tts == null) return
-        tts?.stop()
-        tts?.setSpeechRate(rate.coerceIn(0.5f, 2.0f))
-        if (voiceName.isNotEmpty()) {
-            val v = tts?.voices?.find { it.name == voiceName }
-            if (v != null) tts?.voice = v
+        val currentTts = tts ?: return
+        currentTts.stop()
+        currentTts.setSpeechRate(rate.coerceIn(0.5f, 2.0f))
+
+        val target = resolveTargetLocale(currentTts)
+        if (currentTts.isLanguageAvailable(target) >= TextToSpeech.LANG_AVAILABLE) {
+            currentTts.language = target
         }
+        if (voiceName.isNotEmpty()) {
+            val v = try {
+                currentTts.voices?.find { it.name == voiceName }
+            } catch (e: Exception) {
+                null
+            }
+            if (v != null && v.locale.language.equals(target.language, ignoreCase = true)) {
+                setVoiceIfChanged(currentTts, v)
+            } else {
+                applyBestVoice(currentTts, target)
+            }
+        } else {
+            applyBestVoice(currentTts, target)
+        }
+
         val params = Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, speechVolume.coerceIn(0.05f, 1.0f))
         }
         val sanitized = sanitizeTextForSpeech(text)
-        tts?.speak(sanitized, TextToSpeech.QUEUE_FLUSH, params, "preview")
+        currentTts.speak(sanitized, TextToSpeech.QUEUE_FLUSH, params, "preview")
     }
 
     fun shutdown() {
