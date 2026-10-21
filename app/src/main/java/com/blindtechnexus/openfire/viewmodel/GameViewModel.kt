@@ -7,11 +7,15 @@ import com.blindtechnexus.openfire.audio.AudioManager
 import com.blindtechnexus.openfire.audio.TtsManager
 import com.blindtechnexus.openfire.data.PreferencesManager
 import com.blindtechnexus.openfire.data.Strings
+import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.ControlMode
 import com.blindtechnexus.openfire.model.DEFAULT_GUNS
+import com.blindtechnexus.openfire.model.GameAction
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.GameStats
+import com.blindtechnexus.openfire.model.GestureRouter
+import com.blindtechnexus.openfire.model.HitZone
 import com.blindtechnexus.openfire.model.ResultData
 import com.blindtechnexus.openfire.model.Screen
 import com.blindtechnexus.openfire.model.getHpForLevel
@@ -52,6 +56,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var stepJob: Job? = null
     private var counterJob: Job? = null
     private var stepCount = 0
+
+    /** Debounce so one physical tap / swipe can never fire (and spend) more than one bullet. */
+    private var lastFireAt = 0L
 
     init {
         syncSettingsToManagers(_settings.value)
@@ -115,6 +122,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun setLanguage(lang: String) {
         val updated = _settings.value.copy(lang = lang)
         updateSettings(updated)
+        // Keep the TTS voice list aligned with the newly selected language so
+        // only voices that can actually speak it are offered.
+        ttsManager.refreshVoices()
     }
 
     fun navigateTo(screen: Screen) {
@@ -248,8 +258,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerMaxHp = equalHp,
             devilHp = equalHp,
             devilMaxHp = equalHp,
-            gunIndex = 0, // Starts with Pistol (6 bullets)
-            ammo = listOf(DEFAULT_GUNS[0].mag, DEFAULT_GUNS[1].mag, DEFAULT_GUNS[2].mag),
+            gunIndex = 0, // Starts with Pistol
+            ammo = DEFAULT_GUNS.map { it.mag }, // All three guns start with a full six-bullet magazine
             medkits = 3,
             inCover = false,
             distance = 100f,
@@ -344,11 +354,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Symmetrical Evil Character attack mechanics:
-     * - Hits below 40% proximity count as a miss.
-     * - Hits between 40% and 70% proximity reduce player health by 10%.
-     * - Hits between 70% and 100% proximity reduce player health by 30%.
-     * - Player dies only when health reaches zero.
+     * Symmetrical Evil Character attack mechanics (same three zones as the player):
+     * - Proximity 0% to 40%   -> the devil's shot misses.
+     * - Proximity 40% to 70%  -> player loses 10% of max health.
+     * - Proximity 70% to 100% -> player loses 20% of max health.
+     * - The player dies only when health actually reaches zero — never after a
+     *   fixed number of hits.
      */
     private fun devilAttack(isCounter: Boolean) {
         if (_currentScreen.value != Screen.BATTLE) return
@@ -359,9 +370,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         playSound(gun.sound, volume = 0.9f, posX = 0f, posY = 0f, posZ = -state.distance)
         _gameState.update { it.copy(devilShots = it.devilShots + 1) }
 
-        val proxPercent = (100f - state.distance).coerceIn(0f, 100f)
+        val proxPercent = Combat.proximityOf(state.distance)
+        val zone = Combat.zoneFor(proxPercent)
 
-        if (proxPercent < 40f) {
+        if (zone == HitZone.MISS) {
             msg("${t("devilMissed")} ${t(gun.nameKey)}.")
             if (!isCounter) {
                 planDevilStep(1200L + Random.nextInt(600))
@@ -369,9 +381,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Damage percentage: 10% between 40-70%, 30% between 70-100%
-        val damageFraction = if (proxPercent >= 70f) 0.30f else 0.10f
-        var dealt = (state.playerMaxHp * damageFraction).roundToInt().coerceAtLeast(1)
+        // Zone damage: 10% between 40-70%, 20% between 70-100%.
+        var dealt = Combat.damageFor(state.playerMaxHp, proxPercent)
 
         // Gloo wall protection reduces impact
         var wallAbsorbed = false
@@ -390,7 +401,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         playSound("damage", volume = 1.0f)
-        val hitHead = if (damageFraction >= 0.30f) t("youWereHit") else t("devilGrazed")
+        val hitHead = if (zone == HitZone.HEAVY) t("youWereHit") else t("devilGrazed")
         val coverNote = if (wallAbsorbed) " (${t("cover")})" else ""
         msg("$hitHead ${t(gun.nameKey)}$coverNote. ${t("hitFor")} $dealt. ${t("yourHealth")} $newPlayerHp.")
 
@@ -404,9 +415,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun devilReact() {
+    /**
+     * The devil reacts after taking a number of hits: heals, raises cover or
+     * retreats. Returns an optional announcement so callers can merge it into
+     * a single, uninterrupted screen-reader message.
+     */
+    private fun devilReact(): String? {
         val state = _gameState.value
-        if (state.devilHp <= 0) return
+        if (state.devilHp <= 0) return null
         val hpPct = state.devilHp.toFloat() / state.devilMaxHp.toFloat()
 
         if (hpPct < 0.55f && state.devilMedkits > 0) {
@@ -414,32 +430,31 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val healed = min(state.devilMaxHp, state.devilHp + healAmount)
             _gameState.update { it.copy(devilMedkits = it.devilMedkits - 1, devilHp = healed) }
             playSound("medkit", posZ = -state.distance)
-            msg("${t("devilMedkit")} ${t("enemyHealth")} $healed.")
-            return
+            return "${t("devilMedkit")} ${t("enemyHealth")} $healed."
         }
 
         if (state.devilCoverHp <= 0 && state.devilCoversLeft > 0) {
             _gameState.update { it.copy(devilCoversLeft = it.devilCoversLeft - 1, devilCoverHp = it.devilCoverMax) }
             playSound("gloowall", posZ = -state.distance)
-            msg("${t("devilCoverUp")} ${t("devilCover")}: ${state.devilCoverMax}.")
-            return
+            return "${t("devilCoverUp")} ${t("devilCover")}: ${state.devilCoverMax}."
         }
 
         if (hpPct < 0.45f) {
-            devilRetreat()
+            return devilRetreat()
         }
+        return null
     }
 
-    private fun devilRetreat() {
+    private fun devilRetreat(): String? {
         val state = _gameState.value
-        if (state.devilState == "retreat" || state.devilState == "flank") return
-        if (state.devilRetreats >= 2) return
+        if (state.devilState == "retreat" || state.devilState == "flank") return null
+        if (state.devilRetreats >= 2) return null
 
         counterJob?.cancel()
         _gameState.update { it.copy(devilState = "retreat", devilRetreats = it.devilRetreats + 1) }
         playSound("jump", posZ = -state.distance)
-        msg(t("devilFled"))
         planDevilStep(300L)
+        return t("devilFled")
     }
 
     private fun devilOnHit() {
@@ -454,15 +469,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Symmetrical Player Firing Mechanics:
-     * - Pistol holds 6 bullets in a magazine; reload required only after all 6 are fired.
-     * - Hits below 40% proximity count as a miss.
-     * - Hits between 40% and 70% proximity inflict light damage (10% health).
-     * - Hits between 70% and 100% proximity inflict heavy damage (30% health).
-     * - Devil dies only when health reaches zero.
+     * - All three guns (pistol, assault rifle, shotgun) hold six bullets and
+     *   exactly ONE bullet is consumed per shot; reload is required only after
+     *   all six bullets are fired.
+     * - Proximity 0% to 40%   -> miss.
+     * - Proximity 40% to 70%  -> the devil loses 10% of max health.
+     * - Proximity 70% to 100% -> the devil loses 20% of max health (proper hit).
+     * - The devil dies only when its health actually reaches zero — there is no
+     *   preset where it falls after a fixed number of hits.
      */
     fun fire() {
         if (_currentScreen.value != Screen.BATTLE) return
-        val state = _gameState.value
+
+        // One physical gesture/tap can only ever fire one bullet.
+        val now = System.currentTimeMillis()
+        if (now - lastFireAt < 250L) return
+        lastFireAt = now
+
+        var state = _gameState.value
         if (state.playerHp <= 0 || state.devilHp <= 0) return
 
         if (state.devilState == "retreat") {
@@ -471,69 +495,82 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val gun = DEFAULT_GUNS[state.gunIndex]
-        val currentAmmo = state.ammo[state.gunIndex]
-        if (currentAmmo <= 0) {
+        // Atomically consume exactly one bullet from the ACTIVE magazine,
+        // computed from the very latest state — a stale snapshot can never wipe
+        // (or restore) a whole magazine after a reload.
+        var decremented = false
+        _gameState.update { s ->
+            val idx = s.gunIndex
+            val current = s.ammo[idx]
+            if (current <= 0 || s.playerHp <= 0 || s.devilHp <= 0 || s.devilState == "retreat") {
+                s
+            } else {
+                decremented = true
+                s.copy(
+                    ammo = s.ammo.toMutableList().also { it[idx] = current - 1 },
+                    playerShots = s.playerShots + 1,
+                    hitStreak = s.hitStreak + 1
+                )
+            }
+        }
+        if (!decremented) {
             playSound("ammo")
             msg(t("outOfAmmo"))
             return
         }
 
-        // Decrement exactly one bullet from the magazine
-        val newAmmoList = state.ammo.toMutableList().apply { this[state.gunIndex] = currentAmmo - 1 }
-        _gameState.update { it.copy(ammo = newAmmoList, playerShots = it.playerShots + 1) }
+        state = _gameState.value
+        val gun = DEFAULT_GUNS[state.gunIndex]
         playSound(gun.sound, posX = 0f, posY = 0f, posZ = 0f)
 
-        val proxPercent = (100f - state.distance).coerceIn(0f, 100f)
+        val proxPercent = Combat.proximityOf(state.distance)
+        val zone = Combat.zoneFor(proxPercent)
 
-        // Below 40% proximity: counted as a miss
-        if (proxPercent < 40f) {
+        // Below 40% proximity: counted as a miss.
+        if (zone == HitZone.MISS) {
             msg(t("missed"))
             return
         }
 
-        // Damage percentage: 10% for 40-70%, 30% for 70-100%
-        val damageFraction = if (proxPercent >= 70f) 0.30f else 0.10f
-        var baseDmg = (state.devilMaxHp * damageFraction).roundToInt().coerceAtLeast(1)
-
-        val newHitStreak = state.hitStreak + 1
-        val isHeadshot = (newHitStreak % 4 == 0)
-        if (isHeadshot) baseDmg = (baseDmg * 1.5f).roundToInt()
-
-        var brokeCover = false
-        var currentCoverHp = state.devilCoverHp
-        if (currentCoverHp > 0) {
-            baseDmg = max(1, (baseDmg * 0.5f).roundToInt())
-            currentCoverHp -= 1
-            if (currentCoverHp <= 0) {
-                currentCoverHp = 0
-                brokeCover = true
+        // The devil's raised cover absorbs the shot until it is destroyed.
+        if (state.devilCoverHp > 0) {
+            var remaining = 0
+            _gameState.update { s ->
+                remaining = (s.devilCoverHp - 1).coerceAtLeast(0)
+                s.copy(devilCoverHp = remaining)
             }
+            playSound("hit", volume = 0.7f)
+            playSound("enemyHit", volume = 0.7f, posZ = -state.distance)
+            var text = "${t("coverBreak")} ${t("devilCover")}: $remaining. ${t("enemyHealth")} ${state.devilHp}."
+            if (remaining <= 0) text += " ${t("devilCoverDown")}"
+            msg(text)
+            devilOnHit()
+            return
         }
 
-        val newDevilHp = max(0, state.devilHp - baseDmg)
+        // Exact zone damage: 10% for 40-70%, 20% for 70-100% of max health.
+        val damage = Combat.damageFor(state.devilMaxHp, proxPercent)
+        val newDevilHp = max(0, state.devilHp - damage)
         _gameState.update {
             it.copy(
-                hitStreak = newHitStreak,
-                devilCoverHp = currentCoverHp,
                 devilHp = newDevilHp,
                 playerHits = it.playerHits + 1
             )
         }
 
-        playSound("hit", volume = if (damageFraction >= 0.30f) 1f else 0.7f)
-        playSound("enemyHit", volume = if (damageFraction >= 0.30f) 1f else 0.7f, posZ = -state.distance)
+        playSound("hit", volume = if (zone == HitZone.HEAVY) 1f else 0.7f)
+        playSound("enemyHit", volume = if (zone == HitZone.HEAVY) 1f else 0.7f, posZ = -state.distance)
 
-        var text = "${if (damageFraction >= 0.30f) t("enemyHit") else t("enemyGrazed")} ${t("hitFor")} $baseDmg. ${t("enemyHealth")} $newDevilHp."
-        if (isHeadshot) text += " ${t("headshot")}"
-        if (brokeCover) text += " ${t("devilCoverDown")}"
-        msg(text)
+        var text = "${if (zone == HitZone.HEAVY) t("enemyHit") else t("enemyGrazed")} ${t("hitFor")} $damage. ${t("enemyHealth")} $newDevilHp."
 
         if (newDevilHp <= 0) {
+            // Defeat only at exactly zero health — no preset hit counters.
+            setLog(text)
             endGame(won = true)
             return
         }
 
+        // Devil reaction after a fair number of hits (heal / cover / retreat).
         val hitsTaken = state.devilHitsTaken + 1
         if (hitsTaken >= state.devilReactAt) {
             _gameState.update {
@@ -542,29 +579,49 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     devilReactAt = 4 + if (Random.nextFloat() < 0.6f) 0 else 1
                 )
             }
-            devilReact()
-            if (_gameState.value.devilHp <= 0) {
-                endGame(won = true)
-                return
-            }
+            val reactText = devilReact()
+            if (reactText != null) text += " $reactText"
         } else if (_gameState.value.devilHp.toFloat() / state.devilMaxHp.toFloat() < 0.30f &&
-            state.devilState != "retreat" && state.devilState != "flank") {
-            devilRetreat()
+            state.devilState != "retreat" && state.devilState != "flank"
+        ) {
+            val retreatText = devilRetreat()
+            if (retreatText != null) text += " $retreatText"
         }
 
-        // Ammo pickup chance (15%)
+        // Ammo pickup chance (15%) — merged into the same announcement so the
+        // hit report is never cut off mid-sentence.
         if (Random.nextFloat() < 0.15f) {
-            val updatedAmmo = _gameState.value.ammo.toMutableList()
-            val mag = DEFAULT_GUNS[_gameState.value.gunIndex].mag
-            updatedAmmo[_gameState.value.gunIndex] = min(mag, updatedAmmo[_gameState.value.gunIndex] + 2)
-            _gameState.update { it.copy(ammo = updatedAmmo) }
-            msg(t("ammoPickup"))
+            var pickedUp = false
+            _gameState.update { s ->
+                val idx = s.gunIndex
+                val mag = DEFAULT_GUNS[idx].mag
+                val current = s.ammo[idx]
+                if (current >= mag) {
+                    s
+                } else {
+                    pickedUp = true
+                    s.copy(ammo = s.ammo.toMutableList().also { it[idx] = min(mag, current + 2) })
+                }
+            }
+            if (pickedUp) {
+                text += " ${t("ammoPickup")}"
+            }
         }
 
+        msg(text)
         devilOnHit()
     }
 
-    private fun spendCoins(amount: Int): Boolean {
+    private fun setLog(text: String) {
+        _gameState.update { it.copy(log = text) }
+    }
+
+    /**
+     * Deducts [amount] coins. Every time coins are spent the coin
+     * "money spent" sound (money-spend.mp3) plays — mixed together with the
+     * action's own sound (reload, cover, medkit, ...) when one is given.
+     */
+    private fun spendCoins(amount: Int, actionSounds: List<String> = emptyList()): Boolean {
         if (_stats.value.coins < amount) {
             playSound("ammo")
             speak(t("notEnough"))
@@ -574,48 +631,71 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val updated = _stats.value.copy(coins = newCoins)
         _stats.value = updated
         prefs.saveStats(updated)
-        playSound("spend", volume = 0.9f)
+        if (actionSounds.isEmpty()) {
+            playSound("spend", volume = 0.9f)
+        } else {
+            audioManager.playMixed(listOf("spend") + actionSounds, volume = 0.9f)
+        }
         return true
     }
 
     /**
      * Reload mechanism:
-     * - Reload costs 30 coins.
-     * - Plays "gun-reload.mp3".
-     * - Fills the active magazine (6 bullets for pistol).
+     * - Reload costs 30 coins; the coin "money spent" sound plays mixed with
+     *   the reload sound (gun-reload.mp3).
+     * - Fills the active magazine back to its full six bullets.
      * - Announces "Not enough coins." if insufficient funds.
      */
     fun doReload() {
         if (_currentScreen.value != Screen.BATTLE) return
         val state = _gameState.value
-        val mag = DEFAULT_GUNS[state.gunIndex].mag
-        if (state.ammo[state.gunIndex] >= mag) {
+        val idx = state.gunIndex
+        val mag = DEFAULT_GUNS[idx].mag
+        if (state.ammo[idx] >= mag) {
             playSound("click")
-            msg(t("reloaded"))
+            msg(t("magFull"))
             return
         }
-        if (!spendCoins(30)) {
+        if (!spendCoins(30, listOf("reload"))) {
             return
         }
-        val newAmmoList = state.ammo.toMutableList().apply { this[state.gunIndex] = mag }
-        _gameState.update { it.copy(ammo = newAmmoList) }
-        playSound("reload")
+        var filled = false
+        _gameState.update { s ->
+            val i = s.gunIndex
+            val m = DEFAULT_GUNS[i].mag
+            if (s.ammo[i] >= m) {
+                s
+            } else {
+                filled = true
+                s.copy(ammo = s.ammo.toMutableList().also { list -> list[i] = m })
+            }
+        }
+        if (!filled) {
+            playSound("click")
+            return
+        }
         msg("${t("reloaded")} ${t("coinsSpent")}: 30.")
     }
 
     /**
      * Gloo Wall deployment:
-     * - Deployed via swipe-up-twice or button.
-     * - Costs 100 coins.
-     * - Announces "Not enough coins." if insufficient funds.
+     * - Two-finger swipe up (or the cover button / three-finger toggle /
+     *   double swipe-up shortcut).
+     * - Costs 100 coins; the coin "money spent" sound plays mixed with the
+     *   gloo wall sound and the dedicated cover sound effect.
+     * - Re-deploying while already in cover is free and simply announced.
      */
     fun deployGlooWall() {
         if (_currentScreen.value != Screen.BATTLE) return
-        if (!spendCoins(100)) {
+        if (_gameState.value.inCover) {
+            playSound("click")
+            msg(t("coverOn"))
+            return
+        }
+        if (!spendCoins(100, listOf("gloowall", "cover"))) {
             return
         }
         _gameState.update { it.copy(inCover = true) }
-        playSound("gloowall")
         msg(t("glooWallDeployed"))
     }
 
@@ -631,6 +711,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Medkit: costs 100 coins; the coin "money spent" sound plays mixed with
+     * the medkit sound effect.
+     */
     fun useMedkit() {
         if (_currentScreen.value != Screen.BATTLE) return
         val state = _gameState.value
@@ -644,14 +728,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             msg("${t("medkitUsed")} ${state.playerHp}")
             return
         }
-        if (!spendCoins(100)) {
+        if (!spendCoins(100, listOf("medkit"))) {
             return
         }
-        val heal = (state.playerMaxHp * 0.30f).roundToInt()
-        val newHp = min(state.playerMaxHp, state.playerHp + heal)
-        _gameState.update { it.copy(medkits = it.medkits - 1, playerHp = newHp) }
-        playSound("medkit")
-        msg("${t("medkitUsed")} $newHp")
+        var healed = state.playerHp
+        _gameState.update { s ->
+            val heal = (s.playerMaxHp * 0.30f).roundToInt()
+            val newHp = min(s.playerMaxHp, s.playerHp + heal)
+            healed = newHp
+            s.copy(medkits = s.medkits - 1, playerHp = newHp)
+        }
+        msg("${t("medkitUsed")} $healed")
     }
 
     fun switchGun(dir: Int) {
@@ -785,48 +872,25 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val mode = _settings.value.mode
         if (mode == ControlMode.BUTTONS) return
 
-        when (_currentScreen.value) {
-            Screen.READER -> {
-                if (direction == "up") continueToJump()
-                else if (direction == "down") navigateTo(Screen.MENU)
-            }
-            Screen.JUMP -> {
-                if (direction == "up") doJump()
-                else if (direction == "down") navigateTo(Screen.MENU)
-            }
-            Screen.PARA -> {
-                if (direction == "up") doPara()
-                else if (direction == "down") navigateTo(Screen.MENU)
-            }
-            Screen.LAND -> {
-                if (direction == "up") doLand()
-                else if (direction == "down") navigateTo(Screen.MENU)
-            }
-            Screen.BATTLE -> {
-                if (fingers >= 3) {
-                    if (direction == "up") toggleCover()
-                    else if (direction == "down") exitBattle()
-                } else if (fingers == 2) {
-                    when (direction) {
-                        "up" -> doReload()
-                        "down" -> useMedkit()
-                        "right" -> speakStatus(own = true)
-                        "left" -> speakStatus(own = false)
-                    }
-                } else {
-                    when (direction) {
-                        "up" -> fire()
-                        "down" -> doReload()
-                        "right" -> switchGun(1)
-                        "left" -> switchGun(-1)
-                    }
-                }
-            }
-            Screen.RESULT -> {
-                if (direction == "up") playAgain()
-                else if (direction == "down") navigateTo(Screen.MENU)
-            }
-            else -> {}
+        when (GestureRouter.route(_currentScreen.value, direction, fingers)) {
+            GameAction.CONTINUE -> continueToJump()
+            GameAction.BACK_TO_MENU -> navigateTo(Screen.MENU)
+            GameAction.JUMP -> doJump()
+            GameAction.OPEN_PARA -> doPara()
+            GameAction.LAND -> doLand()
+            GameAction.FIRE -> fire()
+            GameAction.RELOAD -> doReload()
+            GameAction.NEXT_GUN -> switchGun(1)
+            GameAction.PREV_GUN -> switchGun(-1)
+            // Two-finger swipe up: Gloo Wall (cover) for 100 coins.
+            GameAction.GLOO_WALL -> deployGlooWall()
+            GameAction.MEDKIT -> useMedkit()
+            GameAction.TOGGLE_COVER -> toggleCover()
+            GameAction.EXIT_BATTLE -> exitBattle()
+            GameAction.STATUS_OWN -> speakStatus(own = true)
+            GameAction.STATUS_ENEMY -> speakStatus(own = false)
+            GameAction.PLAY_AGAIN -> playAgain()
+            GameAction.NONE -> {}
         }
     }
 

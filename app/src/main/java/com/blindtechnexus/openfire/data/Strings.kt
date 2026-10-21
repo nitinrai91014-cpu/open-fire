@@ -73,6 +73,10 @@ object Strings {
         "enemyStatus" to "Enemy Status",
         "outOfAmmo" to "Out of ammo. Reload.",
         "reloaded" to "Reloaded.",
+        "magFull" to "Magazine already full.",
+        "zoneMiss" to "0 to 40 percent: too far, the shot misses",
+        "zoneLight" to "40 to 70 percent: hit, the devil loses 10 percent health",
+        "zoneHeavy" to "70 to 100 percent: proper hit, the devil loses 20 percent health",
         "medkitUsed" to "Medkit used. Health",
         "noMedkits" to "No medkits left.",
         "coverOn" to "You are in cover.",
@@ -106,7 +110,7 @@ object Strings {
         "exited" to "Game exited.",
         "ready" to "Game ready.",
         "previewSample" to "This is a preview of the selected voice.",
-        "gestureHint" to "One finger: up fire, down reload, right next gun, left previous gun. Swipe up twice: Gloo Wall. Two fingers: up reload, down medkit, right your health, left enemy health. Three fingers: up cover, down exit.",
+        "gestureHint" to "One finger: up fire, down reload, right next gun, left previous gun. Swipe up twice: Gloo Wall. Two fingers: up Gloo Wall (100 coins), down medkit, right your health, left enemy health. Three fingers: up toggle cover, down exit.",
         "profileTitle" to "Profile",
         "best" to "Best",
         "noVoice" to "No TTS voices found on this device.",
@@ -212,6 +216,10 @@ object Strings {
         "enemyStatus" to "दुश्मन की स्थिति",
         "outOfAmmo" to "गोली खत्म। रिलोड करें।",
         "reloaded" to "रिलोड हो गया।",
+        "magFull" to "मैगजीन पहले से भरी है।",
+        "zoneMiss" to "0 से 40 प्रतिशत: बहुत दूर, गोली चूक जाएगी",
+        "zoneLight" to "40 से 70 प्रतिशत: निशाना लगा, शैतान की 10 प्रतिशत हेल्थ घटेगी",
+        "zoneHeavy" to "70 से 100 प्रतिशत: सही निशाना, शैतान की 20 प्रतिशत हेल्थ घटेगी",
         "medkitUsed" to "मेडकिट लगाई। हेल्थ",
         "noMedkits" to "मेडकिट खत्म।",
         "coverOn" to "आप कवर में हैं।",
@@ -245,7 +253,7 @@ object Strings {
         "exited" to "गेम से बाहर आ गए।",
         "ready" to "गेम तैयार।",
         "previewSample" to "यह चुनी गई आवाज़ का नमूना है।",
-        "gestureHint" to "एक उंगली: ऊपर फायर, नीचे रिलोड, दाएं अगली गन, बाएं पिछली गन। दो बार ऊपर स्वाइप: ग्लू वॉल। दो उंगली: ऊपर रिलोड, नीचे मेडकिट। तीन उंगली: ऊपर कवर, नीचे गेम छोड़ें।",
+        "gestureHint" to "एक उंगली: ऊपर फायर, नीचे रिलोड, दाएं अगली गन, बाएं पिछली गन। दो बार ऊपर स्वाइप: ग्लू वॉल। दो उंगली: ऊपर ग्लू वॉल (100 सिक्के), नीचे मेडकिट, दाएं आपकी हेल्थ, बाएं दुश्मन की हेल्थ। तीन उंगली: ऊपर कवर, नीचे गेम छोड़ें।",
         "profileTitle" to "प्रोफाइल",
         "best" to "सर्वश्रेष्ठ",
         "noVoice" to "इस डिवाइस पर कोई TTS आवाज़ नहीं मिली।",
@@ -351,6 +359,10 @@ object Strings {
         "enemyStatus" to "शत्रुको स्थिति",
         "outOfAmmo" to "गोली सकियो। रिलोड गर्नुहोस्।",
         "reloaded" to "रिलोड भयो।",
+        "magFull" to "म्यागजिन पहिले नै भरिएको छ।",
+        "zoneMiss" to "० देखि ४० प्रतिशत: धेरै टाढा, गोली चुक्नेछ",
+        "zoneLight" to "४० देखि ७० प्रतिशत: निशाना लाग्यो, शैतानको १० प्रतिशत स्वास्थ्य घट्नेछ",
+        "zoneHeavy" to "७० देखि १०० प्रतिशत: सही निशाना, शैतानको २० प्रतिशत स्वास्थ्य घट्नेछ",
         "medkitUsed" to "मेडकिट प्रयोग भयो। स्वास्थ्य",
         "noMedkits" to "मेडकिट सकियो।",
         "coverOn" to "तपाईं कभरमा हुनुहुन्छ।",
@@ -384,7 +396,7 @@ object Strings {
         "exited" to "खेलबाट बाहिर निस्कनुभयो।",
         "ready" to "खेल तयार।",
         "previewSample" to "यो छानिएको आवाजको नमुना हो।",
-        "gestureHint" to "एक औंला: माथि फायर, तल रिलोड, दायाँ अर्को हतियार, बायाँ अघिल्लो हतियार। दुई पटक माथि स्वाइप: ग्लु वाल। दुई औंला: माथि रिलोड, तल मेडकिट। तीन औंला: माथि कभर, तल खेल बन्द।",
+        "gestureHint" to "एक औंला: माथि फायर, तल रिलोड, दायाँ अर्को हतियार, बायाँ अघिल्लो हतियार। दुई पटक माथि स्वाइप: ग्लु वाल। दुई औंला: माथि ग्लु वाल (१०० सिक्का), तल मेडकिट, दायाँ तपाईंको स्वास्थ्य, बायाँ शत्रुको स्वास्थ्य। तीन औंला: माथि कभर, तल खेल बन्द।",
         "profileTitle" to "प्रोफाइल",
         "best" to "उत्कृष्ट",
         "noVoice" to "यो यन्त्रमा कुनै TTS आवाज भेटिएन।",
@@ -420,43 +432,57 @@ object Strings {
 
     private val GUIDE_EN = listOf(
         "Open Fire is an audio battle game. Headphones are strongly recommended for full 3D audio precision.",
-        "Proximity & Hits: Hits are effective only between 70% and 100% proximity, dealing 30% health damage. Hits between 40% and 70% deal light damage of 10% health. Any hit below 40% proximity counts as a miss.",
+        "Proximity & Hits: A hit between 70% and 100% proximity is a proper hit that removes 20% of the enemy's health. A hit between 40% and 70% removes 10% health. Any shot below 40% proximity counts as a miss. Whoever reaches 0% health is defeated — there is no fixed number of hits that ends the fight.",
         "Symmetrical Combat: Both the devil and you have equal health and equal power at every level.",
         "Health Scaling: 200 HP up to level 10, 300 HP up to level 20, 500 HP up to level 25, and 800 HP from level 25 to 30.",
         "Round Progression: Completing level 30 finishes the round and begins the next round with fresh challenges.",
-        "Pistol & Weapons: The pistol magazine holds 6 bullets. A reload is required only after all 6 bullets are fired.",
-        "Gloo Wall: Swipe up twice quickly to deploy a Gloo Wall, costing 100 coins.",
-        "Insufficient Funds: If you attempt to reload, deploy a Gloo Wall, or use a medkit without sufficient coins, you will hear 'Not enough coins.'",
+        "Weapons & Reload: The pistol, assault rifle and shotgun each hold exactly 6 bullets. One bullet is used per shot, and a reload is required only after all 6 bullets of the active gun are fired. Reload costs 30 coins.",
+        "Gloo Wall: Swipe up with two fingers (or swipe up twice quickly) to deploy a Gloo Wall, costing 100 coins. The gloo wall, cover and coin sounds all play together when it is deployed.",
+        "Insufficient Funds: If you attempt to reload, deploy a Gloo Wall, or use a medkit without sufficient coins, you will hear 'Not enough coins.' Every coin payment also plays the money-spend sound mixed with the action's sound.",
         "Airplane & Parachute: Swipe up to jump from the plane, open the parachute, and land on the battleground.",
         "Footstep Audio: Listen carefully as the footsteps get louder and alternate between ears as the devil approaches.",
         "Gestures: One finger up to fire, down to reload, left/right to switch guns. Swipe up twice for Gloo Wall.",
-        "Two fingers: up reload, down medkit, right check your health, left check enemy distance and health."
+        "Two fingers: up Gloo Wall, down medkit, right check your health, left check enemy distance and health. Three fingers: up toggle cover, down exit."
     )
 
     private val GUIDE_HI = listOf(
         "ओपन फायर एक ऑडियो बैटल गेम है। बेहतर 3D साउंड अनुभव के लिए हेडफोन पहनें।",
-        "दूरी और मारक क्षमता: 70% से 100% की निकटता पर गोली सबसे प्रभावी होती है और 30% नुकसान देती है। 40% से 70% के बीच हल्की गोली लगती है जिससे 10% नुकसान होता है। 40% से कम दूरी पर गोली चूक जाती है।",
+        "दूरी और मारक क्षमता: 70% से 100% की निकटता पर सही निशाना लगता है और दुश्मन की 20% हेल्थ घटती है। 40% से 70% के बीच हल्की गोली लगती है जिससे 10% हेल्थ घटती है। 40% से कम निकटता पर गोली चूक जाती है। जिसकी हेल्थ 0% पर पहुँचती है वही हारता है — किसी तय संख्या में गोलियों से कोई नहीं हारता।",
         "समान ताकत: शैतान और खिलाड़ी दोनों की हर स्तर पर समान ताकत और समान हेल्थ होती है।",
         "स्तर अनुसार हेल्थ: स्तर 10 तक 200 हेल्थ, स्तर 20 तक 300 हेल्थ, स्तर 25 तक 500 हेल्थ, और स्तर 25 से 30 तक 800 हेल्थ।",
         "राउंड चक्र: स्तर 30 पूरा करने पर वर्तमान राउंड समाप्त हो जाता है और अगला राउंड शुरू होता है।",
-        "पिस्तौल और मैगजीन: पिस्तौल में 6 गोलियां होती हैं। सभी 6 गोलियां चलने के बाद ही रिलोड करना होता है।",
-        "ग्लू वॉल: दो बार तेज़ी से ऊपर स्वाइप करने पर 100 सिक्के में ग्लू वॉल लग जाती है।",
-        "सिक्कों की कमी: यदि सिक्के कम हों, तो सिस्टम 'सिक्के कम हैं' बोलेगा।",
+        "हथियार और रिलोड: पिस्तौल, असॉल्ट राइफल और शॉटगन — तीनों में ठीक 6 गोलियां होती हैं। हर शॉट में एक गोली खर्च होती है, और सक्रिय गन की सभी 6 गोलियां खत्म होने के बाद ही रिलोड करें। रिलोड पर 30 सिक्के खर्च होते हैं।",
+        "ग्लू वॉल: दो उंगलियों से ऊपर स्वाइप (या दो बार तेज़ी से ऊपर स्वाइप) करने पर 100 सिक्के में ग्लू वॉल लग जाती है। लगाते ही ग्लू वॉल, कवर और सिक्के की आवाज़ साथ में बजती है।",
+        "सिक्कों की कमी: यदि सिक्के कम हों, तो सिस्टम 'सिक्के कम हैं' बोलेगा। हर बार सिक्के खर्च होने पर मनी-स्पेंड आवाज़ उस क्रिया की आवाज़ के साथ मिलकर बजती है।",
         "हवाई जहाज और पैराशूट: कूदने के लिए ऊपर स्वाइप करें, पैराशूट खोलें और जमीन पर उतरें।",
-        "कदमों की 3D आवाज़: पास आते शैतान के कदमों की आवाज़ दोनों कानों में बारी-बारी से सुनाई देगी।"
+        "कदमों की 3D आवाज़: पास आते शैतान के कदमों की आवाज़ दोनों कानों में बारी-बारी से सुनाई देगी।",
+        "इशारे: एक उंगली से ऊपर फायर, नीचे रिलोड, बाएं/दाएं हथियार बदलें। ग्लू वॉल के लिए दो बार ऊपर स्वाइप करें।",
+        "दो उंगली: ऊपर ग्लू वॉल, नीचे मेडकिट, दाएं अपनी हेल्थ, बाएं दुश्मन की हेल्थ। तीन उंगली: ऊपर कवर, नीचे गेम छोड़ें।"
     )
 
     private val GUIDE_NE = listOf(
         "ओपन फायर एक अडियो ब्याटल गेम हो। थ्रीडी ध्वनिका लागि हेडफोन लगाउनुहोस्।",
-        "दूरी र मारक क्षमता: ७०% देखि १००% निकटतामा गोली सबैभन्दा प्रभावकारी हुन्छ र ३०% स्वास्थ्य घटाउँछ। ४०% देखि ७०% मा १०% हल्का हानि हुन्छ। ४०% भन्दा टाढा गोली चुक्छ।",
+        "दूरी र मारक क्षमता: ७०% देखि १००% निकटतामा सही निशाना लाग्छ र शत्रुको २०% स्वास्थ्य घट्छ। ४०% देखि ७०% मा १०% हल्का हानि हुन्छ। ४०% भन्दा कम निकटतामा गोली चुक्छ। जसको स्वास्थ्य ०% मा पुग्छ उसैको पराजय हुन्छ — तोकिएको गोलीको संख्याले कसैलाई हार दिँदैन।",
         "समान शक्ति: हरेक स्तरमा शैतान र खेलाडी दुवैको समान स्वास्थ्य र समान शक्ति हुन्छ।",
         "स्तर अनुसार स्वास्थ्य: स्तर १० सम्म २०० स्वास्थ्य, स्तर २० सम्म ३०० स्वास्थ्य, स्तर २५ सम्म ५०० स्वास्थ्य, र स्तर २५ देखि ३० सम्म ८०० स्वास्थ्य।",
         "राउन्ड प्रगति: स्तर ३० पूरा भएपछि वर्तमान राउन्ड सकिन्छ र अर्को राउन्ड सुरु हुन्छ।",
-        "पिस्तोल र म्यागजिन: पिस्तोलमा ६ गोली हुन्छ। ६ वटै गोली सकिएपछि मात्र रिलोड आवश्यक हुन्छ।",
-        "ग्लु वाल: दुई पटक छिटो माथि स्वाइप गर्दा १०० सिक्कामा ग्लु वाल लाग्छ।",
-        "सिक्का अपुग: यदि सिक्का अपुग भएमा प्रणालीले 'सिक्का कम छ' भन्नेछ।",
-        "पाइलाको आवाज: नजिक आउँदै गर्दा पाइलाको आवाज ठूलो र दुवै कानमा पालोपालो सुनिन्छ।"
+        "हतियार र रिलोड: पिस्तोल, असल्ट राइफल र सटगन — तीनैमा ठ्याक्क ६ गोली हुन्छ। हरेक शटमा एक गोली खर्च हुन्छ, र सक्रिय हतियारका ६ वटै गोली सकिएपछि मात्र रिलोड गर्नुहोस्। रिलोडमा ३० सिक्का खर्च हुन्छ।",
+        "ग्लु वाल: दुई औंलाले माथि स्वाइप (वा दुई पटक छिटो माथि स्वाइप) गर्दा १०० सिक्कामा ग्लु वाल लाग्छ। लागेबित्तिकै ग्लु वाल, कभर र सिक्काको आवाज सँगसँगै बज्छ।",
+        "सिक्का अपुग: यदि सिक्का अपुग भएमा प्रणालीले 'सिक्का कम छ' भन्नेछ। सिक्का खर्च हुनेबित्तिकै मनी-स्पेन्ड आवाज त्यो कार्यको आवाजसँग मिसिएर बज्छ।",
+        "पाइलाको आवाज: नजिक आउँदै गर्दा पाइलाको आवाज ठूलो र दुवै कानमा पालोपालो सुनिन्छ।",
+        "इशारा: एक औंलाले माथि फायर, तल रिलोड, बायाँ/दायाँ हतियार बदल्नुहोस्। ग्लु वालका लागि दुई पटक माथि स्वाइप गर्नुहोस्।",
+        "दुई औंला: माथि ग्लु वाल, तल मेडकिट, दायाँ तपाईंको स्वास्थ्य, बायाँ शत्रुको स्वास्थ्य। तीन औंला: माथि कभर, तल खेल बन्द।"
     )
+
+    /** Every translation key defined by the base (English) table. */
+    internal fun availableKeys(): Set<String> = EN.keys
+
+    /** True when the given language table actually defines [key]. */
+    internal fun hasTranslation(key: String, lang: String): Boolean = when (lang) {
+        "hi" -> HI.containsKey(key)
+        "ne" -> NE.containsKey(key)
+        else -> EN.containsKey(key)
+    }
 
     fun get(key: String, lang: String): String {
         val map = when (lang) {

@@ -20,8 +20,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.ControlMode
 import com.blindtechnexus.openfire.model.DEFAULT_GUNS
+import com.blindtechnexus.openfire.model.HitZone
 import com.blindtechnexus.openfire.ui.components.AlertBox
 import com.blindtechnexus.openfire.ui.components.ButtonType
 import com.blindtechnexus.openfire.ui.components.GameButton
@@ -33,6 +35,7 @@ import com.blindtechnexus.openfire.ui.components.RadarBar
 import com.blindtechnexus.openfire.ui.components.TipBox
 import com.blindtechnexus.openfire.ui.theme.BtnDanger
 import com.blindtechnexus.openfire.ui.theme.TextMuted
+import com.blindtechnexus.openfire.ui.theme.WarnBright
 import com.blindtechnexus.openfire.viewmodel.GameViewModel
 import kotlin.math.roundToInt
 
@@ -49,6 +52,30 @@ fun BattleScreen(viewModel: GameViewModel) {
 
     val devilHpShown = maxOf(0, gameState.devilHp)
     val playerHpShown = maxOf(0, gameState.playerHp)
+
+    // Three distance zones: 0-40% miss, 40-70% light hit (10%), 70-100% proper hit (20%).
+    val proxPercent = Combat.proximityOf(gameState.distance)
+    val hitZone = Combat.zoneFor(proxPercent)
+    val zoneText = when (hitZone) {
+        HitZone.MISS -> viewModel.t("zoneMiss")
+        HitZone.LIGHT -> viewModel.t("zoneLight")
+        HitZone.HEAVY -> viewModel.t("zoneHeavy")
+    }
+    val zoneColor = when (hitZone) {
+        HitZone.MISS -> TextMuted
+        HitZone.LIGHT -> WarnBright
+        HitZone.HEAVY -> Color(0xFFFF6B6B)
+    }
+
+    // One line per gun: six bullets each, active gun first.
+    val ammoSummary = DEFAULT_GUNS.mapIndexed { i, g ->
+        val marker = if (i == gameState.gunIndex) "> " else ""
+        "$marker${viewModel.t(g.nameKey)}: ${gameState.ammo[i]}/${g.mag}"
+    }.joinToString("   ")
+    val ammoDesc = DEFAULT_GUNS.mapIndexed { i, g ->
+        val active = if (i == gameState.gunIndex) " (${viewModel.t("fire")})" else ""
+        "${viewModel.t(g.nameKey)} ${gameState.ammo[i]} of ${g.mag}$active"
+    }.joinToString(", ")
 
     val coverTxt = if (gameState.devilCoverHp > 0) {
         " | ${viewModel.t("devilCover")}: ${gameState.devilCoverHp}/${gameState.devilCoverMax}"
@@ -113,12 +140,30 @@ fun BattleScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(6.dp))
             HpBar(current = playerHpShown, max = gameState.playerMaxHp, isDevil = false)
             Spacer(modifier = Modifier.height(8.dp))
+            val coverLabel = if (gameState.inCover) " | " + viewModel.t("glooWall") else ""
             Text(
-                text = "${viewModel.t(gun.nameKey)} | ${viewModel.t("medkits")}: ${gameState.medkits} | ${viewModel.t("coins")}: ${stats.coins}${if (gameState.inCover) " | ${viewModel.t("glooWall")}" else ""}",
+                text = viewModel.t(gun.nameKey) + " | " + viewModel.t("medkits") + ": " + gameState.medkits +
+                    " | " + viewModel.t("coins") + ": " + stats.coins + coverLabel,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
                 color = Color.White
             )
+            Spacer(modifier = Modifier.height(6.dp))
+            // Magazine status for all three guns (six bullets each).
+            Text(
+                text = ammoSummary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFFB8D4FF),
+                modifier = Modifier.semantics {
+                    contentDescription = ammoDesc
+                }
+            )
+        }
+
+        if (gameState.ammo[gameState.gunIndex] == 0) {
+            Spacer(modifier = Modifier.height(12.dp))
+            AlertBox(text = "${viewModel.t("outOfAmmo")} ${viewModel.t("reload")}.")
         }
 
         if (gameState.playerHp <= (gameState.playerMaxHp * 0.35f).roundToInt()) {
@@ -138,7 +183,18 @@ fun BattleScreen(viewModel: GameViewModel) {
             color = TextMuted
         )
         Spacer(modifier = Modifier.height(4.dp))
-        RadarBar(distance = gameState.distance)
+        RadarBar(distance = gameState.distance, extraDesc = zoneText)
+        Spacer(modifier = Modifier.height(6.dp))
+        // Current hit zone with its exact damage rule (0-40 miss / 40-70 = 10% / 70-100 = 20%).
+        Text(
+            text = zoneText,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = zoneColor,
+            modifier = Modifier.semantics {
+                contentDescription = zoneText
+            }
+        )
         Spacer(modifier = Modifier.height(14.dp))
 
         if (gesturesAllowed) {
