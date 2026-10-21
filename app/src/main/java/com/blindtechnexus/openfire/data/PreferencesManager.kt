@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import com.blindtechnexus.openfire.model.ControlMode
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameStats
+import com.blindtechnexus.openfire.model.Progression
 import com.blindtechnexus.openfire.model.SoundTheme
 
 class PreferencesManager(context: Context) {
@@ -64,25 +65,58 @@ class PreferencesManager(context: Context) {
         val savedLevel = prefs.getInt("of_level", 1)
         val round = prefs.getInt("of_round", 1)
         // Keep level in 1..30 range
-        val level = savedLevel.coerceIn(1, 30)
-        return GameStats(
-            games = prefs.getInt("of_games", 0),
-            wins = wins,
-            kills = prefs.getInt("of_kills", 0),
-            coins = prefs.getInt("of_coins", 100),
-            round = round.coerceAtLeast(1),
-            level = level
+        val level = savedLevel.coerceIn(1, Progression.LEVELS_PER_ROUND)
+        // Saves written before the explicit per-level counter existed are
+        // migrated from the lifetime win count, so the 10-wins ladder keeps
+        // working without resetting anybody's progress.
+        val migratedLevelWins = wins % Progression.WINS_PER_LEVEL
+        val savedLevelWins = if (prefs.contains("of_level_wins")) {
+            prefs.getInt("of_level_wins", migratedLevelWins)
+        } else {
+            migratedLevelWins
+        }
+        val levelWins = savedLevelWins.coerceIn(0, Progression.WINS_PER_LEVEL - 1)
+        return Progression.normalize(
+            GameStats(
+                games = prefs.getInt("of_games", 0),
+                wins = wins,
+                kills = prefs.getInt("of_kills", 0),
+                coins = prefs.getInt("of_coins", 100),
+                round = round.coerceAtLeast(1),
+                level = level,
+                levelWins = levelWins
+            )
         )
     }
 
     fun saveStats(s: GameStats) {
+        val normalized = Progression.normalize(s)
         prefs.edit()
-            .putInt("of_games", s.games)
-            .putInt("of_wins", s.wins)
-            .putInt("of_kills", s.kills)
-            .putInt("of_coins", s.coins)
-            .putInt("of_round", s.round)
-            .putInt("of_level", s.level)
+            .putInt("of_games", normalized.games)
+            .putInt("of_wins", normalized.wins)
+            .putInt("of_kills", normalized.kills)
+            .putInt("of_coins", normalized.coins)
+            .putInt("of_round", normalized.round)
+            .putInt("of_level", normalized.level)
+            .putInt("of_level_wins", normalized.levelWins)
             .apply()
+    }
+
+    /**
+     * Erases every stored statistic and writes the cleared profile back.
+     * Only gameplay data is touched: the player's name and audio/TTS
+     * preferences are kept so the app remains usable.
+     */
+    fun clearStats(cleared: GameStats = GameStats.cleared()) {
+        prefs.edit()
+            .remove("of_games")
+            .remove("of_wins")
+            .remove("of_kills")
+            .remove("of_coins")
+            .remove("of_round")
+            .remove("of_level")
+            .remove("of_level_wins")
+            .apply()
+        saveStats(cleared)
     }
 }

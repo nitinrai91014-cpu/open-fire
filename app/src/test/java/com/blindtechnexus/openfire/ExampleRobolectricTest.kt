@@ -32,7 +32,7 @@ class ExampleRobolectricTest {
         assertEquals("ओपन फायर", Strings.get("title", "hi"))
         assertEquals("ओपन फायर", Strings.get("title", "ne"))
 
-        assertEquals("Version 1.2", Strings.get("version", "en"))
+        assertEquals("Version 1.3", Strings.get("version", "en"))
         assertEquals("Changelog", Strings.get("changelog", "en"))
         assertEquals("Join Telegram Channel", Strings.get("joinTelegram", "en"))
         assertEquals("Contact on WhatsApp", Strings.get("contactWhatsApp", "en"))
@@ -85,7 +85,8 @@ class ExampleRobolectricTest {
             kills = 3,
             coins = 240,
             round = 2,
-            level = 14
+            level = 14,
+            levelWins = 4
         )
         prefs.saveStats(stats)
 
@@ -95,5 +96,46 @@ class ExampleRobolectricTest {
         assertEquals(2, loadedStats.round)
         assertEquals(14, loadedStats.level)
         assertEquals(240, loadedStats.coins)
+        assertEquals(4, loadedStats.levelWins)
+        assertEquals(6, loadedStats.needWinsForNext)
+    }
+
+    @Test
+    fun testClearStatsWipesEverything() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = PreferencesManager(context)
+
+        prefs.saveStats(
+            GameStats(
+                games = 42,
+                wins = 31,
+                kills = 20,
+                coins = 999,
+                round = 5,
+                level = 27,
+                levelWins = 6
+            )
+        )
+
+        prefs.clearStats()
+
+        val cleared = prefs.loadStats()
+        assertEquals(0, cleared.games)
+        assertEquals(0, cleared.wins)
+        assertEquals(0, cleared.kills)
+        assertEquals(0, cleared.coins)
+        assertEquals(0, cleared.levelWins)
+        assertEquals(1, cleared.level)
+        assertEquals(1, cleared.round)
+    }
+
+    @Test
+    fun testGameDefaultsUseTheFiftyMeterArena() {
+        assertEquals(
+            com.blindtechnexus.openfire.model.Combat.MAX_RANGE,
+            com.blindtechnexus.openfire.model.GameState().distance,
+            0.001f
+        )
+        assertEquals(50f, com.blindtechnexus.openfire.model.Combat.MAX_RANGE, 0.001f)
     }
 }

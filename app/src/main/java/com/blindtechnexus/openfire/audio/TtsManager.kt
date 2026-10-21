@@ -29,10 +29,23 @@ class TtsManager(private val context: Context) {
     val availableVoices: StateFlow<List<TtsVoiceInfo>> = _availableVoices.asStateFlow()
 
     var speechRate: Float = 1.0f
+
+    /**
+     * The user's TTS volume setting (0..1). It is applied to every utterance
+     * and is never mutated by previews or screen changes, so the level chosen
+     * in Settings is kept for the whole session and every later game.
+     */
     var speechVolume: Float = 1.0f
+        set(value) {
+            field = VolumeMixer.speech(value)
+        }
+
     var currentVoiceName: String = ""
     var currentEnginePackage: String = ""
     var currentLanguage: String = "en"
+
+    /** Speech requested while the engine was still initialising. */
+    private var pendingSpeech: String? = null
 
     init {
         initTts(null)
@@ -64,6 +77,10 @@ class TtsManager(private val context: Context) {
                 refreshEngines()
                 refreshVoices()
                 applyVoiceSettings()
+                pendingSpeech?.let { queued ->
+                    pendingSpeech = null
+                    speak(queued)
+                }
             } else {
                 Log.e(TAG, "TTS initialization failed with status $status")
             }
@@ -236,18 +253,28 @@ class TtsManager(private val context: Context) {
         SpeechSanitizer.sanitize(raw, currentLanguage)
 
     fun speak(text: String, interrupt: Boolean = true) {
-        if (!isInitialized || tts == null || text.isBlank()) return
-        applyVoiceSettings()
+        if (text.isBlank()) return
 
         val sanitized = sanitizeTextForSpeech(text)
         if (sanitized.isBlank()) return
 
+        // An engine switch (or the very first launch) can happen while an
+        // announcement is requested. Queue it instead of dropping it silently.
+        if (!isInitialized || tts == null) {
+            pendingSpeech = sanitized
+            return
+        }
+        applyVoiceSettings()
+
         val queueMode = if (interrupt) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
         val params = Bundle().apply {
-            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, speechVolume.coerceIn(0.05f, 1.0f))
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, VolumeMixer.speech(speechVolume))
         }
         val utteranceId = "utterance_${System.currentTimeMillis()}"
-        tts?.speak(sanitized, queueMode, params, utteranceId)
+        val result = tts?.speak(sanitized, queueMode, params, utteranceId)
+        if (result == TextToSpeech.ERROR) {
+            pendingSpeech = sanitized
+        }
     }
 
     fun stop() {
@@ -282,10 +309,12 @@ class TtsManager(private val context: Context) {
         }
 
         val params = Bundle().apply {
-            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, speechVolume.coerceIn(0.05f, 1.0f))
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, VolumeMixer.speech(speechVolume))
         }
         val sanitized = sanitizeTextForSpeech(text)
-        currentTts.speak(sanitized, TextToSpeech.QUEUE_FLUSH, params, "preview")
+        if (sanitized.isNotBlank()) {
+            currentTts.speak(sanitized, TextToSpeech.QUEUE_FLUSH, params, "preview")
+        }
     }
 
     fun shutdown() {

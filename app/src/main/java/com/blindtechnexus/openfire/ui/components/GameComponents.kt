@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.ui.theme.BtnBlue
 import com.blindtechnexus.openfire.ui.theme.BtnDanger
 import com.blindtechnexus.openfire.ui.theme.BtnPrimary
@@ -248,7 +249,7 @@ fun HpBar(current: Int, max: Int, isDevil: Boolean, modifier: Modifier = Modifie
 
 @Composable
 fun RadarBar(distance: Float, modifier: Modifier = Modifier, extraDesc: String = "") {
-    val prox = (1.0f - distance / 100.0f).coerceIn(0f, 1f)
+    val prox = (Combat.proximityOf(distance) / 100f).coerceIn(0f, 1f)
     val animatedProx by animateFloatAsState(targetValue = prox, label = "radar_anim")
 
     val gradient = Brush.horizontalGradient(

@@ -75,10 +75,30 @@ data class GameStats(
     val kills: Int = 0,
     val coins: Int = 100,
     val round: Int = 1,
-    val level: Int = 1
+    val level: Int = 1,
+    /** Wins collected inside the current level (0..9). 10 wins promote a level. */
+    val levelWins: Int = 0
 ) {
+    /** Wins still required to reach the next level (always 1..10). */
     val needWinsForNext: Int
-        get() = (10 - (wins % 10)).coerceIn(1, 10)
+        get() = (Progression.WINS_PER_LEVEL - levelWins)
+            .coerceIn(1, Progression.WINS_PER_LEVEL)
+
+    companion object {
+        /**
+         * A completely wiped profile: every counter is zero and the level and
+         * round are back to 1, as required by "Clear My Stats".
+         */
+        fun cleared(): GameStats = GameStats(
+            games = 0,
+            wins = 0,
+            kills = 0,
+            coins = 0,
+            round = 1,
+            level = 1,
+            levelWins = 0
+        )
+    }
 }
 
 data class GameState(
@@ -90,23 +110,43 @@ data class GameState(
     val ammo: List<Int> = listOf(6, 6, 6),
     val medkits: Int = 3,
     val inCover: Boolean = false,
-    val distance: Float = 100f,
+    val distance: Float = Combat.MAX_RANGE,
     val devilShots: Int = 0,
     val devilHits: Int = 0,
     val devilDamage: Int = 0,
     val playerShots: Int = 0,
     val playerHits: Int = 0,
     val devilCoverHp: Int = 0,
-    val devilCoverMax: Int = 6,
+    val devilCoverMax: Int = 4,
     val devilCoversLeft: Int = 1,
     val devilMedkits: Int = 1,
-    val devilState: String = "advance", // "advance", "retreat", "flank"
+    val devilState: String = "advance", // "advance", "retreat" (fleeing), "flank"
     val devilHitsTaken: Int = 0,
     val devilReactAt: Int = 4,
     val devilRetreats: Int = 0,
     val log: String = "",
-    val hitStreak: Int = 0
-)
+
+    /** One second chance per fight: health restored to half the maximum. */
+    val playerSecondChanceUsed: Boolean = false,
+    val devilSecondChanceUsed: Boolean = false,
+    /** Gloo wall, cover and medkit the devil activates after its second chance. */
+    val devilItemsLeft: Int = 0,
+    /** True while the devil still has a high-speed flee available this life. */
+    val devilFleeArmed: Boolean = true,
+    /** Which of the three guns are currently broken and need Recovery. */
+    val damagedGuns: List<Boolean> = listOf(false, false, false),
+    /** Consecutive point-blank (90%-100%) hits the player has taken. */
+    val consecutiveHeavyHits: Int = 0
+) {
+    val activeGunDamaged: Boolean
+        get() = damagedGuns.getOrElse(gunIndex) { false }
+
+    val anyGunDamaged: Boolean
+        get() = damagedGuns.any { it }
+
+    val devilFleeing: Boolean
+        get() = devilState == "retreat"
+}
 
 data class ResultData(
     val won: Boolean = false,
