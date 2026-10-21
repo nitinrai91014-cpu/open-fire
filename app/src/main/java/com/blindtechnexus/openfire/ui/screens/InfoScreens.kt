@@ -11,14 +11,20 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -33,6 +39,7 @@ import com.blindtechnexus.openfire.ui.components.GameButton
 import com.blindtechnexus.openfire.ui.components.GameCard
 import com.blindtechnexus.openfire.ui.components.HintBox
 import com.blindtechnexus.openfire.ui.components.TipBox
+import com.blindtechnexus.openfire.ui.theme.CardBg
 import com.blindtechnexus.openfire.ui.theme.CardBorder
 import com.blindtechnexus.openfire.ui.theme.TextAccent
 import com.blindtechnexus.openfire.ui.theme.TextMuted
@@ -87,6 +94,7 @@ fun ProfileScreen(viewModel: GameViewModel) {
     val settings by viewModel.settings.collectAsState()
     val stats by viewModel.stats.collectAsState()
     val scrollState = rememberScrollState()
+    var showClearDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -123,10 +131,70 @@ fun ProfileScreen(viewModel: GameViewModel) {
         Spacer(modifier = Modifier.height(16.dp))
 
         GameButton(
+            text = viewModel.t("clearStats"),
+            onClick = {
+                showClearDialog = true
+                // Read the warning aloud before the user decides.
+                viewModel.speak("${viewModel.t("clearStatsTitle")} ${viewModel.t("clearStatsMessage")}")
+            },
+            type = ButtonType.DANGER,
+            testTag = "clear_stats_button"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        GameButton(
             text = viewModel.t("back"),
             onClick = { viewModel.navigateTo(Screen.MENU) },
             type = ButtonType.PRIMARY,
             testTag = "profile_back_button"
+        )
+    }
+
+    // Confirmation is mandatory: nothing is erased until the user confirms.
+    if (showClearDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearDialog = false },
+            title = {
+                Text(
+                    text = viewModel.t("clearStatsTitle"),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = viewModel.t("clearStatsMessage"),
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showClearDialog = false
+                        viewModel.clearStats()
+                    },
+                    modifier = Modifier.testTag("clear_stats_confirm_button")
+                ) {
+                    Text(
+                        text = viewModel.t("confirmClear"),
+                        color = WarnBright,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showClearDialog = false },
+                    modifier = Modifier.testTag("clear_stats_cancel_button")
+                ) {
+                    Text(text = viewModel.t("cancel"), color = TextAccent)
+                }
+            },
+            containerColor = CardBg,
+            titleContentColor = Color.White,
+            textContentColor = Color.White
         )
     }
 }
@@ -240,9 +308,48 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             )
             Spacer(modifier = Modifier.height(14.dp))
 
+            // Version 1.3
+            Text(
+                text = "Version 1.3 (Current)",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            val v13Notes = listOf(
+                "Audio Volume Fix: Music, SFX and TTS now keep exactly the volume saved in Settings across screens, games, app restarts and background/foreground switches. The old double-scaling and the music level being overwritten by a lower playback value are fixed.",
+                "Four-Zone Damage: In the 50 meter arena, shots under 40% proximity miss, 40% to 70% takes 10% health, 70% to 90% takes 15%, and 90% to 100% takes 20%.",
+                "Second Chance: Your first zero health restores half your maximum health. If it reaches zero again you are defeated. The devil gets the same second chance.",
+                "Devil Survival Items: After its second chance the devil activates a Gloo Wall, a cover and a medkit. It spends one item every time its health reaches zero and dies for good only after all three are exhausted.",
+                "Continuous Enemy Fire: The devil now fires throughout the battle instead of only at point-blank range.",
+                "High-Speed Flee: Below half of the health it received, the devil flees at high speed with 3D receding footsteps and a lower Doppler pitch — hits still count while it runs.",
+                "Gun Damage & Recovery: Three consecutive point-blank enemy hits damage the gun in hand. A three-finger left swipe or the new Recovery button repairs every gun for 300 coins.",
+                "Three-Finger Gesture Fix: Each finger is now tracked from its own touch-down point, so three-finger up, down and left swipes no longer fail or register the wrong direction.",
+                "Clear My Stats: The Profile screen can wipe all stats after a confirmation warning, resetting every counter to zero and level and round to 1.",
+                "Progression Fix: 10 wins now always promote one level and 30 levels always complete one round, tracked with an explicit per-level win counter."
+            )
+            v13Notes.forEach { note ->
+                Text(
+                    text = "• $note",
+                    fontSize = 14.sp,
+                    color = Color.White,
+                    lineHeight = 20.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(CardBorder)
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+
             // Version 1.2
             Text(
-                text = "Version 1.2 (Current)",
+                text = "Version 1.2",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = WarnBright
@@ -253,12 +360,12 @@ fun ChangelogScreen(viewModel: GameViewModel) {
                 "Never-Dropped SFX: Sound effects that are requested before they finish loading are queued and played automatically; failed loads retry and fall back to generated audio — the reload sound (gun-reload.mp3) now always plays.",
                 "Money-Spend Mixer: Every coin payment (reload 30, Gloo Wall 100, medkit 100) plays the money-spend.mp3 coin sound mixed together with the action's own sound — reload now plays money-spend and gun-reload together.",
                 "Cover Sound Effect: A brand-new cover-sound.mp3 effect has been added to the assets and plays together with the gloo wall sound whenever a Gloo Wall is deployed.",
-                "Gloo Wall Gesture: Swiping up with two fingers deploys the Gloo Wall for 100 coins (the quick double swipe-up shortcut still works too).",
+                "Gloo Wall Gesture: Swiping up with two fingers deploys the Gloo Wall for 100 coins.",
                 "Sound Overlap Fix: Screen transition sounds (victory menu, defeat menu, parachute) immediately stop on swipe-up or navigation.",
                 "Evil Character Walking & 3D Audio: Realistically approaching spatial footsteps with distance attenuation and binaural lateral movement.",
-                "Combat Range & Hit Balance: The three zones are now exact — 0% to 40% misses, 40% to 70% removes exactly 10% of the enemy's health, 70% to 100% is a proper hit removing exactly 20%. Devil and player use the same symmetrical rules.",
+                "Combat Range & Hit Balance (superseded by the Version 1.3 four-zone rules): 0% to 40% missed, 40% to 70% removed 10% of the enemy's health and 70% to 100% removed 20%. Devil and player used the same symmetrical rules.",
                 "Zero-HP Death Rule: Player and devil die only when health reaches exactly zero — no fixed number of hits can end the fight.",
-                "Level-Based HP Progression: 200 HP up to level 10, 300 HP up to level 20, 500 HP up to level 25, 800 HP from level 25 to 30.",
+                "Level-Based HP Progression: 200 HP up to level 10, 300 HP up to level 20, 500 HP up to level 25, 800 HP from level 26 to 30.",
                 "Round Cycle: Completing level 30 finishes the round and begins the next round.",
                 "Six-Bullet Magazines: The pistol, assault rifle and shotgun each hold exactly 6 rounds; one round per shot; reload required only after all six are fired (stale-snapshot ammo bugs fixed).",
                 "Voice Announcements: System announces 'Not enough coins' whenever coins are insufficient for reload, Gloo Wall, or medkit, and 'Magazine already full' when reloading a full gun.",

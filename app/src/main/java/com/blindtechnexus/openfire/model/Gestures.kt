@@ -7,7 +7,8 @@ package com.blindtechnexus.openfire.model
  *  - One finger:  up fire, down reload, right next gun, left previous gun.
  *  - Two fingers: up Gloo Wall (cover, 100 coins), down medkit,
  *                 right own status, left enemy status.
- *  - Three fingers: up toggle cover, down exit the battle.
+ *  - Three fingers: up toggle cover, down exit the battle,
+ *                   left recover the damaged gun (300 coins).
  */
 enum class GameAction {
     NONE,
@@ -24,6 +25,7 @@ enum class GameAction {
     MEDKIT,
     TOGGLE_COVER,
     EXIT_BATTLE,
+    RECOVER_GUN,
     STATUS_OWN,
     STATUS_ENEMY,
     PLAY_AGAIN
@@ -56,6 +58,7 @@ object GestureRouter {
             fingers >= 3 -> when (direction) {
                 "up" -> GameAction.TOGGLE_COVER
                 "down" -> GameAction.EXIT_BATTLE
+                "left" -> GameAction.RECOVER_GUN
                 else -> GameAction.NONE
             }
             fingers == 2 -> when (direction) {

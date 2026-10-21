@@ -24,25 +24,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // If coming back from background, resume appropriate screen audio
-        val screen = viewModel.currentScreen.value
-        when (screen) {
-            com.blindtechnexus.openfire.model.Screen.WELCOME,
-            com.blindtechnexus.openfire.model.Screen.MENU,
-            com.blindtechnexus.openfire.model.Screen.SETTINGS,
-            com.blindtechnexus.openfire.model.Screen.GUIDE,
-            com.blindtechnexus.openfire.model.Screen.PROFILE,
-            com.blindtechnexus.openfire.model.Screen.ABOUT,
-            com.blindtechnexus.openfire.model.Screen.CHANGELOG -> {
-                viewModel.audioManager.startMusic(viewModel.settings.value.musicVolume * 0.35f)
-            }
-            else -> {}
-        }
+        // Restart the correct screen audio (and the battle fire loop) using the
+        // saved volume settings — never a screen-scaled copy of them.
+        viewModel.onAppResumed()
     }
 
     override fun onPause() {
         super.onPause()
-        viewModel.audioManager.stopAllLoops()
-        viewModel.ttsManager.stop()
+        viewModel.onAppPaused()
     }
 }

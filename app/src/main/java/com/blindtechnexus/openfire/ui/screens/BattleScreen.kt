@@ -53,24 +53,29 @@ fun BattleScreen(viewModel: GameViewModel) {
     val devilHpShown = maxOf(0, gameState.devilHp)
     val playerHpShown = maxOf(0, gameState.playerHp)
 
-    // Three distance zones: 0-40% miss, 40-70% light hit (10%), 70-100% proper hit (20%).
+    // Four distance zones inside the 50 meter arena:
+    // 0-40% miss, 40-70% injury (10%), 70-90% strong hit (15%), 90-100% point-blank (20%).
     val proxPercent = Combat.proximityOf(gameState.distance)
     val hitZone = Combat.zoneFor(proxPercent)
     val zoneText = when (hitZone) {
         HitZone.MISS -> viewModel.t("zoneMiss")
         HitZone.LIGHT -> viewModel.t("zoneLight")
+        HitZone.STRONG -> viewModel.t("zoneStrong")
         HitZone.HEAVY -> viewModel.t("zoneHeavy")
     }
     val zoneColor = when (hitZone) {
         HitZone.MISS -> TextMuted
-        HitZone.LIGHT -> WarnBright
+        HitZone.LIGHT -> Color(0xFF9FD4FF)
+        HitZone.STRONG -> WarnBright
         HitZone.HEAVY -> Color(0xFFFF6B6B)
     }
+    val activeGunDamaged = gameState.activeGunDamaged
 
     // One line per gun: six bullets each, active gun first.
     val ammoSummary = DEFAULT_GUNS.mapIndexed { i, g ->
         val marker = if (i == gameState.gunIndex) "> " else ""
-        "$marker${viewModel.t(g.nameKey)}: ${gameState.ammo[i]}/${g.mag}"
+        val damaged = if (gameState.damagedGuns.getOrElse(i) { false }) " (${viewModel.t("damaged")})" else ""
+        "$marker${viewModel.t(g.nameKey)}: ${gameState.ammo[i]}/${g.mag}$damaged"
     }.joinToString("   ")
     val ammoDesc = DEFAULT_GUNS.mapIndexed { i, g ->
         val active = if (i == gameState.gunIndex) " (${viewModel.t("fire")})" else ""
@@ -87,7 +92,10 @@ fun BattleScreen(viewModel: GameViewModel) {
         else -> ""
     }
 
-    val devilDesc = "${viewModel.t("devil")} ${viewModel.t("hp")} $devilHpShown of ${gameState.devilMaxHp}, ${viewModel.t("distance")} ${gameState.distance.roundToInt()} ${viewModel.t("meters")}$coverTxt"
+    val devilItemsTxt = if (gameState.devilSecondChanceUsed) {
+        " | ${viewModel.t("devilItemsLeft")}: ${gameState.devilItemsLeft}"
+    } else ""
+    val devilDesc = "${viewModel.t("devil")} ${viewModel.t("hp")} $devilHpShown of ${gameState.devilMaxHp}, ${viewModel.t("distance")} ${gameState.distance.roundToInt()} ${viewModel.t("meters")}$coverTxt$devilItemsTxt"
     val playerDesc = "${viewModel.t("you")} ${viewModel.t("hp")} $playerHpShown of ${gameState.playerMaxHp}, ${viewModel.t("ammo")} ${gameState.ammo[gameState.gunIndex]} of ${gun.mag}, ${viewModel.t(gun.nameKey)}, ${viewModel.t("coins")} ${stats.coins}"
 
     Column(
@@ -112,7 +120,7 @@ fun BattleScreen(viewModel: GameViewModel) {
             borderColor = Color(0xFFFF4D4D)
         ) {
             Text(
-                text = "${viewModel.t("devil")} ${viewModel.t("hp")}: $devilHpShown/${gameState.devilMaxHp} | ${viewModel.t("distance")}: ${gameState.distance.roundToInt()} ${viewModel.t("meters")}$coverTxt$stateTxt",
+                text = "${viewModel.t("devil")} ${viewModel.t("hp")}: $devilHpShown/${gameState.devilMaxHp} | ${viewModel.t("distance")}: ${gameState.distance.roundToInt()} ${viewModel.t("meters")}$coverTxt$devilItemsTxt$stateTxt",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
@@ -141,9 +149,12 @@ fun BattleScreen(viewModel: GameViewModel) {
             HpBar(current = playerHpShown, max = gameState.playerMaxHp, isDevil = false)
             Spacer(modifier = Modifier.height(8.dp))
             val coverLabel = if (gameState.inCover) " | " + viewModel.t("glooWall") else ""
+            val chanceLabel = if (gameState.playerSecondChanceUsed) " | " + viewModel.t("secondChanceUsed") else ""
             Text(
-                text = viewModel.t(gun.nameKey) + " | " + viewModel.t("medkits") + ": " + gameState.medkits +
-                    " | " + viewModel.t("coins") + ": " + stats.coins + coverLabel,
+                text = viewModel.t(gun.nameKey) +
+                    (if (activeGunDamaged) " (${viewModel.t("damaged")}) " else " ") + "| " +
+                    viewModel.t("medkits") + ": " + gameState.medkits +
+                    " | " + viewModel.t("coins") + ": " + stats.coins + coverLabel + chanceLabel,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
                 color = Color.White
@@ -158,6 +169,14 @@ fun BattleScreen(viewModel: GameViewModel) {
                 modifier = Modifier.semantics {
                     contentDescription = ammoDesc
                 }
+            )
+        }
+
+        if (activeGunDamaged) {
+            Spacer(modifier = Modifier.height(12.dp))
+            AlertBox(
+                text = "${viewModel.t("gunDamaged")} ${viewModel.t("recovery")}. " +
+                    "${viewModel.t("coins")}: ${Combat.GUN_RECOVERY_COST}."
             )
         }
 
@@ -185,7 +204,8 @@ fun BattleScreen(viewModel: GameViewModel) {
         Spacer(modifier = Modifier.height(4.dp))
         RadarBar(distance = gameState.distance, extraDesc = zoneText)
         Spacer(modifier = Modifier.height(6.dp))
-        // Current hit zone with its exact damage rule (0-40 miss / 40-70 = 10% / 70-100 = 20%).
+        // Current hit zone with its exact damage rule
+        // (0-40 miss / 40-70 = 10% / 70-90 = 15% / 90-100 = 20%).
         Text(
             text = zoneText,
             fontSize = 14.sp,
@@ -247,6 +267,14 @@ fun BattleScreen(viewModel: GameViewModel) {
                     testTag = "switch_gun_button"
                 )
             }
+            Spacer(modifier = Modifier.height(10.dp))
+
+            GameButton(
+                text = viewModel.t("recovery"),
+                onClick = { viewModel.recoverGun() },
+                type = ButtonType.WARN,
+                testTag = "recovery_button"
+            )
             Spacer(modifier = Modifier.height(10.dp))
 
             Row(

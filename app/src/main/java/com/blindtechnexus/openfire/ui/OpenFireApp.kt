@@ -13,9 +13,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -39,12 +36,12 @@ import com.blindtechnexus.openfire.ui.screens.WelcomeScreen
 import com.blindtechnexus.openfire.ui.theme.DarkBg
 import com.blindtechnexus.openfire.viewmodel.GameViewModel
 import kotlin.math.abs
+import kotlin.math.sqrt
 
 @Composable
 fun OpenFireApp(viewModel: GameViewModel) {
     val currentScreen by viewModel.currentScreen.collectAsState()
     val settings by viewModel.settings.collectAsState()
-    var lastUpSwipeTimestamp by remember { mutableLongStateOf(0L) }
 
     // Handle Android system back button properly
     BackHandler(enabled = currentScreen != Screen.WELCOME && currentScreen != Screen.MENU) {
@@ -70,33 +67,49 @@ fun OpenFireApp(viewModel: GameViewModel) {
                     if (!gestureEnabled) return@pointerInput
 
                     awaitEachGesture {
-                        val down = awaitFirstDown(pass = PointerEventPass.Initial)
+                        val firstDown = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = PointerEventPass.Initial
+                        )
+
+                        // Track every finger from the exact place it touched
+                        // down. Measuring all fingers from the first finger's
+                        // position made a three-finger swipe register a bogus
+                        // direction as soon as the fingers were spread apart,
+                        // which is why three-finger up/down gestures failed
+                        // intermittently. Per-pointer deltas fix that.
+                        val startPositions = mutableMapOf(firstDown.id to firstDown.position)
                         var maxFingers = 1
-                        val startPos = down.position
                         var bestDx = 0f
                         var bestDy = 0f
                         var maxDelta = 0f
 
-                        do {
+                        while (true) {
                             val event = awaitPointerEvent(pass = PointerEventPass.Initial)
-                            val pointerCount = event.changes.size
-                            if (pointerCount > maxFingers) {
-                                maxFingers = pointerCount
+
+                            val pressedNow = event.changes.count { it.pressed }
+                            if (pressedNow > maxFingers) {
+                                maxFingers = pressedNow
                             }
 
                             for (change in event.changes) {
-                                val dx = change.position.x - startPos.x
-                                val dy = change.position.y - startPos.y
-                                val dist = kotlin.math.sqrt(dx * dx + dy * dy)
+                                val start = startPositions.getOrPut(change.id) { change.position }
+                                val dx = change.position.x - start.x
+                                val dy = change.position.y - start.y
+                                val dist = sqrt(dx * dx + dy * dy)
                                 if (dist > maxDelta) {
                                     maxDelta = dist
                                     bestDx = dx
                                     bestDy = dy
                                 }
                             }
-                        } while (event.changes.any { it.pressed })
 
-                        val threshold = if (maxFingers >= 2) 40f else 60f
+                            if (event.changes.none { it.pressed }) break
+                        }
+
+                        // Multi-finger gestures use a slightly smaller threshold
+                        // because several fingers rarely travel in a perfect line.
+                        val threshold = if (maxFingers >= 2) 36f else 60f
                         if (maxDelta >= threshold) {
                             val dir = if (abs(bestDx) >= abs(bestDy)) {
                                 if (bestDx > 0) "right" else "left"
@@ -104,19 +117,10 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                 if (bestDy > 0) "down" else "up"
                             }
 
-                            if (dir == "up" && currentScreen == Screen.BATTLE && maxFingers == 1) {
-                                val now = System.currentTimeMillis()
-                                if (now - lastUpSwipeTimestamp < 650L) {
-                                    // Double swipe up -> Deploy Gloo Wall (100 coins)
-                                    lastUpSwipeTimestamp = 0L
-                                    viewModel.deployGlooWall()
-                                } else {
-                                    lastUpSwipeTimestamp = now
-                                    viewModel.handleGesture(dir, maxFingers)
-                                }
-                            } else {
-                                viewModel.handleGesture(dir, maxFingers)
-                            }
+                            // Every recognised swipe is routed once. A second
+                            // fast up-swipe is simply another shot — it must
+                            // never silently spend 100 coins on a Gloo Wall.
+                            viewModel.handleGesture(dir, maxFingers)
                         }
                     }
                 },

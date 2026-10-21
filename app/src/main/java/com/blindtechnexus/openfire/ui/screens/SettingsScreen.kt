@@ -295,9 +295,11 @@ fun SettingsScreen(viewModel: GameViewModel) {
                 value = ttsVolState,
                 onValueChange = {
                     ttsVolState = it
-                    viewModel.ttsManager.speechVolume = it
+                    // Persist immediately: the chosen level is used by the very
+                    // next announcement, the next game and after a restart.
+                    viewModel.setTtsVolume(it)
                 },
-                valueRange = 0.1f..1.0f,
+                valueRange = 0f..1f,
                 colors = SliderDefaults.colors(thumbColor = BtnPrimary, activeTrackColor = BtnPrimary)
             )
 
@@ -315,7 +317,7 @@ fun SettingsScreen(viewModel: GameViewModel) {
                 value = musicVolState,
                 onValueChange = {
                     musicVolState = it
-                    viewModel.audioManager.setMusicVol(it)
+                    viewModel.setMusicVolume(it)
                 },
                 valueRange = 0.0f..1.0f,
                 colors = SliderDefaults.colors(thumbColor = WarnBright, activeTrackColor = WarnBright)
@@ -335,7 +337,7 @@ fun SettingsScreen(viewModel: GameViewModel) {
                 value = sfxVolState,
                 onValueChange = {
                     sfxVolState = it
-                    viewModel.audioManager.sfxVolume = it
+                    viewModel.setSfxVolume(it)
                 },
                 valueRange = 0.0f..1.0f,
                 colors = SliderDefaults.colors(thumbColor = BtnBlue, activeTrackColor = BtnBlue)

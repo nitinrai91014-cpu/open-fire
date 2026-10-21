@@ -4,12 +4,14 @@ import android.content.Context
 import android.content.res.AssetFileDescriptor
 import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.media.PlaybackParams
 import android.media.SoundPool
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
+import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.SoundTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -87,8 +89,22 @@ class AudioManager(private val context: Context) {
     private val managedPlayers = ConcurrentHashMap<String, MediaPlayer>()
     private val playerLock = Any()
 
+    /**
+     * User settings. These are the single source of truth and are NEVER
+     * overwritten by a screen-scaled playback value — that was the cause of
+     * the music volume reverting to the previous lower level.
+     */
     var sfxVolume: Float = 1.0f
+        set(value) {
+            field = VolumeMixer.clamp(value)
+        }
+
     var musicVolume: Float = 0.5f
+        set(value) {
+            field = VolumeMixer.clamp(value)
+            applyMusicVolume()
+        }
+
     var soundTheme: SoundTheme = SoundTheme.TACTICAL
     var hapticsEnabled: Boolean = true
 
@@ -298,7 +314,7 @@ class AudioManager(private val context: Context) {
         val leftGain = cos(angle)
         val rightGain = sin(angle)
 
-        val totalVol = (baseVol * sfxVolume * clampedDistGain).coerceIn(0f, 1f)
+        val totalVol = VolumeMixer.sfx(sfxVolume, baseVol, clampedDistGain)
         val left = (totalVol * leftGain).coerceIn(0f, 1f)
         val right = (totalVol * rightGain).coerceIn(0f, 1f)
         return Pair(left, right)
@@ -393,14 +409,16 @@ class AudioManager(private val context: Context) {
     }
 
     /**
-     * Updates walking sound with realistic 3D approaching characteristics.
-     * As the devil approaches (distance goes from 100 to 0), volume smoothly swells
-     * and stereo panning shifts subtly between ears to simulate alternating footsteps.
+     * Updates the 3D walking sound of the devil.
+     *
+     * Distance is measured in metres inside the 50 m arena. The footsteps are
+     * quiet and centred at the far edge, swell and alternate between the ears
+     * as the devil approaches, and fade away with a lower "Doppler" pitch when
+     * it flees at high speed into the distance.
      */
-    fun updateWalk3dAudio(distance: Float, lateralOffset: Float = 0f) {
-        val prox = (1.0f - distance / 100.0f).coerceIn(0f, 1f)
-        // Realistic dynamic curve: quiet at distance, loud and intimate when close
-        val baseVol = (0.08f + prox * prox * 0.92f).coerceIn(0.05f, 1.0f)
+    fun updateWalk3dAudio(distance: Float, lateralOffset: Float = 0f, fleeing: Boolean = false) {
+        val prox = (1.0f - (distance / Combat.MAX_RANGE)).coerceIn(0f, 1f)
+        val baseVol = (0.05f + prox * prox * 0.95f).coerceIn(0.05f, 1.0f)
         val (left, right) = calculate3dVolume(
             x = lateralOffset,
             y = 0f,
@@ -414,10 +432,21 @@ class AudioManager(private val context: Context) {
                 try {
                     player.setVolume(left, right)
                 } catch (_: Exception) {}
+                applyWalkPitch(player, fleeing)
             } else {
                 playManagedTrack("walk", volume = baseVol, posX = lateralOffset, posY = 0f, posZ = -distance, loop = true)
+                managedPlayers["walk"]?.let { applyWalkPitch(it, fleeing) }
             }
         }
+    }
+
+    /** Approaching footsteps rise in pitch; fleeing footsteps fall. */
+    private fun applyWalkPitch(player: MediaPlayer, fleeing: Boolean) {
+        try {
+            player.playbackParams = PlaybackParams()
+                .setPitch(VolumeMixer.walkPitch(fleeing))
+                .setSpeed(1.0f)
+        } catch (_: Exception) {}
     }
 
     /**
@@ -434,8 +463,10 @@ class AudioManager(private val context: Context) {
         stopManagedTrack(key)
 
         val afd = getAssetFd(key)
+        // Music is not spatialised and does not use the SFX slider: the caller
+        // passes the already mixed absolute volume (setting * background gain).
         val (left, right) = if (key == "music") {
-            val v = (volume * musicVolume).coerceIn(0f, 1f)
+            val v = VolumeMixer.clamp(volume)
             Pair(v, v)
         } else {
             calculate3dVolume(posX, posY, posZ, volume)
@@ -466,6 +497,9 @@ class AudioManager(private val context: Context) {
             }
             player.prepare()
             player.start()
+            if (key == "walk") {
+                applyWalkPitch(player, fleeing = false)
+            }
             synchronized(playerLock) {
                 managedPlayers[key] = player
             }
@@ -544,24 +578,42 @@ class AudioManager(private val context: Context) {
         stopMusic()
     }
 
-    fun startMusic(vol: Float = musicVolume) {
+    /**
+     * Starts (or keeps) the looping background music at the volume derived
+     * from the user's music setting. Calling this again never changes the
+     * stored setting, so switching screens can no longer lower the volume.
+     */
+    fun startMusic() {
         val current = managedPlayers["music"]
         if (current != null && current.isPlaying) {
-            setMusicVol(vol)
+            applyMusicVolume()
             return
         }
-        playManagedTrack("music", volume = vol, posX = 0f, posY = 0f, posZ = 0f, loop = true)
+        playManagedTrack(
+            "music",
+            volume = VolumeMixer.music(musicVolume),
+            posX = 0f,
+            posY = 0f,
+            posZ = 0f,
+            loop = true
+        )
     }
 
     fun stopMusic() {
         stopManagedTrack("music")
     }
 
-    fun setMusicVol(vol: Float) {
-        musicVolume = vol.coerceIn(0f, 1f)
+    // The property setter above is the single entry point for changing the
+    // music setting: it clamps the value and immediately applies it. A
+    // separate setMusicVolume() function would clash with the generated JVM
+    // setter for the musicVolume property.
+
+    /** Re-applies the stored music setting to the live player. */
+    private fun applyMusicVolume() {
         val player = managedPlayers["music"] ?: return
+        val v = VolumeMixer.music(musicVolume)
         try {
-            player.setVolume(musicVolume, musicVolume)
+            player.setVolume(v, v)
         } catch (_: Exception) {}
     }
 

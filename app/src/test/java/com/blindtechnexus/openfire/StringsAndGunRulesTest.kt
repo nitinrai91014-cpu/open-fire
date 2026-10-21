@@ -46,7 +46,7 @@ class StringsAndGunRulesTest {
 
     @Test
     fun guidesExistForEveryLanguage() {
-        assertEquals(12, Strings.getGuide("en").size)
+        assertEquals(15, Strings.getGuide("en").size)
         assertTrue(Strings.getGuide("hi").size >= 10)
         assertTrue(Strings.getGuide("ne").size >= 10)
     }
@@ -54,8 +54,26 @@ class StringsAndGunRulesTest {
     @Test
     fun guideDocumentsUpdatedCombatRules() {
         val en = Strings.getGuide("en").joinToString(" ")
-        assertTrue("Guide must document the 20% proper-hit rule", en.contains("20%"))
-        assertTrue("Guide must document the 10% light-hit rule", en.contains("10%"))
+        assertTrue("Guide must document the 20% point-blank rule", en.contains("20%"))
+        assertTrue("Guide must document the 15% strong-hit rule", en.contains("15%"))
+        assertTrue("Guide must document the 10% injury rule", en.contains("10%"))
         assertTrue("Guide must document six-bullet magazines", en.contains("6 bullets"))
+        assertTrue("Guide must document the 50 meter arena", en.contains("50 meter"))
+        assertTrue("Guide must document the 300 coin recovery", en.contains("300 coins"))
+        assertTrue("Guide must document the second chance", en.contains("second chance"))
+    }
+
+    @Test
+    fun newRecoveryAndSecondChanceStringsAreTranslated() {
+        for (lang in listOf("en", "hi", "ne")) {
+            assertTrue(Strings.get("recovery", lang).contains("300") || Strings.get("recovery", lang).contains("३००"))
+            assertTrue(Strings.get("gunDamaged", lang).isNotBlank())
+            assertTrue(Strings.get("playerSecondChance", lang).isNotBlank())
+            assertTrue(Strings.get("devilSecondChance", lang).isNotBlank())
+            assertTrue(Strings.get("clearStats", lang).isNotBlank())
+            assertTrue(Strings.get("statsCleared", lang).isNotBlank())
+            val strong = Strings.get("zoneStrong", lang)
+            assertTrue(strong.contains("15") || strong.contains("१५"))
+        }
     }
 }

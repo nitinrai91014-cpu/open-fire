@@ -10,7 +10,7 @@ import org.junit.Test
  * Locks down the battle gesture contract:
  *  - One finger:  up fire, down reload, right/left switch gun.
  *  - Two fingers: up Gloo Wall (cover, 100 coins), down medkit, right/left status.
- *  - Three fingers: up toggle cover, down exit.
+ *  - Three fingers: up toggle cover, down exit, left recover the gun.
  */
 class GestureRouterTest {
 
@@ -34,8 +34,12 @@ class GestureRouterTest {
     fun threeFingerBattleGestures() {
         assertEquals(GameAction.TOGGLE_COVER, GestureRouter.route(Screen.BATTLE, "up", 3))
         assertEquals(GameAction.EXIT_BATTLE, GestureRouter.route(Screen.BATTLE, "down", 3))
+        assertEquals(GameAction.RECOVER_GUN, GestureRouter.route(Screen.BATTLE, "left", 3))
         // Extra fingers beyond three behave the same way.
         assertEquals(GameAction.TOGGLE_COVER, GestureRouter.route(Screen.BATTLE, "up", 4))
+        assertEquals(GameAction.RECOVER_GUN, GestureRouter.route(Screen.BATTLE, "left", 4))
+        // Right is intentionally unused for three fingers.
+        assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "right", 3))
     }
 
     @Test
