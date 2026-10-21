@@ -6,6 +6,7 @@ import com.blindtechnexus.openfire.data.PreferencesManager
 import com.blindtechnexus.openfire.data.Strings
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameStats
+import com.blindtechnexus.openfire.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue

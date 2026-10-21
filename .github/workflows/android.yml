@@ -43,14 +43,12 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          cache-provider: basic
 
       - name: Run unit tests
         shell: bash
         run: |
           set -o pipefail
-          ./gradlew --no-daemon --stacktrace --console=plain :app:testDebugUnitTest 2>&1 | tee "$RUNNER_TEMP/gradle-test.log"
+          ./gradlew --no-daemon --stacktrace --console=plain -Djava.awt.headless=true :app:testDebugUnitTest 2>&1 | tee "$RUNNER_TEMP/gradle-test.log"
 
       - name: Surface unit test failure details
         if: failure()
@@ -62,15 +60,28 @@ jobs:
             if [[ -f ".github/scripts/summarize_test_failures.py" ]]; then
               test_failures="$(python3 .github/scripts/summarize_test_failures.py || true)"
             fi
+            diagnostics="$(grep -E '^(e: |w: |> Task .* FAILED)' "$log_file" | tail -n 25 || true)"
             if [[ -n "$test_failures" ]]; then
               details="$test_failures"
+              if [[ -n "$diagnostics" ]]; then
+                details="$(printf '%s\n\n%s' "$diagnostics" "$test_failures")"
+              fi
+            elif [[ -n "$diagnostics" ]]; then
+              failure_line="$(grep -n -m 1 '^FAILURE: Build failed' "$log_file" | cut -d: -f1 || true)"
+              if [[ -n "$failure_line" ]]; then
+                failure_end=$((failure_line + 20))
+                failure_details="$(sed -n "${failure_line},${failure_end}p" "$log_file")"
+              else
+                failure_details="$(tail -n 20 "$log_file")"
+              fi
+              details="$(printf '%s\n\n%s' "$diagnostics" "$failure_details")"
             else
               failure_line="$(grep -n -m 1 '^FAILURE: Build failed' "$log_file" | cut -d: -f1 || true)"
               if [[ -n "$failure_line" ]]; then
-                failure_end=$((failure_line + 18))
+                failure_end=$((failure_line + 20))
                 details="$(sed -n "${failure_line},${failure_end}p" "$log_file")"
               else
-                details="$(tail -n 18 "$log_file")"
+                details="$(tail -n 20 "$log_file")"
               fi
             fi
             details="${details:0:3500}"
