@@ -3,23 +3,17 @@ package com.blindtechnexus.openfire.ui.components
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,14 +23,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.blindtechnexus.openfire.ui.theme.AlertBoxBorder
 import com.blindtechnexus.openfire.ui.theme.BtnBlue
 import com.blindtechnexus.openfire.ui.theme.BtnDanger
 import com.blindtechnexus.openfire.ui.theme.BtnPrimary
@@ -52,11 +44,10 @@ import com.blindtechnexus.openfire.ui.theme.HpPlayerEnd
 import com.blindtechnexus.openfire.ui.theme.HpPlayerStart
 import com.blindtechnexus.openfire.ui.theme.LogBg
 import com.blindtechnexus.openfire.ui.theme.LogText
-import com.blindtechnexus.openfire.ui.theme.TextAccent
-import com.blindtechnexus.openfire.ui.theme.TextPrimary
 import com.blindtechnexus.openfire.ui.theme.TipBg
 import com.blindtechnexus.openfire.ui.theme.TipText
 import com.blindtechnexus.openfire.ui.theme.WarnBright
+import kotlin.math.roundToInt
 
 enum class ButtonType {
     DEFAULT,
@@ -85,10 +76,7 @@ fun GameButton(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
-            .testTag(testTag)
-            .semantics(mergeDescendants = true) {
-                // Accessibility TalkBack
-            },
+            .testTag(testTag),
         colors = ButtonDefaults.buttonColors(containerColor = bgColor),
         shape = RoundedCornerShape(10.dp)
     ) {
@@ -131,12 +119,11 @@ fun LogBox(text: String, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 60.dp)
+            .heightIn(min = 56.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(LogBg)
             .border(2.dp, LogText, RoundedCornerShape(10.dp))
-            .padding(14.dp)
-            .semantics(mergeDescendants = true) {},
+            .padding(14.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -157,8 +144,7 @@ fun TipBox(text: String, modifier: Modifier = Modifier) {
             .clip(RoundedCornerShape(10.dp))
             .background(TipBg)
             .border(2.dp, TipText, RoundedCornerShape(10.dp))
-            .padding(12.dp)
-            .semantics(mergeDescendants = true) {},
+            .padding(12.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -179,8 +165,7 @@ fun AlertBox(text: String, modifier: Modifier = Modifier) {
             .clip(RoundedCornerShape(10.dp))
             .background(BtnDanger)
             .border(2.dp, DangerBright, RoundedCornerShape(10.dp))
-            .padding(12.dp)
-            .semantics(mergeDescendants = true) {},
+            .padding(12.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -202,7 +187,6 @@ fun HintBox(text: String, modifier: Modifier = Modifier) {
             .background(HintBg)
             .border(2.dp, BtnPrimary, RoundedCornerShape(10.dp))
             .padding(12.dp)
-            .semantics(mergeDescendants = true) {}
     ) {
         Text(
             text = text,
@@ -219,7 +203,8 @@ fun StatBadge(label: String, value: String) {
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
             .background(BtnBlue)
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+            .semantics { contentDescription = "$label: $value" }
     ) {
         Text(
             text = "$label: $value",
@@ -241,18 +226,21 @@ fun HpBar(current: Int, max: Int, isDevil: Boolean, modifier: Modifier = Modifie
         Brush.horizontalGradient(listOf(HpPlayerStart, HpPlayerEnd))
     }
 
+    val desc = if (isDevil) "Enemy health $current of $max" else "Your health $current of $max"
+
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(12.dp)
-            .clip(RoundedCornerShape(6.dp))
+            .height(14.dp)
+            .clip(RoundedCornerShape(7.dp))
             .background(Color(0xFF101820))
+            .semantics { contentDescription = desc }
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(animatedFraction)
-                .height(12.dp)
-                .clip(RoundedCornerShape(6.dp))
+                .height(14.dp)
+                .clip(RoundedCornerShape(7.dp))
                 .background(gradient)
         )
     }
@@ -267,18 +255,21 @@ fun RadarBar(distance: Float, modifier: Modifier = Modifier) {
         listOf(HpPlayerStart, WarnBright, DangerBright)
     )
 
+    val desc = "Enemy proximity ${(prox * 100).roundToInt()} percent, distance ${distance.roundToInt()} meters"
+
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(8.dp)
-            .clip(RoundedCornerShape(4.dp))
+            .height(10.dp)
+            .clip(RoundedCornerShape(5.dp))
             .background(Color(0xFF101820))
+            .semantics { contentDescription = desc }
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(animatedProx)
-                .height(8.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .height(10.dp)
+                .clip(RoundedCornerShape(5.dp))
                 .background(gradient)
         )
     }

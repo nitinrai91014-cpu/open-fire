@@ -1,10 +1,8 @@
 package com.blindtechnexus.openfire.audio
 
 import android.content.Context
+import android.content.res.AssetFileDescriptor
 import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioManager as AndroidAudioManager
-import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.media.SoundPool
 import android.os.Build
@@ -18,23 +16,32 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
-import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.atan2
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.cos
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
+/**
+ * High-performance, reliable Audio Player Mixer architecture.
+ *
+ * Architecture:
+ * 1. SoundPool engine for ultra-low latency short SFX (gunshots, reloads, hits, clicks, gloo wall).
+ * 2. Managed MediaPlayer Channel Pool for streamed, long audio clips (win, lose, parachute, airplane, music, walk).
+ *    This completely prevents SoundPool native buffer starvation, freezing, and premature cutoffs.
+ * 3. 3D Positional Spatial Audio with realistic distance attenuation and azimuth stereo panning.
+ * 4. Granular sound management: any sound or screen audio can be stopped instantly at any time.
+ */
 class AudioManager(private val context: Context) {
     companion object {
         private const val TAG = "OpenFireAudio"
+        val LONG_TRACK_KEYS = setOf("win", "lose", "parachute", "airplane", "music", "walk")
     }
 
     private val soundPool: SoundPool = SoundPool.Builder()
-        .setMaxStreams(16)
+        .setMaxStreams(32)
         .setAudioAttributes(
             AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_GAME)
@@ -43,12 +50,14 @@ class AudioManager(private val context: Context) {
         )
         .build()
 
-    private val soundMap = mutableMapOf<String, Int>()
-    private val loadedSounds = mutableSetOf<Int>()
-    private val activeStreams = mutableMapOf<String, Int>()
+    // SoundPool sound map and active streams
+    private val soundMap = ConcurrentHashMap<String, Int>()
+    private val loadedSounds = ConcurrentHashMap.newKeySet<Int>()
+    private val activeSfxStreams = ConcurrentHashMap<String, MutableSet<Int>>()
 
-    private var mediaPlayer: MediaPlayer? = null
-    private var isMusicPlaying = false
+    // Managed MediaPlayers for long / streaming audio
+    private val managedPlayers = ConcurrentHashMap<String, MediaPlayer>()
+    private val playerLock = Any()
 
     var sfxVolume: Float = 1.0f
     var musicVolume: Float = 0.5f
@@ -64,25 +73,26 @@ class AudioManager(private val context: Context) {
     }
 
     private val soundAliases = mapOf(
-        "click" to listOf("click.mp3", "90kqun.mp3"),
-        "airplane" to listOf("airplane.mp3", "w3abgf.mp3"),
-        "music" to listOf("background.mp3", "0gk0a5.mp3"),
-        "damage" to listOf("damage.mp3", "0zikl2.mp3"),
-        "jump" to listOf("jump.mp3", "yz2t5x.mp3"),
-        "gloowall" to listOf("gloowall.mp3", "49h9c0.mp3"),
-        "medkit" to listOf("medkit.mp3", "oqvwpr.mp3"),
-        "parachute" to listOf("parachute.mp3", "7yxd6u.mp3"),
-        "shotgun" to listOf("short-gun.mp3", "shotgun.mp3", "3vmxkx.mp3"),
-        "fire" to listOf("fire.mp3", "gwaweo.mp3"),
-        "win" to listOf("win.mp3", "vlw1o1.mp3"),
-        "land" to listOf("land.mp3", "yz2t5x.mp3"),
-        "ammo" to listOf("ammo.mp3", "onm1jd.mp3"),
-        "lose" to listOf("lose.mp3", "6zjd1d.mp3"),
-        "pistol" to listOf("pistel-sound.mp3", "pistol-sound.mp3"),
+        "click" to listOf("90kqun.mp3", "click.mp3"),
+        "reload" to listOf("gun-reload.mp3", "gun reload.mp3"),
+        "fire" to listOf("gwaweo.mp3", "fire.mp3"),
+        "pistol" to listOf("pistel-sound.mp3", "pistol-sound.mp3", "pistol.mp3"),
+        "shotgun" to listOf("short-gun.mp3", "shotgun.mp3"),
         "hit" to listOf("hit.mp3"),
         "enemyHit" to listOf("enemy-hit.mp3"),
-        "walk" to listOf("walking-sound.mp3", "walking-sound.wav"),
-        "spend" to listOf("spend-sound.mp3")
+        "damage" to listOf("0zikl2.mp3", "damage.mp3"),
+        "gloowall" to listOf("49h9c0.mp3", "gloowall.mp3"),
+        "medkit" to listOf("oqvwpr.mp3", "medkit.mp3"),
+        "ammo" to listOf("onm1jd.mp3", "ammo.mp3"),
+        "spend" to listOf("spend-sound.mp3"),
+        "jump" to listOf("yz2t5x.mp3", "jump.mp3"),
+        "land" to listOf("yz2t5x.mp3", "land.mp3"),
+        "airplane" to listOf("w3abgf.mp3", "airplane.mp3"),
+        "parachute" to listOf("7yxd6u.mp3", "parachute.mp3"),
+        "win" to listOf("vlw1o1.mp3", "win.mp3"),
+        "lose" to listOf("6zjd1d.mp3", "lose.mp3"),
+        "music" to listOf("0gk0a5.mp3", "background.mp3"),
+        "walk" to listOf("walking-sound.mp3")
     )
 
     init {
@@ -91,14 +101,16 @@ class AudioManager(private val context: Context) {
                 loadedSounds.add(sampleId)
             }
         }
-        preloadAllSounds()
+        preloadShortSounds()
     }
 
-    private fun preloadAllSounds() {
+    private fun preloadShortSounds() {
         CoroutineScope(Dispatchers.IO).launch {
             for ((key, files) in soundAliases) {
+                // Preload only short SFX into SoundPool. Long audio tracks are streamed via MediaPlayer on-demand.
+                if (key in LONG_TRACK_KEYS) continue
+
                 var loaded = false
-                // Try from asset files first
                 for (fileName in files) {
                     try {
                         val afd = context.assets.openFd("sounds/$fileName")
@@ -106,11 +118,8 @@ class AudioManager(private val context: Context) {
                         soundMap[key] = soundId
                         loaded = true
                         break
-                    } catch (_: Exception) {
-                        // File not in assets yet
-                    }
+                    } catch (_: Exception) {}
                 }
-                // If not found in assets, generate synthetic procedural audio buffer and load it
                 if (!loaded) {
                     try {
                         val synthFile = generateSyntheticSoundFile(key)
@@ -126,9 +135,20 @@ class AudioManager(private val context: Context) {
         }
     }
 
+    private fun getAssetFd(key: String): AssetFileDescriptor? {
+        val files = soundAliases[key] ?: return null
+        for (fileName in files) {
+            try {
+                return context.assets.openFd("sounds/$fileName")
+            } catch (_: Exception) {}
+        }
+        return null
+    }
+
     /**
-     * 3D spatial panning & attenuation.
-     * x: left (-100 to 0) to right (0 to 100), devil distance is along z (0 to 100).
+     * 3D spatial panning & distance attenuation.
+     * x: -100 (far left) to +100 (far right)
+     * z: distance away along line of sight (devil approaches from 100 to 0)
      */
     fun calculate3dVolume(
         x: Float = 0f,
@@ -137,22 +157,26 @@ class AudioManager(private val context: Context) {
         baseVol: Float = 1.0f
     ): Pair<Float, Float> {
         val dist = sqrt(x * x + y * y + z * z)
-        // Inverse distance attenuation
-        val distGain = 1.0f / (1.0f + 0.025f * max(0f, dist - 5f))
-        val clampedDistGain = distGain.coerceIn(0.12f, 1.0f)
+        // Smooth inverse distance attenuation
+        val distGain = 1.0f / (1.0f + 0.022f * max(0f, dist - 5f))
+        val clampedDistGain = distGain.coerceIn(0.10f, 1.0f)
 
-        // Azimuth panning: -1.0 is full left, 0 is center, +1.0 is full right
+        // Azimuth panning: -1.0 is full left, 0 center, +1.0 full right
         val pan = if (dist > 0.01f) (x / max(1f, dist)).coerceIn(-1.0f, 1.0f) else 0f
         val angle = (pan + 1.0f) * (Math.PI.toFloat() / 4.0f) // 0 to PI/2
         val leftGain = cos(angle)
         val rightGain = sin(angle)
 
-        val totalVol = baseVol * sfxVolume * clampedDistGain
+        val totalVol = (baseVol * sfxVolume * clampedDistGain).coerceIn(0f, 1f)
         val left = (totalVol * leftGain).coerceIn(0f, 1f)
         val right = (totalVol * rightGain).coerceIn(0f, 1f)
         return Pair(left, right)
     }
 
+    /**
+     * Plays a sound effect with optional 3D spatial coordinates.
+     * Routes short sounds through SoundPool and long sounds through managed MediaPlayer.
+     */
     fun playSound(
         key: String,
         volume: Float = 1.0f,
@@ -161,19 +185,30 @@ class AudioManager(private val context: Context) {
         posY: Float = 0f,
         posZ: Float = 0f
     ): Int {
+        if (key in LONG_TRACK_KEYS) {
+            playManagedTrack(key, volume, posX, posY, posZ, loop = false)
+            return 1
+        }
+
         val soundId = soundMap[key] ?: return -1
         val (left, right) = calculate3dVolume(posX, posY, posZ, volume)
         val pitch = when (soundTheme) {
-            SoundTheme.CYBER -> rate * 1.15f
-            SoundTheme.STEALTH -> rate * 0.9f
+            SoundTheme.CYBER -> rate * 1.10f
+            SoundTheme.STEALTH -> rate * 0.92f
             else -> rate
         }.coerceIn(0.5f, 2.0f)
 
         val streamId = soundPool.play(soundId, left, right, 1, 0, pitch)
+        if (streamId != 0) {
+            activeSfxStreams.getOrPut(key) { ConcurrentHashMap.newKeySet() }.add(streamId)
+        }
         triggerHapticForSound(key)
         return streamId
     }
 
+    /**
+     * Plays a looping sound effect.
+     */
     fun playLoop(
         key: String,
         volume: Float = 1.0f,
@@ -182,86 +217,189 @@ class AudioManager(private val context: Context) {
         posY: Float = 0f,
         posZ: Float = 0f
     ) {
-        val soundId = soundMap[key] ?: return
-        val currentStream = activeStreams[key]
-        val (left, right) = calculate3dVolume(posX, posY, posZ, volume)
-        val pitch = rate.coerceIn(0.25f, 2.5f)
+        if (key in LONG_TRACK_KEYS) {
+            playManagedTrack(key, volume, posX, posY, posZ, loop = true)
+            return
+        }
 
-        if (currentStream != null && currentStream != 0) {
-            soundPool.setVolume(currentStream, left, right)
-            soundPool.setRate(currentStream, pitch)
+        val soundId = soundMap[key] ?: return
+        val (left, right) = calculate3dVolume(posX, posY, posZ, volume)
+        val pitch = rate.coerceIn(0.5f, 2.0f)
+        val streamId = soundPool.play(soundId, left, right, 1, -1, pitch)
+        if (streamId != 0) {
+            activeSfxStreams.getOrPut(key) { ConcurrentHashMap.newKeySet() }.add(streamId)
+        }
+    }
+
+    /**
+     * Updates walking sound with realistic 3D approaching characteristics.
+     * As the devil approaches (distance goes from 100 to 0), volume smoothly swells
+     * and stereo panning shifts subtly between ears to simulate alternating footsteps.
+     */
+    fun updateWalk3dAudio(distance: Float, lateralOffset: Float = 0f) {
+        val prox = (1.0f - distance / 100.0f).coerceIn(0f, 1f)
+        // Realistic dynamic curve: quiet at distance, loud and intimate when close
+        val baseVol = (0.08f + prox * prox * 0.92f).coerceIn(0.05f, 1.0f)
+        val (left, right) = calculate3dVolume(
+            x = lateralOffset,
+            y = 0f,
+            z = -distance,
+            baseVol = baseVol
+        )
+
+        synchronized(playerLock) {
+            val player = managedPlayers["walk"]
+            if (player != null && player.isPlaying) {
+                try {
+                    player.setVolume(left, right)
+                } catch (_: Exception) {}
+            } else {
+                playManagedTrack("walk", volume = baseVol, posX = lateralOffset, posY = 0f, posZ = -distance, loop = true)
+            }
+        }
+    }
+
+    /**
+     * Streams longer audio tracks via isolated, managed MediaPlayers.
+     */
+    private fun playManagedTrack(
+        key: String,
+        volume: Float,
+        posX: Float,
+        posY: Float,
+        posZ: Float,
+        loop: Boolean
+    ) {
+        stopManagedTrack(key)
+
+        val afd = getAssetFd(key)
+        val (left, right) = if (key == "music") {
+            val v = (volume * musicVolume).coerceIn(0f, 1f)
+            Pair(v, v)
         } else {
-            val newStream = soundPool.play(soundId, left, right, 1, -1, pitch)
-            if (newStream != 0) {
-                activeStreams[key] = newStream
+            calculate3dVolume(posX, posY, posZ, volume)
+        }
+
+        try {
+            val player = MediaPlayer()
+            if (afd != null) {
+                player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            } else {
+                val synth = generateSyntheticSoundFile(key) ?: return
+                player.setDataSource(synth.absolutePath)
+            }
+
+            player.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_GAME)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            player.isLooping = loop
+            player.setVolume(left, right)
+            player.setOnCompletionListener {
+                if (!loop) {
+                    stopManagedTrack(key)
+                }
+            }
+            player.prepare()
+            player.start()
+            synchronized(playerLock) {
+                managedPlayers[key] = player
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed playing managed track $key", e)
+        }
+    }
+
+    /**
+     * Immediately stops playback of a specific sound.
+     */
+    fun stopSound(key: String) {
+        stopManagedTrack(key)
+        val streams = activeSfxStreams.remove(key)
+        if (streams != null) {
+            for (streamId in streams) {
+                try {
+                    soundPool.stop(streamId)
+                } catch (_: Exception) {}
             }
         }
     }
 
     fun stopLoop(key: String) {
-        val streamId = activeStreams.remove(key) ?: return
-        try {
-            soundPool.stop(streamId)
-        } catch (_: Exception) {}
+        stopSound(key)
     }
 
-    fun stopAllLoops() {
-        for ((_, streamId) in activeStreams) {
+    private fun stopManagedTrack(key: String) {
+        synchronized(playerLock) {
+            val player = managedPlayers.remove(key) ?: return
             try {
-                soundPool.stop(streamId)
+                if (player.isPlaying) {
+                    player.stop()
+                }
+                player.release()
             } catch (_: Exception) {}
         }
-        activeStreams.clear()
+    }
+
+    /**
+     * Stops all active screen-transition and long sounds (victory, defeat, parachute, airplane, walk).
+     * This fixes the issue where victory, defeat, or parachute sounds continue playing after navigating away.
+     */
+    fun stopScreenAudio() {
+        stopSound("win")
+        stopSound("lose")
+        stopSound("parachute")
+        stopSound("airplane")
+        stopSound("walk")
+        stopSound("jump")
+        stopSound("land")
+    }
+
+    /**
+     * Stops all loops and battle sounds without stopping background music.
+     */
+    fun stopAllLoops() {
+        stopScreenAudio()
+        for ((key, streams) in activeSfxStreams) {
+            if (key == "music") continue
+            for (streamId in streams) {
+                try {
+                    soundPool.stop(streamId)
+                } catch (_: Exception) {}
+            }
+        }
+        activeSfxStreams.clear()
+    }
+
+    /**
+     * Stops all sounds completely including music.
+     */
+    fun stopAllSounds() {
+        stopAllLoops()
         stopMusic()
     }
 
     fun startMusic(vol: Float = musicVolume) {
-        if (isMusicPlaying) {
+        val current = managedPlayers["music"]
+        if (current != null && current.isPlaying) {
             setMusicVol(vol)
             return
         }
-        try {
-            var loaded = false
-            for (filename in listOf("background.mp3", "0gk0a5.mp3")) {
-                try {
-                    val afd = context.assets.openFd("sounds/$filename")
-                    mediaPlayer?.release()
-                    mediaPlayer = MediaPlayer().apply {
-                        setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                        isLooping = true
-                        setVolume(vol, vol)
-                        prepare()
-                        start()
-                    }
-                    loaded = true
-                    isMusicPlaying = true
-                    break
-                } catch (_: Exception) {}
-            }
-            if (!loaded) {
-                // Synthesize subtle background ambient loop if asset not found
-                playLoop("airplane", volume = vol * 0.15f, rate = 0.6f)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error playing music", e)
-        }
+        playManagedTrack("music", volume = vol, posX = 0f, posY = 0f, posZ = 0f, loop = true)
     }
 
     fun stopMusic() {
-        try {
-            mediaPlayer?.let {
-                if (it.isPlaying) it.stop()
-                it.release()
-            }
-            mediaPlayer = null
-            isMusicPlaying = false
-        } catch (_: Exception) {}
+        stopManagedTrack("music")
     }
 
     fun setMusicVol(vol: Float) {
         musicVolume = vol.coerceIn(0f, 1f)
+        val player = managedPlayers["music"] ?: return
         try {
-            mediaPlayer?.setVolume(musicVolume, musicVolume)
+            player.setVolume(musicVolume, musicVolume)
         } catch (_: Exception) {}
     }
 
@@ -276,6 +414,9 @@ class AudioManager(private val context: Context) {
                 when (key) {
                     "fire", "shotgun", "pistol" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE))
+                    }
+                    "reload" -> {
+                        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 30, 40, 50), -1))
                     }
                     "damage" -> {
                         vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 70, 40, 90), -1))
@@ -302,17 +443,13 @@ class AudioManager(private val context: Context) {
             } else {
                 @Suppress("DEPRECATION")
                 when (key) {
-                    "fire", "shotgun", "damage" -> vibrator.vibrate(60)
-                    "hit", "gloowall" -> vibrator.vibrate(35)
+                    "fire", "shotgun", "pistol", "damage" -> vibrator.vibrate(60)
+                    "hit", "gloowall", "reload" -> vibrator.vibrate(35)
                 }
             }
         } catch (_: Exception) {}
     }
 
-    /**
-     * Synthesizes crisp, high quality PCM sound effects and writes to cache as WAV
-     * when external assets are not yet present.
-     */
     private fun generateSyntheticSoundFile(key: String): File? {
         val cacheDir = File(context.cacheDir, "synth_sounds")
         if (!cacheDir.exists()) cacheDir.mkdirs()
@@ -324,6 +461,7 @@ class AudioManager(private val context: Context) {
             "fire" -> generateGunshotWave(sampleRate, 0.16f, 320f, 90f)
             "shotgun" -> generateGunshotWave(sampleRate, 0.28f, 180f, 60f)
             "pistol" -> generateGunshotWave(sampleRate, 0.12f, 440f, 140f)
+            "reload" -> generateReloadWave(sampleRate, 0.45f)
             "damage" -> generateDamageWave(sampleRate, 0.25f)
             "hit", "enemyHit" -> generateHitWave(sampleRate, 0.10f)
             "click" -> generateBeepWave(sampleRate, 0.035f, 1200f)
@@ -361,6 +499,20 @@ class AudioManager(private val context: Context) {
             val tone = sin(2.0 * Math.PI * freq * i / sr).toFloat()
             val mixed = (0.7f * noise + 0.3f * tone) * decay
             data[i] = (mixed * 30000).toInt().coerceIn(-32767, 32767).toShort()
+        }
+        return data
+    }
+
+    private fun generateReloadWave(sr: Int, duration: Float): ShortArray {
+        val samples = (sr * duration).toInt()
+        val data = ShortArray(samples)
+        for (i in 0 until samples) {
+            val progress = i.toFloat() / samples
+            val env = sin(progress * Math.PI.toFloat())
+            val noise = (Math.random() * 2.0 - 1.0).toFloat()
+            val tone = sin(2.0 * Math.PI * (500.0 + 300.0 * progress) * i / sr).toFloat()
+            val mixed = (0.6f * noise + 0.4f * tone) * env
+            data[i] = (mixed * 26000).toInt().coerceIn(-32767, 32767).toShort()
         }
         return data
     }
@@ -452,7 +604,6 @@ class AudioManager(private val context: Context) {
             val p = i.toFloat() / samples
             val env = sin(p * Math.PI.toFloat())
             val white = (Math.random() * 2.0 - 1.0).toFloat()
-            // simple lowpass
             last = last + 0.12f * (white - last)
             data[i] = (last * env * 24000).toInt().coerceIn(-32767, 32767).toShort()
         }
@@ -504,8 +655,8 @@ class AudioManager(private val context: Context) {
     private fun generateCoinWave(sr: Int, duration: Float): ShortArray {
         val samples = (sr * duration).toInt()
         val data = ShortArray(samples)
-        val f1 = 987.77 // B5
-        val f2 = 1318.51 // E6
+        val f1 = 987.77
+        val f2 = 1318.51
         val half = samples / 2
         for (i in 0 until samples) {
             val f = if (i < half) f1 else f2
@@ -560,11 +711,11 @@ class AudioManager(private val context: Context) {
         header[13] = 'm'.code.toByte()
         header[14] = 't'.code.toByte()
         header[15] = ' '.code.toByte()
-        header[16] = 16 // 16 for PCM
+        header[16] = 16
         header[17] = 0
         header[18] = 0
         header[19] = 0
-        header[20] = 1 // PCM format
+        header[20] = 1
         header[21] = 0
         header[22] = channels.toByte()
         header[23] = 0
@@ -576,9 +727,9 @@ class AudioManager(private val context: Context) {
         header[29] = ((byteRate shr 8) and 0xff).toByte()
         header[30] = ((byteRate shr 16) and 0xff).toByte()
         header[31] = ((byteRate shr 24) and 0xff).toByte()
-        header[32] = (channels * 2).toByte() // block align
+        header[32] = (channels * 2).toByte()
         header[33] = 0
-        header[34] = 16 // bits per sample
+        header[34] = 16
         header[35] = 0
         header[36] = 'd'.code.toByte()
         header[37] = 'a'.code.toByte()
@@ -601,7 +752,7 @@ class AudioManager(private val context: Context) {
     }
 
     fun release() {
-        stopAllLoops()
+        stopAllSounds()
         soundPool.release()
     }
 }

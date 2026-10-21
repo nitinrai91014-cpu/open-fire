@@ -1,5 +1,7 @@
 package com.blindtechnexus.openfire.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -31,7 +34,9 @@ import com.blindtechnexus.openfire.ui.components.GameCard
 import com.blindtechnexus.openfire.ui.components.HintBox
 import com.blindtechnexus.openfire.ui.components.TipBox
 import com.blindtechnexus.openfire.ui.theme.CardBorder
+import com.blindtechnexus.openfire.ui.theme.TextAccent
 import com.blindtechnexus.openfire.ui.theme.TextMuted
+import com.blindtechnexus.openfire.ui.theme.WarnBright
 import com.blindtechnexus.openfire.viewmodel.GameViewModel
 
 @Composable
@@ -100,6 +105,8 @@ fun ProfileScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(14.dp))
             Text(text = "${viewModel.t("name")}: ${settings.name}", fontSize = 16.sp, color = Color.White)
             Spacer(modifier = Modifier.height(8.dp))
+            Text(text = "${viewModel.t("round")}: ${stats.round}", fontSize = 16.sp, color = WarnBright, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(8.dp))
             Text(text = "${viewModel.t("level")}: ${stats.level}", fontSize = 16.sp, color = Color.White)
             Spacer(modifier = Modifier.height(8.dp))
             Text(text = "${viewModel.t("needWin")}: ${stats.needWinsForNext}", fontSize = 16.sp, color = Color.White)
@@ -126,7 +133,18 @@ fun ProfileScreen(viewModel: GameViewModel) {
 
 @Composable
 fun AboutScreen(viewModel: GameViewModel) {
+    val context = LocalContext.current
     val scrollState = rememberScrollState()
+
+    fun openUrl(url: String) {
+        try {
+            val fullUrl = if (!url.startsWith("http://") && !url.startsWith("https://")) "https://$url" else url
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(fullUrl)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {}
+    }
 
     Column(
         modifier = Modifier
@@ -167,7 +185,116 @@ fun AboutScreen(viewModel: GameViewModel) {
             Text(
                 text = viewModel.t("version"),
                 fontSize = 14.sp,
-                color = TextMuted
+                color = TextAccent,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Community and Contact links as requested
+        GameButton(
+            text = viewModel.t("joinTelegram"),
+            onClick = { openUrl("t.me/blindtechnexus") },
+            type = ButtonType.DEFAULT,
+            testTag = "join_telegram_button"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        GameButton(
+            text = viewModel.t("contactWhatsApp"),
+            onClick = { openUrl("wa.me/9779741825274") },
+            type = ButtonType.PRIMARY,
+            testTag = "contact_whatsapp_button"
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        GameButton(
+            text = viewModel.t("back"),
+            onClick = { viewModel.navigateTo(Screen.MENU) },
+            type = ButtonType.DANGER,
+            testTag = "about_back_button"
+        )
+    }
+}
+
+@Composable
+fun ChangelogScreen(viewModel: GameViewModel) {
+    val scrollState = rememberScrollState()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(scrollState)
+            .padding(16.dp)
+    ) {
+        GameCard {
+            Text(
+                text = viewModel.t("changelogTitle"),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Version 1.2
+            Text(
+                text = "Version 1.2 (Current)",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            val v12Notes = listOf(
+                "Sound Player Mixer: Re-engineered reliable audio architecture with dedicated streaming channels for victory, defeat, parachute, airplane, and ambient music without buffer starvation.",
+                "Sound Overlap Fix: Screen transition sounds (victory menu, defeat menu, parachute) immediately stop on swipe-up or navigation.",
+                "Evil Character Walking & 3D Audio: Realistically approaching spatial footsteps with distance attenuation and binaural lateral movement.",
+                "Combat Range & Hit Balance: Hits between 70%-100% proximity deal 30% damage; hits between 40%-70% inflict light 10% damage; hits below 40% miss. Devil and player have identical symmetrical power.",
+                "Zero-HP Death Rule: Player and devil die only when health reaches exactly zero.",
+                "Level-Based HP Progression: 200 HP up to level 10, 300 HP up to level 20, 500 HP up to level 25, 800 HP from level 25 to 30.",
+                "Round Cycle: Completing level 30 finishes the round and begins the next round.",
+                "Pistol Reload Fix: Fixed 6-bullet pistol magazine; requires reload only after all 6 rounds are discharged.",
+                "Reload Audio: Integrated authentic 'gun reload.mp3' sound effect.",
+                "Gloo Wall Gesture: Double swipe-up deploys Gloo Wall (100 coins).",
+                "Voice Announcements: System announces 'Not enough coins' whenever coins are insufficient for reload, Gloo Wall, or medkit.",
+                "Screen Reader & TTS Fix: Resolved Devanagari Hindi and Nepali pronunciation issues and cleaned up text layout semantics.",
+                "Community Links: Direct Telegram channel and WhatsApp contact buttons added in About section."
+            )
+            v12Notes.forEach { note ->
+                Text(
+                    text = "• $note",
+                    fontSize = 14.sp,
+                    color = Color.White,
+                    lineHeight = 20.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(CardBorder)
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Version 1.0
+            Text(
+                text = "Version 1.0",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextAccent
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Initial version: Audio battle royale with accessible controls, synthetic sound backup, basic tactical guns, and screen reader guidance.",
+                fontSize = 14.sp,
+                color = TextMuted,
+                lineHeight = 20.sp
             )
         }
 
@@ -177,7 +304,7 @@ fun AboutScreen(viewModel: GameViewModel) {
             text = viewModel.t("back"),
             onClick = { viewModel.navigateTo(Screen.MENU) },
             type = ButtonType.PRIMARY,
-            testTag = "about_back_button"
+            testTag = "changelog_back_button"
         )
     }
 }
@@ -222,7 +349,10 @@ fun ResultScreen(viewModel: GameViewModel) {
             }
         }
 
-        if (result.levelUp) {
+        if (result.roundComplete) {
+            Spacer(modifier = Modifier.height(12.dp))
+            TipBox(text = "${viewModel.t("roundCompleted")} ${viewModel.t("round")}: ${result.round}")
+        } else if (result.levelUp) {
             Spacer(modifier = Modifier.height(12.dp))
             TipBox(text = "${viewModel.t("levelUp")} ${viewModel.t("newLevel")}: ${result.level}")
         }
@@ -253,6 +383,13 @@ fun ResultScreen(viewModel: GameViewModel) {
                 text = "${viewModel.t("yourHealth")}: ${maxOf(0, result.hp)}",
                 fontSize = 16.sp,
                 color = Color.White
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "${viewModel.t("round")}: ${stats.round}",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(

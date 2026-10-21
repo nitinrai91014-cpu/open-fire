@@ -30,7 +30,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -44,7 +43,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blindtechnexus.openfire.model.ControlMode
-import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.Screen
 import com.blindtechnexus.openfire.model.SoundTheme
 import com.blindtechnexus.openfire.ui.components.ButtonType
@@ -76,12 +74,6 @@ fun SettingsScreen(viewModel: GameViewModel) {
     var ttsVolState by remember { mutableFloatStateOf(currentSettings.ttsVolume) }
     var musicVolState by remember { mutableFloatStateOf(currentSettings.musicVolume) }
     var sfxVolState by remember { mutableFloatStateOf(currentSettings.sfxVolume) }
-
-    var pMaxHpState by remember { mutableIntStateOf(currentSettings.playerMaxHp) }
-    var pDmgMultState by remember { mutableFloatStateOf(currentSettings.playerDamageMult) }
-    var dMaxHpState by remember { mutableIntStateOf(currentSettings.devilMaxHp) }
-    var dDmgMultState by remember { mutableFloatStateOf(currentSettings.devilDamageMult) }
-
     var soundThemeState by remember { mutableStateOf(currentSettings.soundTheme) }
     var hapticsState by remember { mutableStateOf(currentSettings.hapticsEnabled) }
 
@@ -103,7 +95,7 @@ fun SettingsScreen(viewModel: GameViewModel) {
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Profile & Language
+        // Profile, Language, & Control Mode
         GameCard {
             Text(
                 text = viewModel.t("name"),
@@ -352,62 +344,6 @@ fun SettingsScreen(viewModel: GameViewModel) {
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Combat Strength & Balance Customization
-        GameCard {
-            Text(
-                text = viewModel.t("strengthSettings"),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-                modifier = Modifier.semantics { heading() }
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Player Max HP
-            Text(text = "${viewModel.t("playerHealthSetting")}: $pMaxHpState HP", fontSize = 14.sp, color = TextAccent, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(4.dp))
-            CustomDropdown(
-                selectedValue = "$pMaxHpState HP",
-                options = listOf(150 to "150 HP", 200 to "200 HP (Default)", 250 to "250 HP", 300 to "300 HP (Tank)"),
-                onSelect = { pMaxHpState = it }
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Player Damage Multiplier
-            Text(text = "${viewModel.t("playerDamageSetting")}: ${String.format(Locale.US, "%.2fx", pDmgMultState)}", fontSize = 14.sp, color = TextAccent, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(4.dp))
-            CustomDropdown(
-                selectedValue = "${pDmgMultState}x",
-                options = listOf(0.8f to "0.80x (Challenging)", 1.0f to "1.00x (Standard)", 1.25f to "1.25x (Boosted)", 1.5f to "1.50x (Heavy)"),
-                onSelect = { pDmgMultState = it }
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Devil Max HP
-            Text(text = "${viewModel.t("devilHealthSetting")}: $dMaxHpState HP", fontSize = 14.sp, color = TextAccent, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(4.dp))
-            CustomDropdown(
-                selectedValue = "$dMaxHpState HP",
-                options = listOf(150 to "150 HP (Quick)", 200 to "200 HP (Standard)", 260 to "260 HP (Tough)", 320 to "320 HP (Boss)"),
-                onSelect = { dMaxHpState = it }
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Devil Damage Multiplier
-            Text(text = "${viewModel.t("devilDamageSetting")}: ${String.format(Locale.US, "%.2fx", dDmgMultState)}", fontSize = 14.sp, color = TextAccent, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(4.dp))
-            CustomDropdown(
-                selectedValue = "${dDmgMultState}x",
-                options = listOf(0.7f to "0.70x (Easy)", 1.0f to "1.00x (Normal)", 1.3f to "1.30x (Fierce)", 1.6f to "1.60x (Nightmare)"),
-                onSelect = { dDmgMultState = it }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(14.dp))
-
         // Sound Themes & Haptics
         GameCard {
             Text(
@@ -438,7 +374,7 @@ fun SettingsScreen(viewModel: GameViewModel) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(text = viewModel.t("haptics"), fontSize = 15.sp, color = Color.White, fontWeight = FontWeight.Bold)
                     Text(text = "Haptic pulses for gunshots and damage", fontSize = 13.sp, color = TextMuted)
                 }
@@ -465,10 +401,6 @@ fun SettingsScreen(viewModel: GameViewModel) {
                     ttsVolume = ttsVolState,
                     musicVolume = musicVolState,
                     sfxVolume = sfxVolState,
-                    playerMaxHp = pMaxHpState,
-                    playerDamageMult = pDmgMultState,
-                    devilMaxHp = dMaxHpState,
-                    devilDamageMult = dDmgMultState,
                     soundTheme = soundThemeState,
                     hapticsEnabled = hapticsState
                 )

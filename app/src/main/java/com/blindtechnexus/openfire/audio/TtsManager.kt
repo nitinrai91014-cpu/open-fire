@@ -1,10 +1,10 @@
 package com.blindtechnexus.openfire.audio
 
 import android.content.Context
+import android.media.AudioAttributes
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import android.speech.tts.Voice
 import android.util.Log
 import com.blindtechnexus.openfire.model.TtsEngineInfo
 import com.blindtechnexus.openfire.model.TtsVoiceInfo
@@ -49,6 +49,12 @@ class TtsManager(private val context: Context) {
         tts = TextToSpeech(context, { status ->
             if (status == TextToSpeech.SUCCESS) {
                 isInitialized = true
+                tts?.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_GAME)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {}
                     override fun onDone(utteranceId: String?) {}
@@ -91,21 +97,38 @@ class TtsManager(private val context: Context) {
         _availableVoices.value = voiceList
     }
 
+    /**
+     * Applies voice and language settings.
+     * Crucial Fix: If Nepali ("ne_NP") is missing from the installed TTS engine (common on Android),
+     * automatically fallback to Hindi ("hi_IN") which shares the Devanagari script.
+     * This eliminates the severe pronunciation corruption where English phonetics attempted to spell Devanagari characters.
+     */
     fun applyVoiceSettings() {
         if (!isInitialized || tts == null) return
         val currentTts = tts ?: return
 
         currentTts.setSpeechRate(speechRate.coerceIn(0.5f, 2.0f))
 
-        // Set locale based on language
-        val targetLocale = when (currentLanguage) {
+        var targetLocale = when (currentLanguage) {
             "hi" -> Locale("hi", "IN")
             "ne" -> Locale("ne", "NP")
             else -> Locale.US
         }
-        currentTts.language = targetLocale
 
-        // Apply specific voice if selected
+        var avail = currentTts.isLanguageAvailable(targetLocale)
+        if (currentLanguage == "ne" && (avail == TextToSpeech.LANG_MISSING_DATA || avail == TextToSpeech.LANG_NOT_SUPPORTED)) {
+            // Fallback to Hindi locale for accurate Devanagari speech
+            targetLocale = Locale("hi", "IN")
+            avail = currentTts.isLanguageAvailable(targetLocale)
+        }
+
+        if (avail >= TextToSpeech.LANG_AVAILABLE) {
+            currentTts.language = targetLocale
+        } else {
+            currentTts.language = Locale.getDefault()
+        }
+
+        // Apply custom voice if selected
         if (currentVoiceName.isNotEmpty()) {
             try {
                 val match = currentTts.voices?.find { it.name == currentVoiceName }
@@ -116,26 +139,60 @@ class TtsManager(private val context: Context) {
             } catch (_: Exception) {}
         }
 
-        // Auto select best matching voice
+        // Auto select best matching voice for current locale
         try {
             val voices = currentTts.voices ?: return
-            val match = voices.find { it.locale.language.equals(targetLocale.language, ignoreCase = true) }
+            val match = voices.find {
+                it.locale.language.equals(targetLocale.language, ignoreCase = true)
+            }
             if (match != null) {
                 currentTts.voice = match
             }
         } catch (_: Exception) {}
     }
 
+    /**
+     * Sanitizes game strings before sending to speech synthesis to prevent TTS engines
+     * from pronouncing raw punctuation, pipes, slashes, or English abbreviations in Indic contexts.
+     */
+    private fun sanitizeTextForSpeech(raw: String): String {
+        var clean = raw
+            .replace("|", ", ")
+            .replace("_", " ")
+            .replace(":", " ")
+            .replace("*", " ")
+            .replace("#", " ")
+
+        when (currentLanguage) {
+            "hi", "ne" -> {
+                clean = clean
+                    .replace(Regex("(?i)\\bHP\\b"), "हेल्थ")
+                    .replace("/", " में से ")
+            }
+            else -> {
+                clean = clean
+                    .replace(Regex("(?i)\\bHP\\b"), "Health")
+                    .replace("/", " out of ")
+            }
+        }
+
+        // Normalize spaces
+        return clean.replace(Regex("\\s+"), " ").trim()
+    }
+
     fun speak(text: String, interrupt: Boolean = true) {
         if (!isInitialized || tts == null || text.isBlank()) return
         applyVoiceSettings()
+
+        val sanitized = sanitizeTextForSpeech(text)
+        if (sanitized.isBlank()) return
 
         val queueMode = if (interrupt) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
         val params = Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, speechVolume.coerceIn(0.05f, 1.0f))
         }
         val utteranceId = "utterance_${System.currentTimeMillis()}"
-        tts?.speak(text, queueMode, params, utteranceId)
+        tts?.speak(sanitized, queueMode, params, utteranceId)
     }
 
     fun stop() {
@@ -155,7 +212,8 @@ class TtsManager(private val context: Context) {
         val params = Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, speechVolume.coerceIn(0.05f, 1.0f))
         }
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "preview")
+        val sanitized = sanitizeTextForSpeech(text)
+        tts?.speak(sanitized, TextToSpeech.QUEUE_FLUSH, params, "preview")
     }
 
     fun shutdown() {

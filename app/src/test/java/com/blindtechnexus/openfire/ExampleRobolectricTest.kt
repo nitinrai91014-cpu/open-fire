@@ -4,11 +4,11 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.blindtechnexus.openfire.data.PreferencesManager
 import com.blindtechnexus.openfire.data.Strings
+import com.blindtechnexus.openfire.model.DEFAULT_GUNS
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameStats
-import com.blindtechnexus.openfire.R
+import com.blindtechnexus.openfire.model.getHpForLevel
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,6 +32,11 @@ class ExampleRobolectricTest {
         assertEquals("ओपन फायर", Strings.get("title", "hi"))
         assertEquals("ओपन फायर", Strings.get("title", "ne"))
 
+        assertEquals("Version 1.2", Strings.get("version", "en"))
+        assertEquals("Changelog", Strings.get("changelog", "en"))
+        assertEquals("Join Telegram Channel", Strings.get("joinTelegram", "en"))
+        assertEquals("Contact on WhatsApp", Strings.get("contactWhatsApp", "en"))
+
         val guideEn = Strings.getGuide("en")
         assertTrue(guideEn.isNotEmpty())
         val guideHi = Strings.getGuide("hi")
@@ -41,33 +46,54 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun testHpForLevelScaling() {
+        assertEquals(200, getHpForLevel(1))
+        assertEquals(200, getHpForLevel(10))
+        assertEquals(300, getHpForLevel(11))
+        assertEquals(300, getHpForLevel(20))
+        assertEquals(500, getHpForLevel(21))
+        assertEquals(500, getHpForLevel(25))
+        assertEquals(800, getHpForLevel(26))
+        assertEquals(800, getHpForLevel(30))
+    }
+
+    @Test
+    fun testPistolMagazineCapacity() {
+        val pistol = DEFAULT_GUNS.find { it.nameKey == "gunPistol" }
+        org.junit.Assert.assertNotNull(pistol)
+        assertEquals(6, pistol?.mag)
+    }
+
+    @Test
     fun testPreferencesSaveAndLoad() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val prefs = PreferencesManager(context)
 
         val settings = GameSettings(
             name = "TestWarrior",
-            lang = "hi",
-            playerMaxHp = 250,
-            devilMaxHp = 260
+            lang = "hi"
         )
         prefs.saveSettings(settings)
 
         val loaded = prefs.loadSettings()
         assertEquals("TestWarrior", loaded.name)
         assertEquals("hi", loaded.lang)
-        assertEquals(250, loaded.playerMaxHp)
-        assertEquals(260, loaded.devilMaxHp)
-    }
 
-    @Test
-    fun testStatsLevelCalculation() {
-        val stats1 = GameStats(wins = 0)
-        assertEquals(0, stats1.level)
-        assertEquals(10, stats1.needWinsForNext)
+        val stats = GameStats(
+            games = 5,
+            wins = 3,
+            kills = 3,
+            coins = 240,
+            round = 2,
+            level = 14
+        )
+        prefs.saveStats(stats)
 
-        val stats2 = GameStats(wins = 12)
-        assertEquals(1, stats2.level)
-        assertEquals(8, stats2.needWinsForNext)
+        val loadedStats = prefs.loadStats()
+        assertEquals(5, loadedStats.games)
+        assertEquals(3, loadedStats.wins)
+        assertEquals(2, loadedStats.round)
+        assertEquals(14, loadedStats.level)
+        assertEquals(240, loadedStats.coins)
     }
 }

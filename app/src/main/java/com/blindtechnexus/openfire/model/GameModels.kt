@@ -6,6 +6,7 @@ enum class Screen {
     GUIDE,
     PROFILE,
     ABOUT,
+    CHANGELOG,
     SETTINGS,
     READER,
     JUMP,
@@ -35,10 +36,19 @@ data class Gun(
 )
 
 val DEFAULT_GUNS = listOf(
-    Gun("gunRifle", 34, 6, "fire"),
-    Gun("gunShotgun", 50, 4, "shotgun"),
-    Gun("gunPistol", 24, 10, "pistol")
+    Gun("gunPistol", 25, 6, "pistol"),
+    Gun("gunRifle", 35, 6, "fire"),
+    Gun("gunShotgun", 50, 4, "shotgun")
 )
+
+fun getHpForLevel(level: Int): Int {
+    return when {
+        level <= 10 -> 200
+        level <= 20 -> 300
+        level <= 25 -> 500
+        else -> 800
+    }
+}
 
 data class GameSettings(
     val name: String = "",
@@ -50,11 +60,8 @@ data class GameSettings(
     val ttsVolume: Float = 1.0f,
     val musicVolume: Float = 0.5f,
     val sfxVolume: Float = 1.0f,
-    // Strength / balance customization
     val playerMaxHp: Int = 200,
-    val playerDamageMult: Float = 1.0f,
     val devilMaxHp: Int = 200,
-    val devilDamageMult: Float = 1.0f,
     val soundTheme: SoundTheme = SoundTheme.TACTICAL,
     val hapticsEnabled: Boolean = true
 )
@@ -64,10 +71,11 @@ data class GameStats(
     val wins: Int = 0,
     val kills: Int = 0,
     val coins: Int = 100,
-    val level: Int = (wins / 10).coerceAtLeast(0)
+    val round: Int = 1,
+    val level: Int = 1
 ) {
     val needWinsForNext: Int
-        get() = 10 - (wins % 10)
+        get() = (10 - (wins % 10)).coerceIn(1, 10)
 }
 
 data class GameState(
@@ -76,7 +84,7 @@ data class GameState(
     val devilHp: Int = 200,
     val devilMaxHp: Int = 200,
     val gunIndex: Int = 0,
-    val ammo: List<Int> = listOf(6, 4, 10),
+    val ammo: List<Int> = listOf(6, 6, 4),
     val medkits: Int = 3,
     val inCover: Boolean = false,
     val distance: Float = 100f,
@@ -105,7 +113,9 @@ data class ResultData(
     val devilShots: Int = 0,
     val hp: Int = 0,
     val levelUp: Boolean = false,
-    val level: Int = 0
+    val roundComplete: Boolean = false,
+    val round: Int = 1,
+    val level: Int = 1
 )
 
 data class TtsEngineInfo(

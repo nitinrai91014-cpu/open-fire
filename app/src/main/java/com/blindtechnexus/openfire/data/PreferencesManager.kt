@@ -35,9 +35,7 @@ class PreferencesManager(context: Context) {
             musicVolume = prefs.getFloat("of_musicvol", 0.5f),
             sfxVolume = prefs.getFloat("of_sfxvol", 1.0f),
             playerMaxHp = prefs.getInt("of_player_max_hp", 200),
-            playerDamageMult = prefs.getFloat("of_player_dmg_mult", 1.0f),
             devilMaxHp = prefs.getInt("of_devil_max_hp", 200),
-            devilDamageMult = prefs.getFloat("of_devil_dmg_mult", 1.0f),
             soundTheme = soundTheme,
             hapticsEnabled = prefs.getBoolean("of_haptics", true)
         )
@@ -55,9 +53,7 @@ class PreferencesManager(context: Context) {
             .putFloat("of_musicvol", s.musicVolume)
             .putFloat("of_sfxvol", s.sfxVolume)
             .putInt("of_player_max_hp", s.playerMaxHp)
-            .putFloat("of_player_dmg_mult", s.playerDamageMult)
             .putInt("of_devil_max_hp", s.devilMaxHp)
-            .putFloat("of_devil_dmg_mult", s.devilDamageMult)
             .putString("of_sound_theme", s.soundTheme.name)
             .putBoolean("of_haptics", s.hapticsEnabled)
             .apply()
@@ -65,12 +61,16 @@ class PreferencesManager(context: Context) {
 
     fun loadStats(): GameStats {
         val wins = prefs.getInt("of_wins", 0)
-        val level = (wins / 10).coerceAtLeast(0)
+        val savedLevel = prefs.getInt("of_level", 1)
+        val round = prefs.getInt("of_round", 1)
+        // Keep level in 1..30 range
+        val level = savedLevel.coerceIn(1, 30)
         return GameStats(
             games = prefs.getInt("of_games", 0),
             wins = wins,
             kills = prefs.getInt("of_kills", 0),
             coins = prefs.getInt("of_coins", 100),
+            round = round.coerceAtLeast(1),
             level = level
         )
     }
@@ -81,6 +81,7 @@ class PreferencesManager(context: Context) {
             .putInt("of_wins", s.wins)
             .putInt("of_kills", s.kills)
             .putInt("of_coins", s.coins)
+            .putInt("of_round", s.round)
             .putInt("of_level", s.level)
             .apply()
     }

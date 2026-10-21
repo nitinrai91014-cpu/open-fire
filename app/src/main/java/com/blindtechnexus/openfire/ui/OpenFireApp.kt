@@ -13,9 +13,11 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -23,6 +25,7 @@ import com.blindtechnexus.openfire.model.ControlMode
 import com.blindtechnexus.openfire.model.Screen
 import com.blindtechnexus.openfire.ui.screens.AboutScreen
 import com.blindtechnexus.openfire.ui.screens.BattleScreen
+import com.blindtechnexus.openfire.ui.screens.ChangelogScreen
 import com.blindtechnexus.openfire.ui.screens.GuideScreen
 import com.blindtechnexus.openfire.ui.screens.JumpScreen
 import com.blindtechnexus.openfire.ui.screens.LandScreen
@@ -41,6 +44,7 @@ import kotlin.math.abs
 fun OpenFireApp(viewModel: GameViewModel) {
     val currentScreen by viewModel.currentScreen.collectAsState()
     val settings by viewModel.settings.collectAsState()
+    var lastUpSwipeTimestamp by remember { mutableLongStateOf(0L) }
 
     // Handle Android system back button properly
     BackHandler(enabled = currentScreen != Screen.WELCOME && currentScreen != Screen.MENU) {
@@ -99,7 +103,20 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             } else {
                                 if (bestDy > 0) "down" else "up"
                             }
-                            viewModel.handleGesture(dir, maxFingers)
+
+                            if (dir == "up" && currentScreen == Screen.BATTLE && maxFingers == 1) {
+                                val now = System.currentTimeMillis()
+                                if (now - lastUpSwipeTimestamp < 650L) {
+                                    // Double swipe up -> Deploy Gloo Wall (100 coins)
+                                    lastUpSwipeTimestamp = 0L
+                                    viewModel.deployGlooWall()
+                                } else {
+                                    lastUpSwipeTimestamp = now
+                                    viewModel.handleGesture(dir, maxFingers)
+                                }
+                            } else {
+                                viewModel.handleGesture(dir, maxFingers)
+                            }
                         }
                     }
                 },
@@ -122,6 +139,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
                     Screen.GUIDE -> GuideScreen(viewModel)
                     Screen.PROFILE -> ProfileScreen(viewModel)
                     Screen.ABOUT -> AboutScreen(viewModel)
+                    Screen.CHANGELOG -> ChangelogScreen(viewModel)
                     Screen.RESULT -> ResultScreen(viewModel)
                 }
             }

@@ -15,6 +15,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,6 +60,9 @@ fun BattleScreen(viewModel: GameViewModel) {
         else -> ""
     }
 
+    val devilDesc = "${viewModel.t("devil")} ${viewModel.t("hp")} $devilHpShown of ${gameState.devilMaxHp}, ${viewModel.t("distance")} ${gameState.distance.roundToInt()} ${viewModel.t("meters")}$coverTxt"
+    val playerDesc = "${viewModel.t("you")} ${viewModel.t("hp")} $playerHpShown of ${gameState.playerMaxHp}, ${viewModel.t("ammo")} ${gameState.ammo[gameState.gunIndex]} of ${gun.mag}, ${viewModel.t(gun.nameKey)}, ${viewModel.t("coins")} ${stats.coins}"
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -80,10 +85,13 @@ fun BattleScreen(viewModel: GameViewModel) {
             borderColor = Color(0xFFFF4D4D)
         ) {
             Text(
-                text = "${viewModel.t("devil")} ${viewModel.t("hp")}: $devilHpShown/${gameState.devilMaxHp} | ${viewModel.t("distance")}: ${gameState.distance.roundToInt()}$coverTxt$stateTxt",
+                text = "${viewModel.t("devil")} ${viewModel.t("hp")}: $devilHpShown/${gameState.devilMaxHp} | ${viewModel.t("distance")}: ${gameState.distance.roundToInt()} ${viewModel.t("meters")}$coverTxt$stateTxt",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White
+                color = Color.White,
+                modifier = Modifier.semantics {
+                    contentDescription = devilDesc
+                }
             )
             Spacer(modifier = Modifier.height(6.dp))
             HpBar(current = devilHpShown, max = gameState.devilMaxHp, isDevil = true)
@@ -94,23 +102,26 @@ fun BattleScreen(viewModel: GameViewModel) {
         // Player Card
         GameCard {
             Text(
-                text = "${viewModel.t("you")} ${viewModel.t("hp")}: $playerHpShown | ${viewModel.t("ammo")}: ${gameState.ammo[gameState.gunIndex]}/${gun.mag}",
+                text = "${viewModel.t("you")} ${viewModel.t("hp")}: $playerHpShown/${gameState.playerMaxHp} | ${viewModel.t("ammo")}: ${gameState.ammo[gameState.gunIndex]}/${gun.mag}",
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White
+                color = Color.White,
+                modifier = Modifier.semantics {
+                    contentDescription = playerDesc
+                }
             )
             Spacer(modifier = Modifier.height(6.dp))
             HpBar(current = playerHpShown, max = gameState.playerMaxHp, isDevil = false)
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "${viewModel.t(gun.nameKey)} | ${viewModel.t("medkits")}: ${gameState.medkits} | ${viewModel.t("coins")}: ${stats.coins}${if (gameState.inCover) " | ${viewModel.t("cover")}" else ""}",
+                text = "${viewModel.t(gun.nameKey)} | ${viewModel.t("medkits")}: ${gameState.medkits} | ${viewModel.t("coins")}: ${stats.coins}${if (gameState.inCover) " | ${viewModel.t("glooWall")}" else ""}",
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
                 color = Color.White
             )
         }
 
-        if (gameState.playerHp <= 80) {
+        if (gameState.playerHp <= (gameState.playerMaxHp * 0.35f).roundToInt()) {
             Spacer(modifier = Modifier.height(12.dp))
             AlertBox(text = "${viewModel.t("yourHealth")}: $playerHpShown")
         }
@@ -149,13 +160,13 @@ fun BattleScreen(viewModel: GameViewModel) {
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 GameButton(
-                    text = "${viewModel.t("reload")} 30",
+                    text = "${viewModel.t("reload")} (30)",
                     onClick = { viewModel.doReload() },
                     modifier = Modifier.weight(1f),
                     testTag = "reload_button"
                 )
                 GameButton(
-                    text = "${viewModel.t("medkit")} 100",
+                    text = "${viewModel.t("medkit")} (100)",
                     onClick = { viewModel.useMedkit() },
                     modifier = Modifier.weight(1f),
                     testTag = "medkit_button"
@@ -168,7 +179,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 GameButton(
-                    text = "${viewModel.t("cover")} 100",
+                    text = "${viewModel.t("glooWall")} (100)",
                     onClick = { viewModel.toggleCover() },
                     modifier = Modifier.weight(1f),
                     testTag = "cover_button"

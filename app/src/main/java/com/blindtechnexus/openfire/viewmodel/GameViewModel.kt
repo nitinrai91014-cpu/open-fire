@@ -14,7 +14,7 @@ import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.GameStats
 import com.blindtechnexus.openfire.model.ResultData
 import com.blindtechnexus.openfire.model.Screen
-import com.blindtechnexus.openfire.model.SoundTheme
+import com.blindtechnexus.openfire.model.getHpForLevel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,6 +51,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private var stepJob: Job? = null
     private var counterJob: Job? = null
+    private var stepCount = 0
 
     init {
         syncSettingsToManagers(_settings.value)
@@ -119,6 +120,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun navigateTo(screen: Screen) {
         stopTimers()
         ttsManager.stop()
+        audioManager.stopScreenAudio()
         playSound("click")
         _currentScreen.value = screen
         updateAudioForScreen(screen)
@@ -130,8 +132,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 speak(t("settings"))
             }
             Screen.GUIDE -> speak(t("guideTitle"))
-            Screen.PROFILE -> speak("${t("profileTitle")}. ${t("level")} ${_stats.value.level}. ${t("needWin")} ${_stats.value.needWinsForNext}.")
-            Screen.ABOUT -> speak("${t("aboutTitle")}. ${t("developed")}")
+            Screen.PROFILE -> speak("${t("profileTitle")}. ${t("round")} ${_stats.value.round}. ${t("level")} ${_stats.value.level}. ${t("needWin")} ${_stats.value.needWinsForNext}.")
+            Screen.ABOUT -> speak("${t("aboutTitle")}. ${t("developed")}. ${t("version")}")
+            Screen.CHANGELOG -> speak(t("changelogTitle"))
             Screen.MENU -> speak(t("mainMenu"))
             Screen.READER -> speak("${t("readerMsg")} ${t("readerUp")}. ${t("readerDown")}.")
             else -> {}
@@ -140,24 +143,35 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun updateAudioForScreen(screen: Screen) {
         when (screen) {
-            Screen.WELCOME, Screen.MENU, Screen.SETTINGS, Screen.GUIDE, Screen.PROFILE, Screen.ABOUT -> {
-                audioManager.stopLoop("walk")
-                audioManager.stopLoop("airplane")
+            Screen.WELCOME, Screen.MENU, Screen.SETTINGS, Screen.GUIDE, Screen.PROFILE, Screen.ABOUT, Screen.CHANGELOG -> {
+                audioManager.stopScreenAudio()
                 audioManager.startMusic(_settings.value.musicVolume * 0.35f)
             }
             Screen.JUMP -> {
                 audioManager.stopMusic()
-                audioManager.playLoop("airplane", volume = _settings.value.sfxVolume * 0.4f)
+                audioManager.stopScreenAudio()
+                audioManager.playLoop("airplane", volume = _settings.value.sfxVolume * 0.45f)
+            }
+            Screen.PARA -> {
+                audioManager.stopMusic()
+                audioManager.stopSound("airplane")
+                audioManager.playSound("parachute")
+            }
+            Screen.LAND -> {
+                audioManager.stopMusic()
+                audioManager.stopSound("parachute")
             }
             Screen.BATTLE -> {
                 audioManager.stopMusic()
-                audioManager.stopLoop("airplane")
+                audioManager.stopScreenAudio()
                 updateWalkAudio(_gameState.value.distance)
             }
-            else -> {
+            Screen.RESULT -> {
                 audioManager.stopMusic()
-                audioManager.stopLoop("walk")
-                audioManager.stopLoop("airplane")
+                audioManager.stopSound("walk")
+            }
+            else -> {
+                audioManager.stopScreenAudio()
             }
         }
     }
@@ -170,6 +184,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun continueToJump() {
         stopTimers()
         ttsManager.stop()
+        audioManager.stopScreenAudio()
         playSound("click")
         _gameState.update { it.copy(log = t("jumpMsg")) }
         _currentScreen.value = Screen.JUMP
@@ -179,20 +194,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun doJump() {
         stopTimers()
-        audioManager.stopLoop("airplane")
+        audioManager.stopSound("airplane")
         ttsManager.stop()
         playSound("jump")
         _gameState.update { it.copy(log = t("paraMsg")) }
         _currentScreen.value = Screen.PARA
+        updateAudioForScreen(Screen.PARA)
         speak(t("paraMsg"))
     }
 
     fun doPara() {
         stopTimers()
+        audioManager.stopSound("parachute")
         ttsManager.stop()
-        playSound("parachute")
         _gameState.update { it.copy(log = t("landMsg")) }
         _currentScreen.value = Screen.LAND
+        updateAudioForScreen(Screen.LAND)
         speak(t("landMsg"))
     }
 
@@ -210,31 +227,34 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun devilLoadout(): Pair<Int, Int> {
         val lv = _stats.value.level
         return when {
-            lv >= 21 -> Pair(7, 8)
-            lv >= 16 -> Pair(5, 7)
-            lv >= 11 -> Pair(2, 3)
+            lv >= 25 -> Pair(4, 5)
+            lv >= 20 -> Pair(3, 4)
+            lv >= 10 -> Pair(2, 2)
             else -> Pair(1, 1)
         }
     }
 
+    private fun currentMaxHp(): Int = getHpForLevel(_stats.value.level)
+
     private fun resetBattleState() {
         stopTimers()
+        audioManager.stopScreenAudio()
         val (meds, covers) = devilLoadout()
-        val pMaxHp = _settings.value.playerMaxHp
-        val dMaxHp = _settings.value.devilMaxHp
+        val equalHp = currentMaxHp()
+        stepCount = 0
 
         _gameState.value = GameState(
-            playerHp = pMaxHp,
-            playerMaxHp = pMaxHp,
-            devilHp = dMaxHp,
-            devilMaxHp = dMaxHp,
-            gunIndex = 0,
+            playerHp = equalHp,
+            playerMaxHp = equalHp,
+            devilHp = equalHp,
+            devilMaxHp = equalHp,
+            gunIndex = 0, // Starts with Pistol (6 bullets)
             ammo = listOf(DEFAULT_GUNS[0].mag, DEFAULT_GUNS[1].mag, DEFAULT_GUNS[2].mag),
             medkits = 3,
             inCover = false,
             distance = 100f,
             devilCoverHp = 0,
-            devilCoverMax = 6,
+            devilCoverMax = 4,
             devilCoversLeft = covers,
             devilMedkits = meds,
             devilState = "advance",
@@ -246,15 +266,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    /**
+     * Enhanced 3D walking sound:
+     * As the devil advances, distance decreases from 100 to 0.
+     * Footsteps alternate between ears (-12f to +12f) to create a vivid physical sensation of approaching steps.
+     */
     private fun updateWalkAudio(distance: Float) {
         if (_currentScreen.value != Screen.BATTLE) {
-            audioManager.stopLoop("walk")
+            audioManager.stopSound("walk")
             return
         }
-        val prox = (1.0f - distance / 100.0f).coerceIn(0f, 1f)
-        val vol = (0.38f + prox * 0.62f).coerceIn(0f, 1f)
-        val rate = 0.4f + prox * 1.6f
-        audioManager.playLoop("walk", volume = vol, rate = rate, posX = 0f, posY = 0f, posZ = -distance)
+        val lateral = if (stepCount % 2 == 0) -12f else 12f
+        audioManager.updateWalk3dAudio(distance = distance, lateralOffset = lateral)
     }
 
     private fun planDevilStep(delayMs: Long) {
@@ -270,12 +293,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val state = _gameState.value
         if (state.devilHp <= 0 || state.playerHp <= 0) return
 
+        stepCount++
+
         if (state.devilState == "retreat") {
             val newDist = (state.distance + 14f).coerceAtMost(95f)
             if (newDist >= 95f) {
                 _gameState.update { it.copy(distance = 95f, devilState = "flank") }
                 updateWalkAudio(95f)
-                planDevilStep((1800 + Random.nextInt(1000)).toLong())
+                planDevilStep((1800 + Random.nextInt(800)).toLong())
             } else {
                 _gameState.update { it.copy(distance = newDist) }
                 updateWalkAudio(newDist)
@@ -285,7 +310,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         if (state.devilState == "flank") {
-            val speed = 18f + _stats.value.level * 0.5f
+            val speed = 18f + _stats.value.level * 0.4f
             val newDist = max(28f, state.distance - speed)
             if (newDist <= 28f) {
                 _gameState.update { it.copy(distance = 28f, devilState = "advance") }
@@ -303,21 +328,28 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         val prox = (1.0f - state.distance / 100.0f).coerceIn(0f, 1f)
         if (state.distance > 28f) {
-            val speed = 7f + prox * 9f + _stats.value.level * 0.25f
+            val speed = 7f + prox * 9f + _stats.value.level * 0.2f
             val newDist = max(28f, state.distance - speed)
             _gameState.update { it.copy(distance = newDist) }
             updateWalkAudio(newDist)
-            if (Random.nextFloat() < 0.14f) {
+            if (Random.nextFloat() < 0.12f) {
                 playSound("jump", volume = 0.55f, posZ = -newDist)
             }
             val delayMs = max(320L, (800L - (prox * 450L).toLong()))
             planDevilStep(delayMs)
         } else {
-            audioManager.stopLoop("walk")
+            audioManager.stopSound("walk")
             devilAttack(isCounter = false)
         }
     }
 
+    /**
+     * Symmetrical Evil Character attack mechanics:
+     * - Hits below 40% proximity count as a miss.
+     * - Hits between 40% and 70% proximity reduce player health by 10%.
+     * - Hits between 70% and 100% proximity reduce player health by 30%.
+     * - Player dies only when health reaches zero.
+     */
     private fun devilAttack(isCounter: Boolean) {
         if (_currentScreen.value != Screen.BATTLE) return
         val state = _gameState.value
@@ -327,46 +359,44 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         playSound(gun.sound, volume = 0.9f, posX = 0f, posY = 0f, posZ = -state.distance)
         _gameState.update { it.copy(devilShots = it.devilShots + 1) }
 
-        var acc = when {
-            state.distance <= 35f -> 0.55f
-            state.distance <= 65f -> 0.30f
-            else -> 0.10f
-        }
-        if (isCounter) acc *= 0.55f
-        if (state.inCover) acc *= 0.45f
+        val proxPercent = (100f - state.distance).coerceIn(0f, 100f)
 
-        val roll = Random.nextFloat()
-        val outcome = when {
-            roll < acc -> "hit"
-            roll < acc + 0.18f -> "graze"
-            else -> "miss"
-        }
-
-        var dealt = when (outcome) {
-            "hit" -> (gun.dmg * _settings.value.devilDamageMult).roundToInt()
-            "graze" -> ((gun.dmg * 0.35f) * _settings.value.devilDamageMult).roundToInt()
-            else -> 0
-        }
-
-        if (dealt > 0) {
-            if (state.inCover) dealt = (dealt * 0.55f).roundToInt()
-            val newPlayerHp = max(0, state.playerHp - dealt)
-            _gameState.update {
-                it.copy(
-                    playerHp = newPlayerHp,
-                    devilHits = it.devilHits + 1,
-                    devilDamage = it.devilDamage + dealt
-                )
-            }
-            playSound("damage", volume = 1.0f)
-            val head = if (outcome == "hit") t("youWereHit") else t("devilGrazed")
-            msg("$head ${t(gun.nameKey)}. ${t("hitFor")} $dealt. ${t("yourHealth")} $newPlayerHp.")
-            if (newPlayerHp <= 0) {
-                endGame(won = false)
-                return
-            }
-        } else {
+        if (proxPercent < 40f) {
             msg("${t("devilMissed")} ${t(gun.nameKey)}.")
+            if (!isCounter) {
+                planDevilStep(1200L + Random.nextInt(600))
+            }
+            return
+        }
+
+        // Damage percentage: 10% between 40-70%, 30% between 70-100%
+        val damageFraction = if (proxPercent >= 70f) 0.30f else 0.10f
+        var dealt = (state.playerMaxHp * damageFraction).roundToInt().coerceAtLeast(1)
+
+        // Gloo wall protection reduces impact
+        var wallAbsorbed = false
+        if (state.inCover) {
+            dealt = max(1, (dealt * 0.40f).roundToInt())
+            wallAbsorbed = true
+        }
+
+        val newPlayerHp = max(0, state.playerHp - dealt)
+        _gameState.update {
+            it.copy(
+                playerHp = newPlayerHp,
+                devilHits = it.devilHits + 1,
+                devilDamage = it.devilDamage + dealt
+            )
+        }
+
+        playSound("damage", volume = 1.0f)
+        val hitHead = if (damageFraction >= 0.30f) t("youWereHit") else t("devilGrazed")
+        val coverNote = if (wallAbsorbed) " (${t("cover")})" else ""
+        msg("$hitHead ${t(gun.nameKey)}$coverNote. ${t("hitFor")} $dealt. ${t("yourHealth")} $newPlayerHp.")
+
+        if (newPlayerHp <= 0) {
+            endGame(won = false)
+            return
         }
 
         if (!isCounter) {
@@ -380,7 +410,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val hpPct = state.devilHp.toFloat() / state.devilMaxHp.toFloat()
 
         if (hpPct < 0.55f && state.devilMedkits > 0) {
-            val healed = min(state.devilMaxHp, state.devilHp + 60)
+            val healAmount = (state.devilMaxHp * 0.30f).roundToInt()
+            val healed = min(state.devilMaxHp, state.devilHp + healAmount)
             _gameState.update { it.copy(devilMedkits = it.devilMedkits - 1, devilHp = healed) }
             playSound("medkit", posZ = -state.distance)
             msg("${t("devilMedkit")} ${t("enemyHealth")} $healed.")
@@ -394,7 +425,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        if (hpPct < 0.50f) {
+        if (hpPct < 0.45f) {
             devilRetreat()
         }
     }
@@ -421,6 +452,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Symmetrical Player Firing Mechanics:
+     * - Pistol holds 6 bullets in a magazine; reload required only after all 6 are fired.
+     * - Hits below 40% proximity count as a miss.
+     * - Hits between 40% and 70% proximity inflict light damage (10% health).
+     * - Hits between 70% and 100% proximity inflict heavy damage (30% health).
+     * - Devil dies only when health reaches zero.
+     */
     fun fire() {
         if (_currentScreen.value != Screen.BATTLE) return
         val state = _gameState.value
@@ -440,35 +479,26 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // Decrement exactly one bullet from the magazine
         val newAmmoList = state.ammo.toMutableList().apply { this[state.gunIndex] = currentAmmo - 1 }
         _gameState.update { it.copy(ammo = newAmmoList, playerShots = it.playerShots + 1) }
         playSound(gun.sound, posX = 0f, posY = 0f, posZ = 0f)
 
-        val prox = (1.0f - state.distance / 100.0f).coerceIn(0f, 1f)
-        val outcome = when {
-            prox < 0.40f -> "miss"
-            prox < 0.70f -> {
-                val f = (prox - 0.40f) / 0.30f
-                val roll = Random.nextFloat()
-                when {
-                    roll < 0.20f + f * 0.50f -> "hit"
-                    roll < 0.90f -> "graze"
-                    else -> "miss"
-                }
-            }
-            else -> "hit"
-        }
+        val proxPercent = (100f - state.distance).coerceIn(0f, 100f)
 
-        if (outcome == "miss") {
+        // Below 40% proximity: counted as a miss
+        if (proxPercent < 40f) {
             msg(t("missed"))
             return
         }
 
+        // Damage percentage: 10% for 40-70%, 30% for 70-100%
+        val damageFraction = if (proxPercent >= 70f) 0.30f else 0.10f
+        var baseDmg = (state.devilMaxHp * damageFraction).roundToInt().coerceAtLeast(1)
+
         val newHitStreak = state.hitStreak + 1
         val isHeadshot = (newHitStreak % 4 == 0)
-        var baseDmg = if (outcome == "hit") gun.dmg else (gun.dmg * 0.35f).roundToInt()
-        baseDmg = (baseDmg * _settings.value.playerDamageMult).roundToInt()
-        if (isHeadshot) baseDmg *= 2
+        if (isHeadshot) baseDmg = (baseDmg * 1.5f).roundToInt()
 
         var brokeCover = false
         var currentCoverHp = state.devilCoverHp
@@ -491,10 +521,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
 
-        playSound("hit", volume = if (outcome == "hit") 1f else 0.65f)
-        playSound("enemyHit", volume = if (outcome == "hit") 1f else 0.65f, posZ = -state.distance)
+        playSound("hit", volume = if (damageFraction >= 0.30f) 1f else 0.7f)
+        playSound("enemyHit", volume = if (damageFraction >= 0.30f) 1f else 0.7f, posZ = -state.distance)
 
-        var text = "${if (outcome == "hit") t("enemyHit") else t("enemyGrazed")} ${t("hitFor")} $baseDmg. ${t("enemyHealth")} $newDevilHp."
+        var text = "${if (damageFraction >= 0.30f) t("enemyHit") else t("enemyGrazed")} ${t("hitFor")} $baseDmg. ${t("enemyHealth")} $newDevilHp."
         if (isHeadshot) text += " ${t("headshot")}"
         if (brokeCover) text += " ${t("devilCoverDown")}"
         msg(text)
@@ -522,7 +552,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             devilRetreat()
         }
 
-        // Ammo drop chance (15%)
+        // Ammo pickup chance (15%)
         if (Random.nextFloat() < 0.15f) {
             val updatedAmmo = _gameState.value.ammo.toMutableList()
             val mag = DEFAULT_GUNS[_gameState.value.gunIndex].mag
@@ -535,7 +565,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun spendCoins(amount: Int): Boolean {
-        if (_stats.value.coins < amount) return false
+        if (_stats.value.coins < amount) {
+            playSound("ammo")
+            speak(t("notEnough"))
+            return false
+        }
         val newCoins = _stats.value.coins - amount
         val updated = _stats.value.copy(coins = newCoins)
         _stats.value = updated
@@ -544,6 +578,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         return true
     }
 
+    /**
+     * Reload mechanism:
+     * - Reload costs 30 coins.
+     * - Plays "gun-reload.mp3".
+     * - Fills the active magazine (6 bullets for pistol).
+     * - Announces "Not enough coins." if insufficient funds.
+     */
     fun doReload() {
         if (_currentScreen.value != Screen.BATTLE) return
         val state = _gameState.value
@@ -554,13 +595,40 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (!spendCoins(30)) {
-            playSound("ammo")
-            msg(t("notEnough"))
             return
         }
         val newAmmoList = state.ammo.toMutableList().apply { this[state.gunIndex] = mag }
         _gameState.update { it.copy(ammo = newAmmoList) }
+        playSound("reload")
         msg("${t("reloaded")} ${t("coinsSpent")}: 30.")
+    }
+
+    /**
+     * Gloo Wall deployment:
+     * - Deployed via swipe-up-twice or button.
+     * - Costs 100 coins.
+     * - Announces "Not enough coins." if insufficient funds.
+     */
+    fun deployGlooWall() {
+        if (_currentScreen.value != Screen.BATTLE) return
+        if (!spendCoins(100)) {
+            return
+        }
+        _gameState.update { it.copy(inCover = true) }
+        playSound("gloowall")
+        msg(t("glooWallDeployed"))
+    }
+
+    fun toggleCover() {
+        if (_currentScreen.value != Screen.BATTLE) return
+        val state = _gameState.value
+        if (!state.inCover) {
+            deployGlooWall()
+        } else {
+            _gameState.update { it.copy(inCover = false) }
+            playSound("click")
+            msg(t("coverOff"))
+        }
     }
 
     fun useMedkit() {
@@ -577,30 +645,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (!spendCoins(100)) {
-            playSound("ammo")
-            msg(t("notEnough"))
             return
         }
-        val newHp = min(state.playerMaxHp, state.playerHp + 50)
+        val heal = (state.playerMaxHp * 0.30f).roundToInt()
+        val newHp = min(state.playerMaxHp, state.playerHp + heal)
         _gameState.update { it.copy(medkits = it.medkits - 1, playerHp = newHp) }
         playSound("medkit")
         msg("${t("medkitUsed")} $newHp")
-    }
-
-    fun toggleCover() {
-        if (_currentScreen.value != Screen.BATTLE) return
-        val state = _gameState.value
-        if (!state.inCover) {
-            if (!spendCoins(100)) {
-                playSound("ammo")
-                msg(t("notEnough"))
-                return
-            }
-        }
-        val nowCover = !state.inCover
-        _gameState.update { it.copy(inCover = nowCover) }
-        playSound("gloowall")
-        msg(if (nowCover) t("coverOn") else t("coverOff"))
     }
 
     fun switchGun(dir: Int) {
@@ -620,14 +671,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             speak("${t("yourHealth")} ${state.playerHp}. ${t("ammo")} ${state.ammo[state.gunIndex]}. ${t(gun.nameKey)}. ${if (state.inCover) t("coverOn") else t("coverOff")}. ${t("medkits")} ${state.medkits}. ${t("coins")} ${_stats.value.coins}.")
         } else {
             val coverText = if (state.devilCoverHp > 0) " ${t("devilCover")} ${state.devilCoverHp}." else ""
-            speak("${t("enemyHealth")} ${state.devilHp}. ${t("distance")} ${state.distance.roundToInt()}.$coverText")
+            speak("${t("enemyHealth")} ${state.devilHp}. ${t("distance")} ${state.distance.roundToInt()} ${t("meters")}.$coverText")
         }
     }
 
     fun exitBattle() {
         stopTimers()
-        audioManager.stopLoop("walk")
-        audioManager.stopLoop("airplane")
+        audioManager.stopSound("walk")
+        audioManager.stopScreenAudio()
         ttsManager.stop()
         playSound("click")
         _currentScreen.value = Screen.MENU
@@ -635,9 +686,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         speak(t("exited"))
     }
 
+    /**
+     * End Game & Level/Round Progression:
+     * - Completing level 30 ends the round and begins the next round.
+     * - Immediately plays victory/defeat sound via managed audio channel.
+     */
     private fun endGame(won: Boolean) {
         stopTimers()
-        audioManager.stopLoop("walk")
+        audioManager.stopSound("walk")
 
         val state = _gameState.value
         val base = if (won) 150 else 30
@@ -649,14 +705,32 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val newGames = oldStats.games + 1
         val newWins = if (won) oldStats.wins + 1 else oldStats.wins
         val newKills = if (won) oldStats.kills + 1 else oldStats.kills
-        val newLevel = (newWins / 10).coerceAtLeast(0)
-        val leveled = newLevel > oldStats.level
+
+        var newRound = oldStats.round
+        var newLevel = oldStats.level
+        var leveled = false
+        var roundCompleted = false
+
+        if (won) {
+            if (newWins % 10 == 0) {
+                if (oldStats.level >= 30) {
+                    newRound = oldStats.round + 1
+                    newLevel = 1
+                    roundCompleted = true
+                    leveled = true
+                } else {
+                    newLevel = oldStats.level + 1
+                    leveled = true
+                }
+            }
+        }
 
         val updatedStats = oldStats.copy(
             coins = newCoins,
             games = newGames,
             wins = newWins,
             kills = newKills,
+            round = newRound,
             level = newLevel
         )
         _stats.value = updatedStats
@@ -670,6 +744,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             devilShots = state.devilShots,
             hp = state.playerHp,
             levelUp = leveled,
+            roundComplete = roundCompleted,
+            round = newRound,
             level = newLevel
         )
 
@@ -679,12 +755,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         var speech = if (won) t("victoryMsg") else t("defeatMsg")
         speech += " ${t("earned")} $gain."
-        if (leveled) speech += " ${t("newLevel")} $newLevel."
+        if (roundCompleted) {
+            speech += " ${t("roundCompleted")} ${t("round")} $newRound!"
+        } else if (leveled) {
+            speech += " ${t("newLevel")} $newLevel."
+        }
         speak(speech)
     }
 
+    /**
+     * Play Again:
+     * Immediately stops victory or defeat audio before restarting the game.
+     */
     fun playAgain() {
         stopTimers()
+        audioManager.stopSound("win")
+        audioManager.stopSound("lose")
+        audioManager.stopScreenAudio()
         ttsManager.stop()
         playSound("click")
         resetBattleState()
