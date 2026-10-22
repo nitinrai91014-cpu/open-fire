@@ -4,11 +4,12 @@ package com.blindtechnexus.openfire.model
  * Every action a gesture can trigger. Keeping the mapping pure makes it
  * unit-testable and guarantees one consistent gesture contract:
  *
- *  - One finger:  up fire, down reload, right next gun, left previous gun.
- *  - Two fingers: up Gloo Wall (cover, 100 coins), down medkit,
- *                 right own status, left enemy status.
- *  - Three fingers: up toggle cover, down exit the battle,
- *                   left recover the damaged gun (300 coins).
+ *  - One finger:  up fire, down reload, right next weapon, left previous weapon.
+ *  - Two fingers: up / down move the quick menu selection, right own status,
+ *                 left enemy status.
+ *  - Three or more fingers: no action at all (the old three-finger controls
+ *                 were removed).
+ *  - A single tap activates the highlighted quick-menu item.
  */
 enum class GameAction {
     NONE,
@@ -19,15 +20,14 @@ enum class GameAction {
     LAND,
     FIRE,
     RELOAD,
-    NEXT_GUN,
-    PREV_GUN,
-    GLOO_WALL,
-    MEDKIT,
-    TOGGLE_COVER,
-    EXIT_BATTLE,
-    RECOVER_GUN,
+    NEXT_WEAPON,
+    PREV_WEAPON,
+    MENU_NEXT,
+    MENU_PREV,
+    ACTIVATE_MENU,
     STATUS_OWN,
     STATUS_ENEMY,
+    EXIT_BATTLE,
     PLAY_AGAIN
 }
 
@@ -55,15 +55,11 @@ object GestureRouter {
         }
         Screen.BATTLE -> when {
             fingers <= 0 -> GameAction.NONE
-            fingers >= 3 -> when (direction) {
-                "up" -> GameAction.TOGGLE_COVER
-                "down" -> GameAction.EXIT_BATTLE
-                "left" -> GameAction.RECOVER_GUN
-                else -> GameAction.NONE
-            }
+            // Three-finger controls were removed entirely.
+            fingers >= 3 -> GameAction.NONE
             fingers == 2 -> when (direction) {
-                "up" -> GameAction.GLOO_WALL
-                "down" -> GameAction.MEDKIT
+                "up" -> GameAction.MENU_NEXT
+                "down" -> GameAction.MENU_PREV
                 "right" -> GameAction.STATUS_OWN
                 "left" -> GameAction.STATUS_ENEMY
                 else -> GameAction.NONE
@@ -71,8 +67,8 @@ object GestureRouter {
             else -> when (direction) {
                 "up" -> GameAction.FIRE
                 "down" -> GameAction.RELOAD
-                "right" -> GameAction.NEXT_GUN
-                "left" -> GameAction.PREV_GUN
+                "right" -> GameAction.NEXT_WEAPON
+                "left" -> GameAction.PREV_WEAPON
                 else -> GameAction.NONE
             }
         }
@@ -83,4 +79,8 @@ object GestureRouter {
         }
         else -> GameAction.NONE
     }
+
+    /** A single tap only means something inside a battle. */
+    fun tap(screen: Screen): GameAction =
+        if (screen == Screen.BATTLE) GameAction.ACTIVATE_MENU else GameAction.NONE
 }

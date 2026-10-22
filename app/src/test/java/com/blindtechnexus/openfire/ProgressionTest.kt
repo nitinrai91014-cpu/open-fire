@@ -8,7 +8,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Locks the required ladder: 10 wins = 1 level, 30 levels = 1 round.
+ * Locks the required ladder: 10 wins = 1 level, 10 levels = 1 round,
+ * 5 rounds = one complete match.
  */
 class ProgressionTest {
 
@@ -37,35 +38,27 @@ class ProgressionTest {
     }
 
     @Test
-    fun everyWinIncrementsLevelWinsNotLevel() {
-        var stats = GameStats(level = 7, round = 2, levelWins = 0)
-        val result = Progression.applyWin(stats)
-        stats = result.stats
-        assertEquals(7, stats.level)
-        assertEquals(1, stats.levelWins)
-        assertEquals(2, stats.round)
-        assertFalse(result.leveledUp)
-    }
-
-    @Test
-    fun levelThirtyCompletionStartsTheNextRoundAtLevelOne() {
-        val stats = GameStats(wins = 300, level = 30, round = 2, levelWins = 9)
+    fun tenLevelsCompleteExactlyOneRound() {
+        val stats = GameStats(level = 10, round = 2, levelWins = 9)
         val result = Progression.applyWin(stats)
         assertTrue(result.leveledUp)
         assertTrue(result.roundCompleted)
+        assertFalse(result.matchWon)
         assertEquals(1, result.stats.level)
         assertEquals(3, result.stats.round)
         assertEquals(0, result.stats.levelWins)
     }
 
     @Test
-    fun levelTwentyNinePromotesToThirtyWithoutFinishingTheRound() {
-        val stats = GameStats(level = 29, round = 4, levelWins = 9)
+    fun fifthRoundCompletionWinsTheMatchAndRestartsIt() {
+        val stats = GameStats(level = 10, round = 5, levelWins = 9)
         val result = Progression.applyWin(stats)
         assertTrue(result.leveledUp)
-        assertFalse(result.roundCompleted)
-        assertEquals(30, result.stats.level)
-        assertEquals(4, result.stats.round)
+        assertTrue(result.roundCompleted)
+        assertTrue(result.matchWon)
+        assertEquals(1, result.stats.round)
+        assertEquals(1, result.stats.level)
+        assertEquals(0, result.stats.levelWins)
     }
 
     @Test
@@ -98,7 +91,18 @@ class ProgressionTest {
         assertEquals(0, fixed.kills)
         assertEquals(0, fixed.coins)
         assertEquals(1, fixed.round)
-        assertEquals(30, fixed.level)
+        assertEquals(10, fixed.level)
         assertEquals(7, fixed.levelWins)
+    }
+
+    @Test
+    fun healthScalesWithTheRound() {
+        assertEquals(300, Progression.hpForRound(1))
+        assertEquals(400, Progression.hpForRound(2))
+        assertEquals(500, Progression.hpForRound(3))
+        assertEquals(600, Progression.hpForRound(4))
+        assertEquals(750, Progression.hpForRound(5))
+        assertTrue(Progression.isFinalRound(5))
+        assertFalse(Progression.isFinalRound(4))
     }
 }

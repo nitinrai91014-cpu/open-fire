@@ -42,7 +42,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.blindtechnexus.openfire.model.ControlMode
 import com.blindtechnexus.openfire.model.Screen
 import com.blindtechnexus.openfire.model.SoundTheme
 import com.blindtechnexus.openfire.ui.components.ButtonType
@@ -67,7 +66,6 @@ fun SettingsScreen(viewModel: GameViewModel) {
 
     var nameState by remember { mutableStateOf(currentSettings.name) }
     var langState by remember { mutableStateOf(currentSettings.lang) }
-    var modeState by remember { mutableStateOf(currentSettings.mode) }
     var engineState by remember { mutableStateOf(currentSettings.ttsEnginePackage) }
     var voiceState by remember { mutableStateOf(currentSettings.voiceName) }
     var rateState by remember { mutableFloatStateOf(currentSettings.ttsRate) }
@@ -95,7 +93,7 @@ fun SettingsScreen(viewModel: GameViewModel) {
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Profile, Language, & Control Mode
+        // Profile & Language
         GameCard {
             Text(
                 text = viewModel.t("name"),
@@ -147,27 +145,6 @@ fun SettingsScreen(viewModel: GameViewModel) {
                 }
             )
 
-            Spacer(modifier = Modifier.height(14.dp))
-            Text(
-                text = viewModel.t("controlMode"),
-                fontSize = 14.sp,
-                color = TextAccent,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            CustomDropdown(
-                selectedValue = when (modeState) {
-                    ControlMode.BUTTONS -> viewModel.t("buttons")
-                    ControlMode.GESTURES -> viewModel.t("gestures")
-                    ControlMode.BOTH -> viewModel.t("both")
-                },
-                options = listOf(
-                    ControlMode.BUTTONS to viewModel.t("buttons"),
-                    ControlMode.GESTURES to viewModel.t("gestures"),
-                    ControlMode.BOTH to viewModel.t("both")
-                ),
-                onSelect = { modeState = it }
-            )
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -396,7 +373,6 @@ fun SettingsScreen(viewModel: GameViewModel) {
                 val updated = currentSettings.copy(
                     name = if (nameState.trim().isNotEmpty()) nameState.trim() else currentSettings.name,
                     lang = langState,
-                    mode = modeState,
                     ttsEnginePackage = engineState,
                     voiceName = voiceState,
                     ttsRate = rateState,

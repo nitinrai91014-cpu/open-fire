@@ -2,121 +2,242 @@ package com.blindtechnexus.openfire.data
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.blindtechnexus.openfire.model.ControlMode
+import com.blindtechnexus.openfire.model.DefenceItem
+import com.blindtechnexus.openfire.model.Extension
+import com.blindtechnexus.openfire.model.ExtensionState
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameStats
+import com.blindtechnexus.openfire.model.Inventory
 import com.blindtechnexus.openfire.model.Progression
 import com.blindtechnexus.openfire.model.SoundTheme
+import com.blindtechnexus.openfire.model.Weapon
 
+/**
+ * Reads and writes the complete game profile.
+ *
+ * Everything (settings, statistics, shop inventory and the remembered last
+ * weapon) is persisted through [EncryptedStore] inside `/.openfire/data/` on
+ * shared storage, protected by AES-256-GCM. SharedPreferences is only read
+ * once, to migrate profiles written by version 1.x, and is cleared afterwards.
+ */
 class PreferencesManager(context: Context) {
-    private val prefs: SharedPreferences = context.getSharedPreferences("open_fire_prefs", Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val store = EncryptedStore(appContext)
+    private val legacy: SharedPreferences =
+        appContext.getSharedPreferences("open_fire_prefs", Context.MODE_PRIVATE)
+
+    private companion object {
+        const val FILE_SETTINGS = "settings"
+        const val FILE_PROFILE = "profile"
+        const val FILE_INVENTORY = "inventory"
+        const val SCHEMA_VERSION = 2
+
+        const val KEY_SCHEMA = "schema"
+    }
+
+    init {
+        migrateLegacyProfileIfNeeded()
+    }
+
+    // ------------------------------------------------------------------
+    // Settings
+    // ------------------------------------------------------------------
 
     fun loadSettings(): GameSettings {
-        val modeStr = prefs.getString("of_mode", "BUTTONS") ?: "BUTTONS"
-        val mode = try {
-            ControlMode.valueOf(modeStr)
-        } catch (_: Exception) {
-            ControlMode.BUTTONS
-        }
-        val themeStr = prefs.getString("of_sound_theme", "TACTICAL") ?: "TACTICAL"
-        val soundTheme = try {
-            SoundTheme.valueOf(themeStr)
+        val map = store.read(FILE_SETTINGS)
+        if (map.isEmpty()) return GameSettings()
+        val theme = try {
+            SoundTheme.valueOf(map["soundTheme"] ?: SoundTheme.TACTICAL.name)
         } catch (_: Exception) {
             SoundTheme.TACTICAL
         }
-
         return GameSettings(
-            name = prefs.getString("of_name", "") ?: "",
-            lang = prefs.getString("of_lang", "en") ?: "en",
-            mode = mode,
-            ttsEnginePackage = prefs.getString("of_tts_engine", "") ?: "",
-            voiceName = prefs.getString("of_voice", "") ?: "",
-            ttsRate = prefs.getFloat("of_rate", 1.0f),
-            ttsVolume = prefs.getFloat("of_ttsvol", 1.0f),
-            musicVolume = prefs.getFloat("of_musicvol", 0.5f),
-            sfxVolume = prefs.getFloat("of_sfxvol", 1.0f),
-            playerMaxHp = prefs.getInt("of_player_max_hp", 200),
-            devilMaxHp = prefs.getInt("of_devil_max_hp", 200),
-            soundTheme = soundTheme,
-            hapticsEnabled = prefs.getBoolean("of_haptics", true)
+            name = map["name"] ?: "",
+            lang = map["lang"] ?: "en",
+            ttsEnginePackage = map["ttsEngine"] ?: "",
+            voiceName = map["voice"] ?: "",
+            ttsRate = map["rate"]?.toFloatOrNull() ?: 1.0f,
+            ttsVolume = map["ttsVolume"]?.toFloatOrNull() ?: 1.0f,
+            musicVolume = map["musicVolume"]?.toFloatOrNull() ?: 0.5f,
+            sfxVolume = map["sfxVolume"]?.toFloatOrNull() ?: 1.0f,
+            soundTheme = theme,
+            hapticsEnabled = map["haptics"]?.toBooleanStrictOrNull() ?: true
         )
     }
 
     fun saveSettings(s: GameSettings) {
-        prefs.edit()
-            .putString("of_name", s.name)
-            .putString("of_lang", s.lang)
-            .putString("of_mode", s.mode.name)
-            .putString("of_tts_engine", s.ttsEnginePackage)
-            .putString("of_voice", s.voiceName)
-            .putFloat("of_rate", s.ttsRate)
-            .putFloat("of_ttsvol", s.ttsVolume)
-            .putFloat("of_musicvol", s.musicVolume)
-            .putFloat("of_sfxvol", s.sfxVolume)
-            .putInt("of_player_max_hp", s.playerMaxHp)
-            .putInt("of_devil_max_hp", s.devilMaxHp)
-            .putString("of_sound_theme", s.soundTheme.name)
-            .putBoolean("of_haptics", s.hapticsEnabled)
-            .apply()
+        store.write(
+            FILE_SETTINGS,
+            mapOf(
+                KEY_SCHEMA to SCHEMA_VERSION.toString(),
+                "name" to s.name,
+                "lang" to s.lang,
+                "ttsEngine" to s.ttsEnginePackage,
+                "voice" to s.voiceName,
+                "rate" to s.ttsRate.toString(),
+                "ttsVolume" to s.ttsVolume.toString(),
+                "musicVolume" to s.musicVolume.toString(),
+                "sfxVolume" to s.sfxVolume.toString(),
+                "soundTheme" to s.soundTheme.name,
+                "haptics" to s.hapticsEnabled.toString()
+            )
+        )
     }
 
+    // ------------------------------------------------------------------
+    // Statistics and progression
+    // ------------------------------------------------------------------
+
     fun loadStats(): GameStats {
-        val wins = prefs.getInt("of_wins", 0)
-        val savedLevel = prefs.getInt("of_level", 1)
-        val round = prefs.getInt("of_round", 1)
-        // Keep level in 1..30 range
-        val level = savedLevel.coerceIn(1, Progression.LEVELS_PER_ROUND)
-        // Saves written before the explicit per-level counter existed are
-        // migrated from the lifetime win count, so the 10-wins ladder keeps
-        // working without resetting anybody's progress.
+        val map = store.read(FILE_PROFILE)
+        if (map.isEmpty()) return Progression.normalize(GameStats())
+        val wins = map["wins"]?.toIntOrNull() ?: 0
         val migratedLevelWins = wins % Progression.WINS_PER_LEVEL
-        val savedLevelWins = if (prefs.contains("of_level_wins")) {
-            prefs.getInt("of_level_wins", migratedLevelWins)
-        } else {
-            migratedLevelWins
-        }
-        val levelWins = savedLevelWins.coerceIn(0, Progression.WINS_PER_LEVEL - 1)
         return Progression.normalize(
             GameStats(
-                games = prefs.getInt("of_games", 0),
+                games = map["games"]?.toIntOrNull() ?: 0,
                 wins = wins,
-                kills = prefs.getInt("of_kills", 0),
-                coins = prefs.getInt("of_coins", 100),
-                round = round.coerceAtLeast(1),
-                level = level,
-                levelWins = levelWins
+                kills = map["kills"]?.toIntOrNull() ?: 0,
+                coins = map["coins"]?.toIntOrNull() ?: 100,
+                round = map["round"]?.toIntOrNull() ?: 1,
+                level = map["level"]?.toIntOrNull() ?: 1,
+                levelWins = map["levelWins"]?.toIntOrNull() ?: migratedLevelWins
             )
         )
     }
 
     fun saveStats(s: GameStats) {
         val normalized = Progression.normalize(s)
-        prefs.edit()
-            .putInt("of_games", normalized.games)
-            .putInt("of_wins", normalized.wins)
-            .putInt("of_kills", normalized.kills)
-            .putInt("of_coins", normalized.coins)
-            .putInt("of_round", normalized.round)
-            .putInt("of_level", normalized.level)
-            .putInt("of_level_wins", normalized.levelWins)
-            .apply()
+        store.write(
+            FILE_PROFILE,
+            mapOf(
+                KEY_SCHEMA to SCHEMA_VERSION.toString(),
+                "games" to normalized.games.toString(),
+                "wins" to normalized.wins.toString(),
+                "kills" to normalized.kills.toString(),
+                "coins" to normalized.coins.toString(),
+                "round" to normalized.round.toString(),
+                "level" to normalized.level.toString(),
+                "levelWins" to normalized.levelWins.toString()
+            )
+        )
     }
 
     /**
-     * Erases every stored statistic and writes the cleared profile back.
-     * Only gameplay data is touched: the player's name and audio/TTS
+     * Erases every stored statistic and the complete shop inventory, then
+     * writes the cleared profile back. The player's name and audio/TTS
      * preferences are kept so the app remains usable.
      */
     fun clearStats(cleared: GameStats = GameStats.cleared()) {
-        prefs.edit()
-            .remove("of_games")
-            .remove("of_wins")
-            .remove("of_kills")
-            .remove("of_coins")
-            .remove("of_round")
-            .remove("of_level")
-            .remove("of_level_wins")
-            .apply()
+        store.delete(FILE_PROFILE)
+        store.delete(FILE_INVENTORY)
         saveStats(cleared)
+        saveInventory(Inventory())
+    }
+
+    // ------------------------------------------------------------------
+    // Shop inventory
+    // ------------------------------------------------------------------
+
+    fun loadInventory(): Inventory {
+        val map = store.read(FILE_INVENTORY)
+        if (map.isEmpty()) return Inventory()
+        val weaponIds = map["weapons"]
+            ?.split(',')
+            ?.mapNotNull { Weapon.fromId(it.trim()) }
+            ?.map { it.id }
+            ?.toSet()
+            ?: Weapon.defaults().map { it.id }.toSet()
+        val extensions = mutableMapOf<String, ExtensionState>()
+        for (extension in Extension.entries) {
+            val raw = map["ext.${extension.id}"] ?: continue
+            val state = try {
+                ExtensionState.valueOf(raw)
+            } catch (_: Exception) {
+                ExtensionState.NOT_OWNED
+            }
+            if (state != ExtensionState.NOT_OWNED) extensions[extension.id] = state
+        }
+        return Inventory(
+            weaponIds = weaponIds + Weapon.defaults().map { it.id },
+            medikits = map["medikits"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
+            glueWalls = map["glueWalls"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
+            covers = map["covers"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
+            extensions = extensions,
+            lastWeaponId = Weapon.fromId(map["lastWeapon"])?.id ?: Weapon.SHORT_GUN.id
+        )
+    }
+
+    fun saveInventory(inventory: Inventory) {
+        val values = mutableMapOf(
+            KEY_SCHEMA to SCHEMA_VERSION.toString(),
+            "weapons" to inventory.weaponIds.joinToString(","),
+            "medikits" to inventory.medikits.toString(),
+            "glueWalls" to inventory.glueWalls.toString(),
+            "covers" to inventory.covers.toString(),
+            "lastWeapon" to inventory.lastWeaponId
+        )
+        for (extension in Extension.entries) {
+            values["ext.${extension.id}"] = inventory.extensionState(extension).name
+        }
+        store.write(FILE_INVENTORY, values)
+    }
+
+    /** Adds one defence item directly (used by automatic battle helpers). */
+    fun grantDefence(item: DefenceItem, amount: Int = 1) {
+        val inventory = loadInventory()
+        saveInventory(inventory.withCount(item, inventory.count(item) + amount.coerceAtLeast(0)))
+    }
+
+    // ------------------------------------------------------------------
+    // One-time migration from the version 1.x SharedPreferences profile
+    // ------------------------------------------------------------------
+
+    private fun migrateLegacyProfileIfNeeded() {
+        if (store.exists(FILE_SETTINGS) || store.exists(FILE_PROFILE)) return
+        if (legacy.all.isEmpty()) return
+        try {
+            val theme = try {
+                SoundTheme.valueOf(legacy.getString("of_sound_theme", "TACTICAL") ?: "TACTICAL")
+            } catch (_: Exception) {
+                SoundTheme.TACTICAL
+            }
+            saveSettings(
+                GameSettings(
+                    name = legacy.getString("of_name", "") ?: "",
+                    lang = legacy.getString("of_lang", "en") ?: "en",
+                    ttsEnginePackage = legacy.getString("of_tts_engine", "") ?: "",
+                    voiceName = legacy.getString("of_voice", "") ?: "",
+                    ttsRate = legacy.getFloat("of_rate", 1.0f),
+                    ttsVolume = legacy.getFloat("of_ttsvol", 1.0f),
+                    musicVolume = legacy.getFloat("of_musicvol", 0.5f),
+                    sfxVolume = legacy.getFloat("of_sfxvol", 1.0f),
+                    soundTheme = theme,
+                    hapticsEnabled = legacy.getBoolean("of_haptics", true)
+                )
+            )
+            val wins = legacy.getInt("of_wins", 0)
+            saveStats(
+                Progression.normalize(
+                    GameStats(
+                        games = legacy.getInt("of_games", 0),
+                        wins = wins,
+                        kills = legacy.getInt("of_kills", 0),
+                        coins = legacy.getInt("of_coins", 100),
+                        round = legacy.getInt("of_round", 1),
+                        level = legacy.getInt("of_level", 1),
+                        levelWins = if (legacy.contains("of_level_wins")) {
+                            legacy.getInt("of_level_wins", wins % Progression.WINS_PER_LEVEL)
+                        } else {
+                            wins % Progression.WINS_PER_LEVEL
+                        }
+                    )
+                )
+            )
+            saveInventory(Inventory())
+            legacy.edit().clear().apply()
+        } catch (_: Exception) {
+            // A corrupt legacy profile must never block the app from starting.
+        }
     }
 }

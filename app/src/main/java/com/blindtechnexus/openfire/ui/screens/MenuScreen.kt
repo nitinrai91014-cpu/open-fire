@@ -88,6 +88,14 @@ fun MenuScreen(viewModel: GameViewModel) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Shop is placed directly before the Play Game button.
+        GameButton(
+            text = viewModel.t("shop"),
+            onClick = { viewModel.navigateTo(Screen.SHOP) },
+            type = ButtonType.WARN,
+            testTag = "shop_button"
+        )
+        Spacer(modifier = Modifier.height(12.dp))
         GameButton(
             text = viewModel.t("play"),
             onClick = { viewModel.startNewGame() },

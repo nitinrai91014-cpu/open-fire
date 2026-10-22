@@ -18,7 +18,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
-import com.blindtechnexus.openfire.model.ControlMode
 import com.blindtechnexus.openfire.model.Screen
 import com.blindtechnexus.openfire.ui.screens.AboutScreen
 import com.blindtechnexus.openfire.ui.screens.BattleScreen
@@ -32,18 +31,20 @@ import com.blindtechnexus.openfire.ui.screens.ProfileScreen
 import com.blindtechnexus.openfire.ui.screens.ReaderScreen
 import com.blindtechnexus.openfire.ui.screens.ResultScreen
 import com.blindtechnexus.openfire.ui.screens.SettingsScreen
+import com.blindtechnexus.openfire.ui.screens.ShopScreen
 import com.blindtechnexus.openfire.ui.screens.WelcomeScreen
 import com.blindtechnexus.openfire.ui.theme.DarkBg
 import com.blindtechnexus.openfire.viewmodel.GameViewModel
 import kotlin.math.abs
 import kotlin.math.sqrt
 
+/** A movement smaller than this is treated as a tap instead of a swipe. */
+private const val TAP_SLOP = 24f
+
 @Composable
 fun OpenFireApp(viewModel: GameViewModel) {
     val currentScreen by viewModel.currentScreen.collectAsState()
-    val settings by viewModel.settings.collectAsState()
 
-    // Handle Android system back button properly
     BackHandler(enabled = currentScreen != Screen.WELCOME && currentScreen != Screen.MENU) {
         if (currentScreen == Screen.BATTLE) {
             viewModel.exitBattle()
@@ -51,8 +52,6 @@ fun OpenFireApp(viewModel: GameViewModel) {
             viewModel.navigateTo(Screen.MENU)
         }
     }
-
-    val gestureEnabled = settings.mode == ControlMode.GESTURES || settings.mode == ControlMode.BOTH
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -63,21 +62,15 @@ fun OpenFireApp(viewModel: GameViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding)
                 .background(DarkBg)
-                .pointerInput(gestureEnabled, currentScreen) {
-                    if (!gestureEnabled) return@pointerInput
-
+                .pointerInput(currentScreen) {
                     awaitEachGesture {
                         val firstDown = awaitFirstDown(
                             requireUnconsumed = false,
                             pass = PointerEventPass.Initial
                         )
 
-                        // Track every finger from the exact place it touched
-                        // down. Measuring all fingers from the first finger's
-                        // position made a three-finger swipe register a bogus
-                        // direction as soon as the fingers were spread apart,
-                        // which is why three-finger up/down gestures failed
-                        // intermittently. Per-pointer deltas fix that.
+                        // Every finger is tracked from its own touch-down point
+                        // so a two-finger swipe never reports a bogus direction.
                         val startPositions = mutableMapOf(firstDown.id to firstDown.position)
                         var maxFingers = 1
                         var bestDx = 0f
@@ -107,8 +100,13 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             if (event.changes.none { it.pressed }) break
                         }
 
-                        // Multi-finger gestures use a slightly smaller threshold
-                        // because several fingers rarely travel in a perfect line.
+                        if (maxDelta < TAP_SLOP && maxFingers == 1) {
+                            // A single tap activates the highlighted quick-menu
+                            // item on the battle screen.
+                            viewModel.handleTap()
+                            return@awaitEachGesture
+                        }
+
                         val threshold = if (maxFingers >= 2) 36f else 60f
                         if (maxDelta >= threshold) {
                             val dir = if (abs(bestDx) >= abs(bestDy)) {
@@ -116,10 +114,6 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             } else {
                                 if (bestDy > 0) "down" else "up"
                             }
-
-                            // Every recognised swipe is routed once. A second
-                            // fast up-swipe is simply another shot — it must
-                            // never silently spend 100 coins on a Gloo Wall.
                             viewModel.handleGesture(dir, maxFingers)
                         }
                     }
@@ -134,6 +128,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
                 when (currentScreen) {
                     Screen.WELCOME -> WelcomeScreen(viewModel)
                     Screen.MENU -> MenuScreen(viewModel)
+                    Screen.SHOP -> ShopScreen(viewModel)
                     Screen.READER -> ReaderScreen(viewModel)
                     Screen.JUMP -> JumpScreen(viewModel)
                     Screen.PARA -> ParaScreen(viewModel)

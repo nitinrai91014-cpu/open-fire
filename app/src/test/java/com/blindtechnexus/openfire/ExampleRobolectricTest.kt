@@ -4,11 +4,18 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.blindtechnexus.openfire.data.PreferencesManager
 import com.blindtechnexus.openfire.data.Strings
-import com.blindtechnexus.openfire.model.DEFAULT_GUNS
+import com.blindtechnexus.openfire.model.Combat
+import com.blindtechnexus.openfire.model.DefenceItem
+import com.blindtechnexus.openfire.model.Extension
+import com.blindtechnexus.openfire.model.ExtensionState
 import com.blindtechnexus.openfire.model.GameSettings
+import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.GameStats
-import com.blindtechnexus.openfire.model.getHpForLevel
+import com.blindtechnexus.openfire.model.Inventory
+import com.blindtechnexus.openfire.model.Progression
+import com.blindtechnexus.openfire.model.Weapon
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,36 +39,31 @@ class ExampleRobolectricTest {
         assertEquals("ओपन फायर", Strings.get("title", "hi"))
         assertEquals("ओपन फायर", Strings.get("title", "ne"))
 
-        assertEquals("Version 1.3", Strings.get("version", "en"))
+        assertEquals("Version 2.0", Strings.get("version", "en"))
         assertEquals("Changelog", Strings.get("changelog", "en"))
         assertEquals("Join Telegram Channel", Strings.get("joinTelegram", "en"))
         assertEquals("Contact on WhatsApp", Strings.get("contactWhatsApp", "en"))
 
-        val guideEn = Strings.getGuide("en")
-        assertTrue(guideEn.isNotEmpty())
-        val guideHi = Strings.getGuide("hi")
-        assertTrue(guideHi.isNotEmpty())
-        val guideNe = Strings.getGuide("ne")
-        assertTrue(guideNe.isNotEmpty())
+        assertTrue(Strings.getGuide("en").isNotEmpty())
+        assertTrue(Strings.getGuide("hi").isNotEmpty())
+        assertTrue(Strings.getGuide("ne").isNotEmpty())
     }
 
     @Test
-    fun testHpForLevelScaling() {
-        assertEquals(200, getHpForLevel(1))
-        assertEquals(200, getHpForLevel(10))
-        assertEquals(300, getHpForLevel(11))
-        assertEquals(300, getHpForLevel(20))
-        assertEquals(500, getHpForLevel(21))
-        assertEquals(500, getHpForLevel(25))
-        assertEquals(800, getHpForLevel(26))
-        assertEquals(800, getHpForLevel(30))
+    fun testHpForRoundScaling() {
+        assertEquals(300, Progression.hpForRound(1))
+        assertEquals(400, Progression.hpForRound(2))
+        assertEquals(500, Progression.hpForRound(3))
+        assertEquals(600, Progression.hpForRound(4))
+        assertEquals(750, Progression.hpForRound(5))
     }
 
     @Test
     fun testPistolMagazineCapacity() {
-        val pistol = DEFAULT_GUNS.find { it.nameKey == "gunPistol" }
+        val pistol = Weapon.entries.find { it.id == "pistol" }
         org.junit.Assert.assertNotNull(pistol)
-        assertEquals(6, pistol?.mag)
+        assertEquals(6, pistol?.magazine)
+        assertEquals(15, pistol?.power)
     }
 
     @Test
@@ -69,12 +71,7 @@ class ExampleRobolectricTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val prefs = PreferencesManager(context)
 
-        val settings = GameSettings(
-            name = "TestWarrior",
-            lang = "hi"
-        )
-        prefs.saveSettings(settings)
-
+        prefs.saveSettings(GameSettings(name = "TestWarrior", lang = "hi"))
         val loaded = prefs.loadSettings()
         assertEquals("TestWarrior", loaded.name)
         assertEquals("hi", loaded.lang)
@@ -85,23 +82,49 @@ class ExampleRobolectricTest {
             kills = 3,
             coins = 240,
             round = 2,
-            level = 14,
+            level = 4,
             levelWins = 4
         )
         prefs.saveStats(stats)
-
         val loadedStats = prefs.loadStats()
         assertEquals(5, loadedStats.games)
         assertEquals(3, loadedStats.wins)
         assertEquals(2, loadedStats.round)
-        assertEquals(14, loadedStats.level)
+        assertEquals(4, loadedStats.level)
         assertEquals(240, loadedStats.coins)
         assertEquals(4, loadedStats.levelWins)
         assertEquals(6, loadedStats.needWinsForNext)
     }
 
     @Test
-    fun testClearStatsWipesEverything() {
+    fun testInventoryRoundTrip() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = PreferencesManager(context)
+        val inventory = Inventory(
+            weaponIds = setOf(Weapon.SHORT_GUN.id, Weapon.ASSAULT_GUN.id, Weapon.SWORD.id),
+            medikits = 7,
+            glueWalls = 2,
+            covers = 5,
+            extensions = mapOf(
+                Extension.AUTO_RELOAD.id to ExtensionState.ENABLED,
+                Extension.AUTO_COVER.id to ExtensionState.DISABLED
+            ),
+            lastWeaponId = Weapon.SWORD.id
+        )
+        prefs.saveInventory(inventory)
+
+        val loaded = PreferencesManager(context).loadInventory()
+        assertTrue(loaded.ownsWeapon(Weapon.SWORD))
+        assertEquals(7, loaded.medikits)
+        assertEquals(2, loaded.glueWalls)
+        assertEquals(5, loaded.covers)
+        assertTrue(loaded.extensionEnabled(Extension.AUTO_RELOAD))
+        assertEquals(ExtensionState.DISABLED, loaded.extensionState(Extension.AUTO_COVER))
+        assertEquals(Weapon.SWORD.id, loaded.lastWeaponId)
+    }
+
+    @Test
+    fun testClearStatsWipesEverythingIncludingTheShop() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val prefs = PreferencesManager(context)
 
@@ -112,10 +135,16 @@ class ExampleRobolectricTest {
                 kills = 20,
                 coins = 999,
                 round = 5,
-                level = 27,
+                level = 7,
                 levelWins = 6
             )
         )
+        prefs.saveInventory(
+            Inventory(medikits = 4, glueWalls = 3, covers = 2).copy(
+                lastWeaponId = Weapon.SWORD.id
+            )
+        )
+        prefs.grantDefence(DefenceItem.MEDKIT, 2)
 
         prefs.clearStats()
 
@@ -127,15 +156,17 @@ class ExampleRobolectricTest {
         assertEquals(0, cleared.levelWins)
         assertEquals(1, cleared.level)
         assertEquals(1, cleared.round)
+
+        val inventory = prefs.loadInventory()
+        assertEquals(0, inventory.medikits)
+        assertEquals(0, inventory.glueWalls)
+        assertEquals(0, inventory.covers)
+        assertFalse(inventory.extensionOwned(Extension.AUTO_RELOAD))
     }
 
     @Test
     fun testGameDefaultsUseTheFiftyMeterArena() {
-        assertEquals(
-            com.blindtechnexus.openfire.model.Combat.MAX_RANGE,
-            com.blindtechnexus.openfire.model.GameState().distance,
-            0.001f
-        )
-        assertEquals(50f, com.blindtechnexus.openfire.model.Combat.MAX_RANGE, 0.001f)
+        assertEquals(Combat.MAX_RANGE, GameState().distance, 0.001f)
+        assertEquals(50f, Combat.MAX_RANGE, 0.001f)
     }
 }

@@ -7,10 +7,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * Locks down the battle gesture contract:
- *  - One finger:  up fire, down reload, right/left switch gun.
- *  - Two fingers: up Gloo Wall (cover, 100 coins), down medkit, right/left status.
- *  - Three fingers: up toggle cover, down exit, left recover the gun.
+ * Locks down the new battle gesture contract:
+ *  - One finger: up fire, down reload, right/left switch weapon.
+ *  - Two fingers: up/down move the quick menu, right/left speak the status.
+ *  - Three or more fingers: nothing (the old controls were removed).
+ *  - A single tap activates the highlighted quick-menu item.
  */
 class GestureRouterTest {
 
@@ -18,28 +19,31 @@ class GestureRouterTest {
     fun oneFingerBattleGestures() {
         assertEquals(GameAction.FIRE, GestureRouter.route(Screen.BATTLE, "up", 1))
         assertEquals(GameAction.RELOAD, GestureRouter.route(Screen.BATTLE, "down", 1))
-        assertEquals(GameAction.NEXT_GUN, GestureRouter.route(Screen.BATTLE, "right", 1))
-        assertEquals(GameAction.PREV_GUN, GestureRouter.route(Screen.BATTLE, "left", 1))
+        assertEquals(GameAction.NEXT_WEAPON, GestureRouter.route(Screen.BATTLE, "right", 1))
+        assertEquals(GameAction.PREV_WEAPON, GestureRouter.route(Screen.BATTLE, "left", 1))
     }
 
     @Test
-    fun twoFingerSwipeUpDeploysGlooWall() {
-        assertEquals(GameAction.GLOO_WALL, GestureRouter.route(Screen.BATTLE, "up", 2))
-        assertEquals(GameAction.MEDKIT, GestureRouter.route(Screen.BATTLE, "down", 2))
+    fun twoFingersMoveTheQuickMenuOrSpeakStatus() {
+        assertEquals(GameAction.MENU_NEXT, GestureRouter.route(Screen.BATTLE, "up", 2))
+        assertEquals(GameAction.MENU_PREV, GestureRouter.route(Screen.BATTLE, "down", 2))
         assertEquals(GameAction.STATUS_OWN, GestureRouter.route(Screen.BATTLE, "right", 2))
         assertEquals(GameAction.STATUS_ENEMY, GestureRouter.route(Screen.BATTLE, "left", 2))
     }
 
     @Test
-    fun threeFingerBattleGestures() {
-        assertEquals(GameAction.TOGGLE_COVER, GestureRouter.route(Screen.BATTLE, "up", 3))
-        assertEquals(GameAction.EXIT_BATTLE, GestureRouter.route(Screen.BATTLE, "down", 3))
-        assertEquals(GameAction.RECOVER_GUN, GestureRouter.route(Screen.BATTLE, "left", 3))
-        // Extra fingers beyond three behave the same way.
-        assertEquals(GameAction.TOGGLE_COVER, GestureRouter.route(Screen.BATTLE, "up", 4))
-        assertEquals(GameAction.RECOVER_GUN, GestureRouter.route(Screen.BATTLE, "left", 4))
-        // Right is intentionally unused for three fingers.
-        assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "right", 3))
+    fun threeFingerControlsAreRemoved() {
+        assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "up", 3))
+        assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "down", 3))
+        assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "left", 3))
+        assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "right", 4))
+    }
+
+    @Test
+    fun aSingleTapActivatesTheQuickMenuItemOnlyInBattle() {
+        assertEquals(GameAction.ACTIVATE_MENU, GestureRouter.tap(Screen.BATTLE))
+        assertEquals(GameAction.NONE, GestureRouter.tap(Screen.MENU))
+        assertEquals(GameAction.NONE, GestureRouter.tap(Screen.RESULT))
     }
 
     @Test
@@ -56,6 +60,7 @@ class GestureRouterTest {
     @Test
     fun menuScreensIgnoreGestures() {
         assertEquals(GameAction.NONE, GestureRouter.route(Screen.MENU, "up", 1))
+        assertEquals(GameAction.NONE, GestureRouter.route(Screen.SHOP, "down", 2))
         assertEquals(GameAction.NONE, GestureRouter.route(Screen.SETTINGS, "down", 2))
         assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "up", 0))
     }

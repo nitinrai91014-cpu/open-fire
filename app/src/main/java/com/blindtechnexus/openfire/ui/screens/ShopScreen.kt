@@ -1,0 +1,504 @@
+package com.blindtechnexus.openfire.ui.screens
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.blindtechnexus.openfire.model.DefenceItem
+import com.blindtechnexus.openfire.model.Extension
+import com.blindtechnexus.openfire.model.Inventory
+import com.blindtechnexus.openfire.model.Screen
+import com.blindtechnexus.openfire.model.Weapon
+import com.blindtechnexus.openfire.ui.components.ButtonType
+import com.blindtechnexus.openfire.ui.components.GameButton
+import com.blindtechnexus.openfire.ui.components.GameCard
+import com.blindtechnexus.openfire.ui.components.StatBadge
+import com.blindtechnexus.openfire.ui.theme.CardBg
+import com.blindtechnexus.openfire.ui.theme.TextAccent
+import com.blindtechnexus.openfire.ui.theme.TextMuted
+import com.blindtechnexus.openfire.ui.theme.WarnBright
+import com.blindtechnexus.openfire.viewmodel.GameViewModel
+
+/**
+ * The shop: buy or remove weapons, buy defences (repeatable) and manage the
+ * automatic extensions. Every purchase plays the coin sound, and every failed
+ * purchase shows and speaks "Not enough coins."
+ */
+@Composable
+fun ShopScreen(viewModel: GameViewModel) {
+    val stats by viewModel.stats.collectAsState()
+    val inventory by viewModel.inventory.collectAsState()
+    val scrollState = rememberScrollState()
+
+    // Pending confirmation for a removal.
+    var pendingWeapon by remember { mutableStateOf<Weapon?>(null) }
+    var pendingDefence by remember { mutableStateOf<DefenceItem?>(null) }
+    var pendingExtension by remember { mutableStateOf<Extension?>(null) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(scrollState)
+            .padding(16.dp)
+    ) {
+        GameButton(
+            text = viewModel.t("back"),
+            onClick = { viewModel.navigateTo(Screen.MENU) },
+            type = ButtonType.DANGER,
+            testTag = "shop_back_button"
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        GameCard {
+            Text(
+                text = viewModel.t("shopTitle"),
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = viewModel.t("shopSubtitle"),
+                fontSize = 16.sp,
+                color = Color.White,
+                lineHeight = 22.sp
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                StatBadge(
+                    label = viewModel.t("coins"),
+                    value = stats.coins.toString()
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ------------------------------------------------------------------
+        // Weapons
+        // ------------------------------------------------------------------
+        GameCard {
+            Text(
+                text = viewModel.t("weapons"),
+                fontSize = 21.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Weapon.forSale().forEach { weapon ->
+                val owned = inventory.ownsWeapon(weapon)
+                ShopItemRow(
+                    title = "${viewModel.t(weapon.nameKey)}, ${weapon.price} ${viewModel.t("coins")}.",
+                    detail = "${viewModel.t("weaponPower")}: ${weapon.power}. " +
+                        "${viewModel.t("ammo")}: ${weapon.magazine}.",
+                    owned = owned,
+                    buyLabel = viewModel.t("buy"),
+                    removeLabel = viewModel.t("remove"),
+                    onBuy = { viewModel.buyWeapon(weapon.id) },
+                    onRemove = { pendingWeapon = weapon },
+                    testTagPrefix = "shop_weapon_${weapon.id}"
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ------------------------------------------------------------------
+        // Defences
+        // ------------------------------------------------------------------
+        GameCard {
+            Text(
+                text = viewModel.t("defences"),
+                fontSize = 21.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = defenceTotalsText(viewModel, inventory),
+                fontSize = 16.sp,
+                color = Color.White,
+                fontWeight = FontWeight.Medium,
+                lineHeight = 22.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = viewModel.t("defencesNote"),
+                fontSize = 14.sp,
+                color = TextMuted,
+                lineHeight = 20.sp
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            DefenceItem.entries.forEach { item ->
+                DefenceRow(
+                    viewModel = viewModel,
+                    item = item,
+                    inventory = inventory,
+                    onRemove = { pendingDefence = item }
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ------------------------------------------------------------------
+        // Extensions
+        // ------------------------------------------------------------------
+        GameCard {
+            Text(
+                text = viewModel.t("extensions"),
+                fontSize = 21.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Extension.entries.forEach { extension ->
+                val state = inventory.extensionState(extension)
+                val owned = state != com.blindtechnexus.openfire.model.ExtensionState.NOT_OWNED
+                val enabled = state == com.blindtechnexus.openfire.model.ExtensionState.ENABLED
+
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "${viewModel.t(extension.nameKey)}, ${extension.price} " +
+                            "${viewModel.t("coins")}.",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = viewModel.t(extension.descriptionKey),
+                        fontSize = 14.sp,
+                        color = TextMuted,
+                        lineHeight = 20.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (owned) {
+                            if (enabled) {
+                                viewModel.t("enabledState")
+                            } else {
+                                viewModel.t("disabledState")
+                            }
+                        } else {
+                            viewModel.t("notOwnedLabel")
+                        },
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (enabled) WarnBright else TextAccent
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (owned) {
+                        GameButton(
+                            text = viewModel.t("remove"),
+                            onClick = { pendingExtension = extension },
+                            type = ButtonType.DANGER,
+                            testTag = "shop_extension_${extension.id}_remove"
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        // Disabled extensions can be enabled again and vice versa.
+                        GameButton(
+                            text = if (enabled) viewModel.t("disable") else viewModel.t("enable"),
+                            onClick = { viewModel.toggleExtension(extension.id) },
+                            type = ButtonType.WARN,
+                            testTag = "shop_extension_${extension.id}_toggle",
+                            enabled = true
+                        )
+                    } else {
+                        GameButton(
+                            text = viewModel.t("buy"),
+                            onClick = { viewModel.buyExtension(extension.id) },
+                            type = ButtonType.PRIMARY,
+                            testTag = "shop_extension_${extension.id}_buy"
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        GameButton(
+            text = viewModel.t("back"),
+            onClick = { viewModel.navigateTo(Screen.MENU) },
+            type = ButtonType.PRIMARY,
+            testTag = "shop_back_bottom_button"
+        )
+    }
+
+    // Confirmation before removing a bought weapon.
+    pendingWeapon?.let { weapon ->
+        AlertDialog(
+            onDismissRequest = { pendingWeapon = null },
+            title = {
+                Text(
+                    text = viewModel.t("removeConfirmTitle"),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "${viewModel.t(weapon.nameKey)}. ${viewModel.t("removeConfirmMessage")}",
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingWeapon = null
+                        viewModel.removeWeapon(weapon.id)
+                    },
+                    modifier = Modifier.testTag("shop_weapon_confirm_remove")
+                ) {
+                    Text(
+                        text = viewModel.t("confirmRemove"),
+                        color = WarnBright,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingWeapon = null }) {
+                    Text(text = viewModel.t("cancel"), color = TextAccent)
+                }
+            },
+            containerColor = CardBg,
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
+
+    // Confirmation before removing a defence item.
+    pendingDefence?.let { item ->
+        AlertDialog(
+            onDismissRequest = { pendingDefence = null },
+            title = {
+                Text(
+                    text = viewModel.t("removeConfirmTitle"),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "${viewModel.t(item.nameKey)}. ${viewModel.t("removeConfirmMessage")}",
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDefence = null
+                        viewModel.removeDefence(item.id)
+                    },
+                    modifier = Modifier.testTag("shop_defence_confirm_remove")
+                ) {
+                    Text(
+                        text = viewModel.t("confirmRemove"),
+                        color = WarnBright,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDefence = null }) {
+                    Text(text = viewModel.t("cancel"), color = TextAccent)
+                }
+            },
+            containerColor = CardBg,
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
+
+    // Confirmation before removing an extension.
+    pendingExtension?.let { extension ->
+        AlertDialog(
+            onDismissRequest = { pendingExtension = null },
+            title = {
+                Text(
+                    text = viewModel.t("removeConfirmTitle"),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "${viewModel.t(extension.nameKey)}. ${viewModel.t("removeConfirmMessage")}",
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingExtension = null
+                        viewModel.removeExtension(extension.id)
+                    },
+                    modifier = Modifier.testTag("shop_extension_confirm_remove")
+                ) {
+                    Text(
+                        text = viewModel.t("confirmRemove"),
+                        color = WarnBright,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingExtension = null }) {
+                    Text(text = viewModel.t("cancel"), color = TextAccent)
+                }
+            },
+            containerColor = CardBg,
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
+}
+
+/** "You've total 5 medikits, 10 glue walls, 2 covers." */
+private fun defenceTotalsText(viewModel: GameViewModel, inventory: Inventory): String {
+    val medkits = "${inventory.medikits} ${viewModel.t("medkitsPlural")}"
+    val glueWalls = "${inventory.glueWalls} ${viewModel.t("glueWallsPlural")}"
+    val covers = "${inventory.covers} ${viewModel.t("coversPlural")}"
+    return "${viewModel.t("youHaveTotal")} $medkits, $glueWalls, $covers."
+}
+
+@Composable
+private fun DefenceRow(
+    viewModel: GameViewModel,
+    item: DefenceItem,
+    inventory: Inventory,
+    onRemove: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "${viewModel.t(item.nameKey)}, ${item.price} ${viewModel.t("coins")}.",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = viewModel.t(item.descriptionKey),
+            fontSize = 14.sp,
+            color = TextMuted,
+            lineHeight = 20.sp
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "${viewModel.t("owned")}: ${inventory.count(item)}",
+            fontSize = 14.sp,
+            color = WarnBright,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            GameButton(
+                text = viewModel.t("buy"),
+                onClick = { viewModel.buyDefence(item.id) },
+                type = ButtonType.PRIMARY,
+                modifier = Modifier.weight(1f),
+                testTag = "shop_defence_${item.id}_buy"
+            )
+            GameButton(
+                text = viewModel.t("remove"),
+                onClick = onRemove,
+                type = ButtonType.DANGER,
+                modifier = Modifier.weight(1f),
+                testTag = "shop_defence_${item.id}_remove",
+                enabled = inventory.count(item) > 0
+            )
+        }
+    }
+}
+
+@Composable
+private fun ShopItemRow(
+    title: String,
+    detail: String,
+    owned: Boolean,
+    buyLabel: String,
+    removeLabel: String,
+    onBuy: () -> Unit,
+    onRemove: () -> Unit,
+    testTagPrefix: String
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = title,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = detail,
+            fontSize = 14.sp,
+            color = TextMuted,
+            lineHeight = 20.sp
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        if (owned) {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                GameButton(
+                    text = removeLabel,
+                    onClick = onRemove,
+                    type = ButtonType.DANGER,
+                    testTag = "${testTagPrefix}_remove"
+                )
+            }
+        } else {
+            GameButton(
+                text = buyLabel,
+                onClick = onBuy,
+                type = ButtonType.PRIMARY,
+                testTag = "${testTagPrefix}_buy"
+            )
+        }
+    }
+}
+
