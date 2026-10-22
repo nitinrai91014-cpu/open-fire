@@ -353,6 +353,36 @@ fun AboutScreen(viewModel: GameViewModel) {
                 color = TextAccent,
                 fontWeight = FontWeight.Bold
             )
+            Spacer(modifier = Modifier.height(14.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(CardBorder)
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = viewModel.t("specialSupport"),
+                fontSize = 14.sp,
+                color = TextAccent,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = viewModel.t("specialSupportName"),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                modifier = Modifier.testTag("about_special_support_name")
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = viewModel.t("builtInNepal"),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                modifier = Modifier.testTag("about_built_in_nepal")
+            )
         }
 
         Spacer(modifier = Modifier.height(14.dp))
@@ -405,10 +435,48 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "Version 2.0 (Current)",
+                text = "Version 2.1 (Current)",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = WarnBright
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            val v21Notes = listOf(
+                "Sound design: a knife or a sword that misses plays its own miss sound, and every hit mixes the weapon sound (knife-hit, sword-hit or gun-hit) with the sound of the fighter that was hit (enemy-hit or player-hit).",
+                "Barriers: the glue wall now plays glue-sound when raised, glue-hit when it is hit and glue-wall-crack when it breaks. The cover plays cover, cover-hit and cover-crack. The airplane menu mixes the airplane sound with the airplane engine.",
+                "The battle screen now starts in complete silence: the instructive message is no longer spoken when the game screen opens.",
+                "New weapon power table, as a percentage of health at 90 to 100 percent: knife 15, sword 20, assault gun 18, pistol 22, sniper rifle 25 and short gun 10, which becomes 18 at 90 to 100 percent. Robert uses exactly the same table.",
+                "New prices: knife 300 coins, sword 405 coins, pistol 499 coins and sniper rifle 549 coins.",
+                "A cover now stops only 11 hits and breaks on the 12th.",
+                "The quick menu item Play was replaced by Recover, which repairs every damaged weapon for 100 coins instead of 300.",
+                "While the weapon in your hands is damaged, Robert closes in to the 90 to 100 percent band and fires continuously until you switch to a working weapon or pay for Recovery.",
+                "Robert now randomly prefers to fight either from the 40 to 70 percent band or from the 90 to 100 percent band, and once in a while he fires one or two shots from the 0 to 40 percent band, which always miss, to confuse you.",
+                "About screen: special support in testing management head, Rajip Ghatani, and built and maintained in Nepal."
+            )
+            v21Notes.forEach { note ->
+                Text(
+                    text = "• $note",
+                    fontSize = 14.sp,
+                    color = Color.White,
+                    lineHeight = 20.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(CardBorder)
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Text(
+                text = "Version 2.0",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextAccent
             )
             Spacer(modifier = Modifier.height(8.dp))
             val v20Notes = listOf(

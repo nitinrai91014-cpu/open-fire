@@ -12,6 +12,7 @@ import com.blindtechnexus.openfire.model.BattleMenuItem
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
+import com.blindtechnexus.openfire.model.FireRange
 import com.blindtechnexus.openfire.model.GameAction
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameState
@@ -34,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -92,9 +94,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         get() = RobertRules.profile(_stats.value.round)
 
     private companion object {
-        /** The Robert holds this distance once it reaches the player. */
-        const val ENGAGE_DISTANCE = 2f
-
         /** Fast retreat: metres gained per flee tick. */
         const val FLEE_STEP = 6f
         const val FLEE_TICK_MS = 160L
@@ -110,6 +109,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         /** Health percentage considered the "last stage" for automatic defences. */
         const val LAST_STAGE_FRACTION = 0.20f
+
+        /** Robert stops walking once he is this close to his band distance. */
+        const val BAND_TOLERANCE_M = 1.5f
+
+        /**
+         * Pressure mode. While the weapon in the player's hands is damaged the
+         * Robert closes in faster and fires almost continuously from the
+         * 90%-100% band until a working weapon is used or Recovery is paid.
+         */
+        const val PRESSURE_SPEED_FACTOR = 1.6f
+        const val PRESSURE_ADVANCE_TICK_MS = 320L
+        const val PRESSURE_FIRE_MIN_MS = 620L
+        const val PRESSURE_FIRE_JITTER_MS = 380L
+
+        /** Airplane menu: the cabin sound and the engine sound are mixed. */
+        const val AIRPLANE_VOLUME = 0.45f
+        const val AIRPLANE_ENGINE_VOLUME = 0.32f
     }
 
     init {
@@ -253,11 +269,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     "${t("needWin")} ${_stats.value.needWinsForNext}. ${coinsSpeech()}. " +
                     "${profileInventorySpeech()}"
             )
-            Screen.ABOUT -> speak("${t("aboutTitle")}. ${t("developed")}. ${t("version")}")
+            Screen.ABOUT -> speak(
+                "${t("aboutTitle")}. ${t("developed")}. " +
+                    "${t("specialSupport")}: ${t("specialSupportName")}. " +
+                    "${t("builtInNepal")} ${t("version")}"
+            )
             Screen.CHANGELOG -> speak(t("changelogTitle"))
             Screen.MENU -> speak(t("mainMenu"))
             Screen.READER -> speak("${t("readerMsg")} ${t("readerUp")}. ${t("readerDown")}.")
-            Screen.BATTLE -> speakBattleMenu()
+            // The battle screen starts silently: no instructive message is
+            // spoken when the game screen opens.
             else -> {}
         }
     }
@@ -274,11 +295,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             Screen.JUMP -> {
                 audioManager.stopMusic()
                 audioManager.stopScreenAudio()
-                audioManager.playLoop("airplane", volume = 0.45f)
+                startAirplaneAudio()
             }
             Screen.PARA -> {
                 audioManager.stopMusic()
-                audioManager.stopSound("airplane")
+                stopAirplaneAudio()
                 audioManager.playSound("parachute")
             }
             Screen.LAND -> {
@@ -297,12 +318,26 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * The airplane menu mixes two loops: the cabin ambience and the engine.
+     * Both are managed MediaPlayer tracks, so they run at the same time.
+     */
+    private fun startAirplaneAudio() {
+        audioManager.playLoop("airplane", volume = AIRPLANE_VOLUME)
+        audioManager.playLoop("airplaneEngine", volume = AIRPLANE_ENGINE_VOLUME)
+    }
+
+    private fun stopAirplaneAudio() {
+        audioManager.stopSound("airplane")
+        audioManager.stopSound("airplaneEngine")
+    }
+
     fun onAppResumed() {
         foreground = true
         when (_currentScreen.value) {
             Screen.WELCOME, Screen.MENU, Screen.SETTINGS, Screen.GUIDE, Screen.PROFILE,
             Screen.SHOP, Screen.ABOUT, Screen.CHANGELOG, Screen.READER -> audioManager.startMusic()
-            Screen.JUMP -> audioManager.playLoop("airplane", volume = 0.45f)
+            Screen.JUMP -> startAirplaneAudio()
             Screen.BATTLE -> {
                 val state = _gameState.value
                 updateWalkAudio(state.distance, state.robertFleeing)
@@ -310,7 +345,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     startRobertFireLoop(1200L)
                     val needsMovement = state.robertState == "retreat" ||
                         state.robertState == "flank" ||
-                        (state.robertState == "advance" && state.distance > ENGAGE_DISTANCE)
+                        (
+                            state.robertState == "advance" &&
+                                abs(state.distance - robertTargetDistance(state)) > BAND_TOLERANCE_M
+                            )
                     if (needsMovement) {
                         planRobertStep(400L)
                     }
@@ -465,7 +503,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun doJump() {
         stopTimers()
-        audioManager.stopSound("airplane")
+        stopAirplaneAudio()
         ttsManager.stop()
         playSound("jump")
         _gameState.update { it.copy(log = t("paraMsg")) }
@@ -491,7 +529,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _gameState.update { it.copy(log = t("aim")) }
         _currentScreen.value = Screen.BATTLE
         updateAudioForScreen(Screen.BATTLE)
-        speak("${t("aim")} ${t("menuHint")}")
+        // Nothing is spoken when the game screen starts. The hint stays on
+        // screen only, so the battle always begins in silence.
         planRobertStep(1300L)
         startRobertFireLoop(2600L)
     }
@@ -541,6 +580,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertDefenceArmed = true,
             robertConsecutiveHits = 0,
             robertState = "advance",
+            robertFireRange = RobertRules.preferredRange(Random).id,
+            robertDeceptionShots = 0,
             robertHits = 0,
             robertShots = 0,
             robertDamage = 0,
@@ -548,7 +589,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerHits = 0,
             consecutiveHeavyHits = 0,
             playerSecondChanceUsed = false,
-            menuIndex = BattleMenuItem.PLAY_INDEX,
+            menuIndex = BattleMenuItem.RECOVER_INDEX,
             menuActive = false,
             pendingPurchaseId = null,
             log = t("ready"),
@@ -582,12 +623,52 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * True while the weapon in the player's hands is damaged. Robert answers
+     * that by closing in to the 90%-100% band and firing continuously, until
+     * the player switches to a working weapon or pays for Recovery.
+     */
+    private fun isPlayerWeaponLocked(state: GameState): Boolean = state.activeWeaponDamaged
+
+    /** The band Robert holds right now, including the forced point blank ones. */
+    private fun currentFireRange(state: GameState): FireRange = RobertRules.fireRangeFor(
+        stored = state.robertRange,
+        playerWeaponDamaged = isPlayerWeaponLocked(state),
+        playerGlueWallActive = state.glueWallActive
+    )
+
+    /** The arena distance Robert is walking to for his current band. */
+    private fun robertTargetDistance(state: GameState): Float =
+        currentFireRange(state).targetDistance
+
+    /**
+     * Picks the band Robert fights from next. He randomly prefers either the
+     * 40%-70% band or the 90%-100% band, and once in a while he goes to the
+     * 0%-40% band instead to fire one or two shots that always miss, purely
+     * to confuse the real player.
+     */
+    private fun rollRobertFireRange(allowDeception: Boolean) {
+        val deception = allowDeception && RobertRules.shouldStartDeception(Random)
+        val range = if (deception) FireRange.FAR else RobertRules.preferredRange(Random)
+        val shots = if (deception) RobertRules.deceptionShots(Random) else 0
+        _gameState.update {
+            it.copy(robertFireRange = range.id, robertDeceptionShots = shots)
+        }
+    }
+
     private fun robertStep() {
         if (!foreground || _currentScreen.value != Screen.BATTLE) return
         val state = _gameState.value
         if (state.robertHp <= 0 || state.playerHp <= 0) return
 
-        when (state.robertState) {
+        // A damaged weapon in the player's hands stops every retreat: Robert
+        // turns around and walks straight back to point blank.
+        val pressure = isPlayerWeaponLocked(state)
+        if (pressure && state.robertState != "advance") {
+            _gameState.update { it.copy(robertState = "advance") }
+        }
+
+        when (_gameState.value.robertState) {
             "retreat" -> {
                 val newDist = (state.distance + FLEE_STEP).coerceAtMost(Combat.MAX_RANGE)
                 if (newDist >= Combat.MAX_RANGE) {
@@ -601,14 +682,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             "flank" -> {
+                val target = robertTargetDistance(_gameState.value)
                 val speed = 4.5f + _stats.value.round * 0.35f
-                val newDist = max(ENGAGE_DISTANCE, state.distance - speed)
-                if (newDist <= ENGAGE_DISTANCE) {
+                val newDist = max(target, state.distance - speed)
+                if (newDist <= target + BAND_TOLERANCE_M) {
                     _gameState.update {
-                        it.copy(distance = ENGAGE_DISTANCE, robertState = "advance")
+                        it.copy(distance = target, robertState = "advance")
                     }
-                    playSound("jump", posX = 35f, posZ = -ENGAGE_DISTANCE)
-                    updateWalkAudio(ENGAGE_DISTANCE, fleeing = false)
+                    playSound("jump", posX = 35f, posZ = -target)
+                    updateWalkAudio(target, fleeing = false)
                     msg(t("devilFlank"))
                 } else {
                     _gameState.update { it.copy(distance = newDist) }
@@ -617,18 +699,27 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             else -> {
-                if (state.distance > ENGAGE_DISTANCE) {
-                    val prox = Combat.proximityOf(state.distance) / 100f
-                    val speed = 2.0f + prox * 4.0f + _stats.value.round * 0.25f
-                    val newDist = max(ENGAGE_DISTANCE, state.distance - speed)
+                val current = _gameState.value
+                val target = robertTargetDistance(current)
+                val delta = current.distance - target
+                if (abs(delta) > BAND_TOLERANCE_M) {
+                    val prox = Combat.proximityOf(current.distance) / 100f
+                    val speed = (2.0f + prox * 4.0f + _stats.value.round * 0.25f) *
+                        if (pressure) PRESSURE_SPEED_FACTOR else 1f
+                    val move = min(abs(delta), speed)
+                    val newDist = if (delta > 0f) {
+                        current.distance - move
+                    } else {
+                        current.distance + move
+                    }
                     _gameState.update { it.copy(distance = newDist) }
-                    updateWalkAudio(newDist, fleeing = false)
+                    updateWalkAudio(newDist, fleeing = delta < 0f)
                     if (Random.nextFloat() < 0.10f) {
                         playSound("jump", volume = 0.55f, posZ = -newDist)
                     }
-                    planRobertStep(ADVANCE_TICK_MS)
+                    planRobertStep(if (pressure) PRESSURE_ADVANCE_TICK_MS else ADVANCE_TICK_MS)
                 } else {
-                    updateWalkAudio(ENGAGE_DISTANCE, fleeing = false)
+                    updateWalkAudio(current.distance, fleeing = false)
                 }
             }
         }
@@ -655,6 +746,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun robertFireInterval(): Long {
+        // While the player's weapon is damaged Robert fires continuously.
+        if (isPlayerWeaponLocked(_gameState.value)) {
+            return PRESSURE_FIRE_MIN_MS + Random.nextLong(0, PRESSURE_FIRE_JITTER_MS)
+        }
         val base = (3000L - _stats.value.round * 220L).coerceIn(1500L, 3000L)
         return base + Random.nextLong(0, 600)
     }
@@ -723,6 +818,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         state = _gameState.value
 
+        // The 0%-40% deception band is only held for one or two shots; every
+        // one of them misses on purpose, then Robert picks a real band again.
+        if (currentFireRange(state) == FireRange.FAR && state.robertDeceptionShots > 0) {
+            val shotsLeft = state.robertDeceptionShots - 1
+            _gameState.update { it.copy(robertDeceptionShots = shotsLeft) }
+            if (shotsLeft <= 0) {
+                rollRobertFireRange(allowDeception = false)
+            }
+        }
+
         val proxPercent = Combat.proximityOf(state.distance)
         val zone = Combat.zoneFor(proxPercent)
 
@@ -738,13 +843,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val breaks = Combat.canBreakGlueWall(chosen, proxPercent)
             val progress = if (breaks) state.glueWallProgress + 1 else 0
             _gameState.update { it.copy(glueWallProgress = progress) }
-            playSound("glueWallHit", volume = 0.9f)
-            if (breaks) playSound("glueCrack", volume = 0.8f)
+            playSound("glueHit", volume = 0.9f)
+            if (breaks) playSound("glueWallCrack", volume = 0.8f)
             if (progress >= Combat.GLUE_WALL_BREAK_HITS) {
                 _gameState.update {
                     it.copy(glueWallActive = false, glueWallProgress = 0)
                 }
-                playSound("glueCrack", volume = 1.0f)
+                playSound("glueWallCrack", volume = 1.0f)
                 msg(t("glueWallDown"))
             } else {
                 val progressText = if (breaks) {
@@ -757,9 +862,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // The player's cover stops sixteen hits and breaks on the seventeenth.
+        // The player's cover stops eleven hits and breaks on the twelfth.
         if (state.coverActive) {
-            // The first sixteen hits are absorbed; the seventeenth breaks it.
+            // The first eleven hits are absorbed; the twelfth breaks it.
             val hits = state.coverHits + 1
             if (hits > Combat.COVER_MAX_HITS) {
                 _gameState.update { it.copy(coverActive = false, coverHits = 0) }
@@ -773,7 +878,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        var dealt = Combat.damageFor(RobertRules.powerFor(chosen), proxPercent)
+        // The Robert uses exactly the same power table as the player.
+        var dealt = Combat.weaponDamage(chosen, proxPercent, state.playerMaxHp)
         // While the quick menu is open every hit costs only 2 health.
         if (state.menuActive) dealt = min(2, dealt)
 
@@ -799,14 +905,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
 
+        // The weapon's own hit sound is always mixed with the sound of the
+        // fighter that was hit: here the player, so player-hit.
         playSound(chosen.hitSoundKey, volume = 1.0f)
-        playSound("damage", volume = 1.0f)
+        playSound("playerHit", volume = 1.0f)
 
         val hitHead = if (zone == HitZone.HEAVY) t("youWereHit") else t("youWereGrazed")
         var text = "$hitHead ${t(chosen.nameKey)}. ${t("hitFor")} $dealt. " +
             "${t("yourHealth")} $newPlayerHp."
         if (brokeWeapon) {
-            text += " ${t("gunDamaged")} ${t("recovery")}. ${t("coins")}: ${Combat.GUN_RECOVERY_COST}."
+            text += " ${t("gunDamaged")} ${t("recovery")}. " +
+                "${t("coins")}: ${Combat.GUN_RECOVERY_COST}. ${t("robertPressing")}"
         }
 
         if (newPlayerHp <= 0) {
@@ -899,6 +1008,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _gameState.update {
                 it.copy(robertState = "retreat", robertConsecutiveHits = 0)
             }
+            // He picks a new firing band for the way back, and sometimes that
+            // band is the confusing 0%-40% one.
+            rollRobertFireRange(allowDeception = true)
             playSound("jump", posZ = -state.distance)
             planRobertStep(120L)
             return " ${t("robertFled")}"
@@ -1033,13 +1145,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val breaks = Combat.canBreakGlueWall(weapon, proxPercent)
             val progress = if (breaks) state.robertGlueWallProgress + 1 else 0
             _gameState.update { it.copy(robertGlueWallProgress = progress) }
-            playSound("glueWallHit", volume = 0.9f)
-            if (breaks) playSound("glueCrack", volume = 0.8f)
+            playSound("glueHit", volume = 0.9f)
+            if (breaks) playSound("glueWallCrack", volume = 0.8f)
             if (progress >= Combat.GLUE_WALL_BREAK_HITS) {
                 _gameState.update {
                     it.copy(robertGlueWallActive = false, robertGlueWallProgress = 0)
                 }
-                playSound("glueCrack")
+                playSound("glueWallCrack")
                 msg(t("robertGlueDown"))
             } else if (breaks) {
                 msg("${t("robertGlueCrack")} ${t("glueWallBreaks")} $progress.")
@@ -1050,7 +1162,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Robert's cover: sixteen hits, broken on the seventeenth.
+        // Robert's cover: eleven hits, broken on the twelfth.
         if (state.robertCoverActive) {
             val hits = state.robertCoverHits + 1
             if (hits > Combat.COVER_MAX_HITS) {
@@ -1066,7 +1178,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val damage = Combat.damageFor(weapon.power, proxPercent)
+        val damage = Combat.weaponDamage(weapon, proxPercent, state.robertMaxHp)
         val newRobertHp = max(0, state.robertHp - damage)
         _gameState.update {
             it.copy(
@@ -1193,12 +1305,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             ""
         }
+        // Moving from a broken weapon to a working one ends Robert's pressure.
+        val pressureNote = if (state.activeWeaponDamaged && !_gameState.value.activeWeaponDamaged) {
+            " ${t("robertPressureOver")}"
+        } else {
+            ""
+        }
         val ammoNote = if (weapon.needsReload) {
             " ${t("ammo")} ${_gameState.value.activeAmmo}."
         } else {
             ""
         }
-        msg("${t("switchedTo")} ${t(weapon.nameKey)}.$ammoNote$damagedNote")
+        msg("${t("switchedTo")} ${t(weapon.nameKey)}.$ammoNote$damagedNote$pressureNote")
     }
 
     private fun rememberWeapon(weapon: Weapon) {
@@ -1233,7 +1351,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // Quick menu and defences
     // ---------------------------------------------------------------------
 
-    /** Cycles the quick menu: medikit, cover, glue wall, exit, play. */
+    /** Cycles the quick menu: medikit, cover, glue wall, exit, recover. */
     fun cycleMenu(direction: Int) {
         if (_currentScreen.value != Screen.BATTLE) return
         markExplicitAction()
@@ -1255,7 +1373,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 speak("${t("menuNow")}: ${t(defence.nameKey)}. $count.")
             }
             BattleMenuItem.EXIT -> speak("${t("menuNow")}: ${t("exitGame")}.")
-            BattleMenuItem.PLAY -> speak("${t("menuNow")}: ${t("playState")}.")
+            BattleMenuItem.RECOVER -> speak(
+                "${t("menuNow")}: ${t("recoverWeapon")}. " +
+                    "${Combat.GUN_RECOVERY_COST} ${t("coins")}."
+            )
         }
     }
 
@@ -1274,10 +1395,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 useDefenceFromMenu(defence)
             }
             BattleMenuItem.EXIT -> exitBattle()
-            BattleMenuItem.PLAY -> {
-                _gameState.update { it.copy(menuActive = false, pendingPurchaseId = null) }
-                playSound("click")
-                speak(t("alreadyPlaying"))
+            BattleMenuItem.RECOVER -> {
+                // Recovery replaces the old "play" item and costs 100 coins.
+                recoverGun()
+                resetMenuSelection()
             }
         }
     }
@@ -1288,7 +1409,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _gameState.update { it.copy(pendingPurchaseId = null) }
             val spoken = useDefence(defence)
             if (spoken != null) msg(spoken)
-            backToPlayState()
+            resetMenuSelection()
             return
         }
 
@@ -1311,7 +1432,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val text = "${t(defence.nameKey)} ${t("itemAutoActivated")}" +
                 (spoken?.let { " $it" } ?: "")
             msg(text)
-            backToPlayState()
+            resetMenuSelection()
         } else {
             _gameState.update { it.copy(pendingPurchaseId = defence.id, menuActive = true) }
             playSound("ammo")
@@ -1320,9 +1441,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun backToPlayState() {
+    /** Puts the quick menu back on its safe default item. */
+    private fun resetMenuSelection() {
         _gameState.update {
-            it.copy(menuIndex = BattleMenuItem.PLAY_INDEX, menuActive = false)
+            it.copy(
+                menuIndex = BattleMenuItem.RECOVER_INDEX,
+                menuActive = false,
+                pendingPurchaseId = null
+            )
         }
     }
 

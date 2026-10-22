@@ -1,5 +1,7 @@
 package com.blindtechnexus.openfire.model
 
+import kotlin.random.Random
+
 /**
  * The Robert is the enemy of Open Fire. Its health, its survival items, its
  * weapons and its fleeing behaviour all scale with the current round:
@@ -27,11 +29,14 @@ object RobertRules {
     /** The Robert starts using its defences once its health drops below this. */
     const val DEFENCE_THRESHOLD_HP = 60
 
-    /** The Robert's short gun is stronger than the player's. */
-    const val ROBERT_SHORT_GUN_POWER = 10
-
     /** The Robert's sniper is usable under this health while it is locked. */
     const val LOCKED_SNIPER_MAX_HP = 100
+
+    /**
+     * Chance that a relocation is not a real attack position but a deception
+     * trip into the 0%-40% band, where every shot misses on purpose.
+     */
+    const val DECEPTION_CHANCE = 0.22f
 
     /** Round health ladder. Any round outside 1..5 falls back to round 1. */
     fun hpForRound(round: Int): Int = when (round) {
@@ -81,9 +86,49 @@ object RobertRules {
         }
     }
 
-    /** Power of a Robert weapon (its short gun hits for 10 instead of 6). */
-    fun powerFor(weapon: Weapon): Int =
-        if (weapon == Weapon.SHORT_GUN) ROBERT_SHORT_GUN_POWER else weapon.power
+    /**
+     * Power of a Robert weapon. The Robert uses exactly the same power table
+     * as the player, including the short gun boost to 18% at 90%-100%
+     * proximity.
+     */
+    fun powerFor(weapon: Weapon, proximityPercent: Float): Int =
+        Combat.powerPercentOf(weapon, proximityPercent)
+
+    // ------------------------------------------------------------------
+    // Where the Robert prefers to fire from
+    // ------------------------------------------------------------------
+
+    /**
+     * The two bands the Robert really fights from: 40%-70% or 90%-100%.
+     * He picks one of them at random every time he relocates.
+     */
+    fun preferredRange(random: Random): FireRange =
+        if (random.nextBoolean()) FireRange.MID else FireRange.CLOSE
+
+    /** True when the next relocation should be a confusing 0%-40% trip. */
+    fun shouldStartDeception(random: Random): Boolean =
+        random.nextFloat() < DECEPTION_CHANCE
+
+    /** How many useless shots he fires from the 0%-40% band: one or two. */
+    fun deceptionShots(random: Random): Int = 1 + random.nextInt(2)
+
+    /**
+     * The band the Robert holds right now.
+     *
+     * Two situations always pull him to point blank (90%-100%):
+     *  - the weapon in the player's hands is damaged, so he closes in and
+     *    keeps firing until a working weapon is used or Recovery is paid;
+     *  - the player raised a glue wall, which only breaks from 90%-100%.
+     */
+    fun fireRangeFor(
+        stored: FireRange,
+        playerWeaponDamaged: Boolean,
+        playerGlueWallActive: Boolean
+    ): FireRange = when {
+        playerWeaponDamaged -> FireRange.CLOSE
+        playerGlueWallActive -> FireRange.CLOSE
+        else -> stored
+    }
 
     /**
      * The sniper rifle is locked in rounds one and two. While locked it can

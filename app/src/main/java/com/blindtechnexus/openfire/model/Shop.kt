@@ -6,14 +6,24 @@ package com.blindtechnexus.openfire.model
  * A weapon owns its damage power, its magazine size and the sound effects
  * that belong to it. Melee weapons (knife and sword) never reload, but they
  * can still be damaged by three consecutive point-blank hits, exactly like
- * firearms. The Robert (the enemy) uses the same table, with its own short gun
- * power handled by [RobertRules].
+ * firearms.
+ *
+ * Power table (percentage of the victim's maximum health at 90%-100%
+ * proximity, before the zone multiplier): knife 15, sword 20, assault gun 18,
+ * pistol 22, sniper rifle 25 and short gun 10. The short gun is the only
+ * exception: at 90%-100% proximity it hits with 18 instead of 10, see
+ * [Combat.SHORT_GUN_CLOSE_POWER_PERCENT]. The Robert (the enemy) uses exactly
+ * the same table.
+ *
+ * Every weapon hit also plays the sound of the fighter that was hit: the
+ * weapon's own hit sound (knife-hit, sword-hit or gun-hit) is always mixed
+ * with enemy-hit or player-hit.
  */
 enum class Weapon(
     val id: String,
     val nameKey: String,
-    /** Damage at 90%-100% proximity, before the zone multiplier. */
-    val power: Int,
+    /** Damage in percent of the victim's health at 90%-100% proximity. */
+    val powerPercent: Int,
     /** Rounds in a full magazine. Melee weapons use 0. */
     val magazine: Int,
     /** Shop price. 0 = never sold, the weapon is received by default. */
@@ -28,61 +38,61 @@ enum class Weapon(
     SHORT_GUN(
         id = "shortGun",
         nameKey = "gunShotgun",
-        power = 6,
+        powerPercent = 10,
         magazine = 6,
         price = 0,
         ownedByDefault = true,
         melee = false,
         fireSoundKey = "shortGun",
         switchSoundKey = "gunReload",
-        hitSoundKey = "hit",
+        hitSoundKey = "gunHit",
         missSoundKey = "fire"
     ),
     ASSAULT_GUN(
         id = "assaultGun",
         nameKey = "gunAssault",
-        power = 10,
+        powerPercent = 18,
         magazine = 6,
         price = 0,
         ownedByDefault = true,
         melee = false,
         fireSoundKey = "assault",
         switchSoundKey = "gunReload",
-        hitSoundKey = "hit",
+        hitSoundKey = "gunHit",
         missSoundKey = "fire"
     ),
     PISTOL(
         id = "pistol",
         nameKey = "gunPistol",
-        power = 15,
+        powerPercent = 22,
         magazine = 6,
-        price = 200,
+        price = 499,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "pistol",
         switchSoundKey = "gunReload",
-        hitSoundKey = "hit",
+        hitSoundKey = "gunHit",
         missSoundKey = "fire"
     ),
     SNIPER(
         id = "sniper",
         nameKey = "gunSniper",
-        power = 9,
+        powerPercent = 25,
         magazine = 6,
-        price = 300,
+        price = 549,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "sniperRifle",
         switchSoundKey = "gunReload",
-        hitSoundKey = "hit",
+        hitSoundKey = "gunHit",
         missSoundKey = "fire"
     ),
     KNIFE(
         id = "knife",
         nameKey = "gunKnife",
-        power = 8,
+        powerPercent = 15,
         magazine = 0,
-        price = 250,
+        price = 300,
         ownedByDefault = false,
         melee = true,
         fireSoundKey = "knifeSwish",
@@ -93,9 +103,9 @@ enum class Weapon(
     SWORD(
         id = "sword",
         nameKey = "gunSword",
-        power = 12,
+        powerPercent = 20,
         magazine = 0,
-        price = 340,
+        price = 405,
         ownedByDefault = false,
         melee = true,
         fireSoundKey = "swordGlide",

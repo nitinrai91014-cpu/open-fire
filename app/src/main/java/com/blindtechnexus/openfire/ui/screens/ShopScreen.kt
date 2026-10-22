@@ -118,7 +118,7 @@ fun ShopScreen(viewModel: GameViewModel) {
                 val owned = inventory.ownsWeapon(weapon)
                 ShopItemRow(
                     title = "${viewModel.t(weapon.nameKey)}, ${weapon.price} ${viewModel.t("coins")}.",
-                    detail = "${viewModel.t("weaponPower")}: ${weapon.power}. " +
+                    detail = "${viewModel.t("weaponPower")}: ${weapon.powerPercent}%. " +
                         "${viewModel.t("ammo")}: ${weapon.magazine}.",
                     owned = owned,
                     buyLabel = viewModel.t("buy"),

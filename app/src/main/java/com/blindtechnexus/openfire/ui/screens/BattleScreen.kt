@@ -239,7 +239,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                 BattleMenuItem.COVER -> viewModel.t("cover")
                 BattleMenuItem.GLUE_WALL -> viewModel.t("glooWall")
                 BattleMenuItem.EXIT -> viewModel.t("exitGame")
-                BattleMenuItem.PLAY -> viewModel.t("playState")
+                BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
             }
             Text(
                 text = if (menuItem.defence != null) "$menuLabel ($menuCount)" else menuLabel,
@@ -256,7 +256,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                         BattleMenuItem.COVER -> viewModel.t("cover")
                         BattleMenuItem.GLUE_WALL -> viewModel.t("glooWall")
                         BattleMenuItem.EXIT -> viewModel.t("exitGame")
-                        BattleMenuItem.PLAY -> viewModel.t("playState")
+                        BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
                     }
                 },
                 fontSize = 13.sp,

@@ -44,6 +44,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Check sound assets and translations
+        shell: bash
+        run: python3 .github/scripts/check_sound_and_string_consistency.py
+
       - name: Run unit tests
         shell: bash
         run: |

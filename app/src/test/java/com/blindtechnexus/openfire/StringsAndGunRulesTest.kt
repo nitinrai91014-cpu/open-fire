@@ -5,6 +5,7 @@ import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.Weapon
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -50,10 +51,10 @@ class StringsAndGunRulesTest {
 
     @Test
     fun shopCatalogMatchesTheRequestedPrices() {
-        assertEquals(200, Weapon.PISTOL.price)
-        assertEquals(300, Weapon.SNIPER.price)
-        assertEquals(250, Weapon.KNIFE.price)
-        assertEquals(340, Weapon.SWORD.price)
+        assertEquals(300, Weapon.KNIFE.price)
+        assertEquals(405, Weapon.SWORD.price)
+        assertEquals(499, Weapon.PISTOL.price)
+        assertEquals(549, Weapon.SNIPER.price)
         assertEquals(200, DefenceItem.MEDKIT.price)
         assertEquals(400, DefenceItem.GLUE_WALL.price)
         assertEquals(350, DefenceItem.COVER.price)
@@ -85,6 +86,25 @@ class StringsAndGunRulesTest {
         assertTrue("Guide must document the quick menu", en.contains("quick menu"))
         assertTrue("Guide must document the extensions", en.contains("automatic reload for 50 coins"))
         assertTrue("Guide must document the four second wait", en.contains("four seconds"))
+        assertTrue("Guide must document the new power table", en.contains("knife 15 percent"))
+        assertTrue("Guide must document the short gun boost", en.contains("18 percent instead of 10 percent"))
+        assertTrue("Guide must document the new prices", en.contains("knife 300 coins"))
+        assertTrue("Guide must document the 11 hit cover", en.contains("stops 11 hits"))
+        assertTrue("Guide must document the 100 coin recovery", en.contains("100 coins for Recovery"))
+        assertTrue("Guide must document the recover menu item", en.contains("exit and recover"))
+        assertTrue("Guide must document the silent battle start", en.contains("complete silence"))
+        assertTrue("Guide must document the enemy firing bands", en.contains("40 to 70 percent band"))
+    }
+
+    @Test
+    fun theOldPlayItemAndItsTextsAreGone() {
+        // The quick menu item "play" was replaced by Recovery.
+        assertFalse(Strings.availableKeys().contains("playState"))
+        assertFalse(Strings.availableKeys().contains("alreadyPlaying"))
+        for (lang in listOf("en", "hi", "ne")) {
+            assertTrue(Strings.get("recovery", lang).contains("100") || Strings.get("recovery", lang).contains("१००"))
+            assertTrue(Strings.get("defenceCoverInfo", lang).contains("11") || Strings.get("defenceCoverInfo", lang).contains("११"))
+        }
     }
 
     @Test
@@ -104,12 +124,16 @@ class StringsAndGunRulesTest {
             assertTrue(Strings.get("defences", lang).isNotBlank())
             assertTrue(Strings.get("extensions", lang).isNotBlank())
             assertTrue(Strings.get("notEnoughCoins", lang).isNotBlank())
-            assertTrue(Strings.get("playState", lang).isNotBlank())
-            assertTrue(Strings.get("alreadyPlaying", lang).isNotBlank())
+            assertTrue(Strings.get("recoverWeapon", lang).isNotBlank())
+            assertTrue(Strings.get("robertPressing", lang).isNotBlank())
+            assertTrue(Strings.get("robertPressureOver", lang).isNotBlank())
+            assertTrue(Strings.get("specialSupport", lang).isNotBlank())
+            assertTrue(Strings.get("specialSupportName", lang).isNotBlank())
+            assertTrue(Strings.get("builtInNepal", lang).isNotBlank())
             assertTrue(Strings.get("itemMissingTail", lang).isNotBlank())
             assertTrue(Strings.get("robertFled", lang).isNotBlank())
             assertTrue(Strings.get("matchWon", lang).isNotBlank())
-            assertTrue(Strings.get("version", lang).contains("2.0") || Strings.get("version", lang).contains("२.०"))
+            assertTrue(Strings.get("version", lang).contains("2.1") || Strings.get("version", lang).contains("२.१"))
         }
     }
 
