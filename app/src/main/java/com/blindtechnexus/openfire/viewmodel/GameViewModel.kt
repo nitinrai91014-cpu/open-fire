@@ -267,7 +267,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun updateAudioForScreen(screen: Screen) {
         when (screen) {
             Screen.WELCOME, Screen.MENU, Screen.SETTINGS, Screen.GUIDE, Screen.PROFILE,
-            Screen.SHOP, Screen.ABOUT, Screen.CHANGELOG -> {
+            Screen.SHOP, Screen.ABOUT, Screen.CHANGELOG, Screen.READER -> {
                 audioManager.stopScreenAudio()
                 audioManager.startMusic()
             }
@@ -301,7 +301,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         foreground = true
         when (_currentScreen.value) {
             Screen.WELCOME, Screen.MENU, Screen.SETTINGS, Screen.GUIDE, Screen.PROFILE,
-            Screen.SHOP, Screen.ABOUT, Screen.CHANGELOG -> audioManager.startMusic()
+            Screen.SHOP, Screen.ABOUT, Screen.CHANGELOG, Screen.READER -> audioManager.startMusic()
             Screen.JUMP -> audioManager.playLoop("airplane", volume = 0.45f)
             Screen.BATTLE -> {
                 val state = _gameState.value

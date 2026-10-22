@@ -187,7 +187,7 @@ fun ProfileScreen(viewModel: GameViewModel) {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "${inventory.medkits} ${viewModel.t("medkitsPlural")}, " +
+                text = "${inventory.medikits} ${viewModel.t("medkitsPlural")}, " +
                     "${inventory.glueWalls} ${viewModel.t("glueWallsPlural")}, " +
                     "${inventory.covers} ${viewModel.t("coversPlural")}",
                 fontSize = 15.sp,
