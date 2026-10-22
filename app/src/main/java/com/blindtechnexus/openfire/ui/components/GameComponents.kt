@@ -63,7 +63,8 @@ fun GameButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     type: ButtonType = ButtonType.DEFAULT,
-    testTag: String = "game_button"
+    testTag: String = "game_button",
+    enabled: Boolean = true
 ) {
     val bgColor = when (type) {
         ButtonType.PRIMARY -> BtnPrimary
@@ -74,11 +75,16 @@ fun GameButton(
 
     Button(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
             .testTag(testTag),
-        colors = ButtonDefaults.buttonColors(containerColor = bgColor),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = bgColor,
+            disabledContainerColor = Color(0xFF3A4454),
+            disabledContentColor = Color(0xFF9AA5B5)
+        ),
         shape = RoundedCornerShape(10.dp)
     ) {
         Text(

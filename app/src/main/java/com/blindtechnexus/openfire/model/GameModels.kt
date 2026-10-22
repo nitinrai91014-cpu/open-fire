@@ -3,6 +3,7 @@ package com.blindtechnexus.openfire.model
 enum class Screen {
     WELCOME,
     MENU,
+    SHOP,
     GUIDE,
     PROFILE,
     ABOUT,
@@ -16,55 +17,45 @@ enum class Screen {
     RESULT
 }
 
-enum class ControlMode {
-    BUTTONS,
-    GESTURES,
-    BOTH
-}
-
 enum class SoundTheme(val title: String) {
     TACTICAL("Tactical Royale"),
     CYBER("Sci-Fi Cyber Warfare"),
     STEALTH("Night Ops / Stealth")
 }
 
-data class Gun(
+/**
+ * The five items of the in-game quick menu, in the order they are cycled by a
+ * two-finger swipe up or down: Medikit, cover, glue wall, exit and play.
+ */
+enum class BattleMenuItem(
     val nameKey: String,
-    val dmg: Int,
-    val mag: Int,
-    val sound: String
-)
+    val defence: DefenceItem?
+) {
+    MEDKIT("medkit", DefenceItem.MEDKIT),
+    COVER("cover", DefenceItem.COVER),
+    GLUE_WALL("glooWall", DefenceItem.GLUE_WALL),
+    EXIT("exitGame", null),
+    PLAY("playState", null);
 
-// Strict rule: all three guns (pistol, assault rifle, shotgun) hold exactly
-// six bullets. One bullet is consumed per shot; reload is required only after
-// all six bullets of the active gun have been fired.
-val DEFAULT_GUNS = listOf(
-    Gun("gunPistol", 25, 6, "pistol"),
-    Gun("gunRifle", 35, 6, "fire"),
-    Gun("gunShotgun", 50, 6, "shotgun")
-)
+    companion object {
+        val PLAY_INDEX: Int = PLAY.ordinal
 
-fun getHpForLevel(level: Int): Int {
-    return when {
-        level <= 10 -> 200
-        level <= 20 -> 300
-        level <= 25 -> 500
-        else -> 800
+        fun at(index: Int): BattleMenuItem {
+            val size = BattleMenuItem.entries.size
+            return BattleMenuItem.entries[((index % size) + size) % size]
+        }
     }
 }
 
 data class GameSettings(
     val name: String = "",
     val lang: String = "en", // "en", "hi", "ne"
-    val mode: ControlMode = ControlMode.BUTTONS,
     val ttsEnginePackage: String = "",
     val voiceName: String = "",
     val ttsRate: Float = 1.0f,
     val ttsVolume: Float = 1.0f,
     val musicVolume: Float = 0.5f,
     val sfxVolume: Float = 1.0f,
-    val playerMaxHp: Int = 200,
-    val devilMaxHp: Int = 200,
     val soundTheme: SoundTheme = SoundTheme.TACTICAL,
     val hapticsEnabled: Boolean = true
 )
@@ -86,8 +77,8 @@ data class GameStats(
 
     companion object {
         /**
-         * A completely wiped profile: every counter is zero and the level and
-         * round are back to 1, as required by "Clear My Stats".
+         * A completely wiped profile: every counter is zero, the inventory is
+         * empty and level and round are back to 1.
          */
         fun cleared(): GameStats = GameStats(
             games = 0,
@@ -101,51 +92,95 @@ data class GameStats(
     }
 }
 
+/**
+ * Complete, immutable snapshot of a battle.
+ *
+ * Health, weapons, ammo and defences of both fighters live here so the
+ * interface can render the whole battle from one state object.
+ */
 data class GameState(
-    val playerHp: Int = 200,
-    val playerMaxHp: Int = 200,
-    val devilHp: Int = 200,
-    val devilMaxHp: Int = 200,
-    val gunIndex: Int = 0,
-    val ammo: List<Int> = listOf(6, 6, 6),
-    val medkits: Int = 3,
-    val inCover: Boolean = false,
+    val playerHp: Int = 300,
+    val playerMaxHp: Int = 300,
+    val robertHp: Int = 300,
+    val robertMaxHp: Int = 300,
+    val round: Int = 1,
+
+    /** Weapon ids owned for this battle, in switch order. */
+    val weapons: List<String> = Weapon.defaults().map { it.id },
+    val weaponIndex: Int = 0,
+    val ammo: List<Int> = Weapon.defaults().map { it.magazine },
+    /** Which weapons are currently damaged and need Recovery. */
+    val damaged: List<Boolean> = Weapon.defaults().map { false },
+
     val distance: Float = Combat.MAX_RANGE,
-    val devilShots: Int = 0,
-    val devilHits: Int = 0,
-    val devilDamage: Int = 0,
+
+    /** A cover blocks 16 hits; the 17th breaks it. */
+    val coverActive: Boolean = false,
+    val coverHits: Int = 0,
+    /** A glue wall stops everything except three consecutive sniper hits. */
+    val glueWallActive: Boolean = false,
+    val glueWallProgress: Int = 0,
+
+    val robertCoverActive: Boolean = false,
+    val robertCoverHits: Int = 0,
+    val robertGlueWallActive: Boolean = false,
+    val robertGlueWallProgress: Int = 0,
+    val robertWeapons: List<String> = emptyList(),
+    val robertWeaponIndex: Int = 0,
+    val robertAmmo: List<Int> = emptyList(),
+    val robertDamaged: List<Boolean> = emptyList(),
+    val robertMedkits: Int = 0,
+    val robertCovers: Int = 0,
+    val robertGlueWalls: Int = 0,
+    /** True when the Robert may spend its next defence. */
+    val robertDefenceArmed: Boolean = true,
+    val robertConsecutiveHits: Int = 0,
+    val robertState: String = "advance", // "advance", "retreat" (fleeing), "flank"
+    val robertHits: Int = 0,
+    val robertShots: Int = 0,
+    val robertDamage: Int = 0,
     val playerShots: Int = 0,
     val playerHits: Int = 0,
-    val devilCoverHp: Int = 0,
-    val devilCoverMax: Int = 4,
-    val devilCoversLeft: Int = 1,
-    val devilMedkits: Int = 1,
-    val devilState: String = "advance", // "advance", "retreat" (fleeing), "flank"
-    val devilHitsTaken: Int = 0,
-    val devilReactAt: Int = 4,
-    val devilRetreats: Int = 0,
-    val log: String = "",
+    val consecutiveHeavyHits: Int = 0,
+    /** Consecutive point-blank hits the player has landed on Robert. */
+    val playerHeavyHits: Int = 0,
 
-    /** One second chance per fight: health restored to half the maximum. */
+    /** One second chance per fight for the player. */
     val playerSecondChanceUsed: Boolean = false,
-    val devilSecondChanceUsed: Boolean = false,
-    /** Gloo wall, cover and medkit the devil activates after its second chance. */
-    val devilItemsLeft: Int = 0,
-    /** True while the devil still has a high-speed flee available this life. */
-    val devilFleeArmed: Boolean = true,
-    /** Which of the three guns are currently broken and need Recovery. */
-    val damagedGuns: List<Boolean> = listOf(false, false, false),
-    /** Consecutive point-blank (90%-100%) hits the player has taken. */
-    val consecutiveHeavyHits: Int = 0
+
+    /** Index of the highlighted quick-menu item ([BattleMenuItem]). */
+    val menuIndex: Int = BattleMenuItem.PLAY_INDEX,
+    /** True while the player is navigating the menu: hits then cost 2 HP. */
+    val menuActive: Boolean = false,
+    /** Item waiting for the second confirming tap ("Tap again to buy"). */
+    val pendingPurchaseId: String? = null,
+
+    val log: String = "",
+    val matchWon: Boolean = false
 ) {
-    val activeGunDamaged: Boolean
-        get() = damagedGuns.getOrElse(gunIndex) { false }
+    val activeWeapon: Weapon
+        get() = Weapon.fromId(weapons.getOrNull(weaponIndex)) ?: Weapon.SHORT_GUN
 
-    val anyGunDamaged: Boolean
-        get() = damagedGuns.any { it }
+    val activeWeaponDamaged: Boolean
+        get() = damaged.getOrElse(weaponIndex) { false }
 
-    val devilFleeing: Boolean
-        get() = devilState == "retreat"
+    val activeAmmo: Int
+        get() = ammo.getOrElse(weaponIndex) { 0 }
+
+    val anyWeaponDamaged: Boolean
+        get() = damaged.any { it }
+
+    val menuItem: BattleMenuItem
+        get() = BattleMenuItem.at(menuIndex)
+
+    val robertWeapon: Weapon?
+        get() = Weapon.fromId(robertWeapons.getOrNull(robertWeaponIndex))
+
+    val robertAmmoNow: Int
+        get() = robertAmmo.getOrElse(robertWeaponIndex) { 0 }
+
+    val robertFleeing: Boolean
+        get() = robertState == "retreat"
 }
 
 data class ResultData(
@@ -153,10 +188,11 @@ data class ResultData(
     val coins: Int = 0,
     val hits: Int = 0,
     val shots: Int = 0,
-    val devilShots: Int = 0,
+    val robertShots: Int = 0,
     val hp: Int = 0,
     val levelUp: Boolean = false,
     val roundComplete: Boolean = false,
+    val matchWon: Boolean = false,
     val round: Int = 1,
     val level: Int = 1
 )

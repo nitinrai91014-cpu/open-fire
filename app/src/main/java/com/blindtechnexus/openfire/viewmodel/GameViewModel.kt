@@ -1,26 +1,32 @@
 package com.blindtechnexus.openfire.viewmodel
 
 import android.app.Application
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.blindtechnexus.openfire.audio.AudioManager
 import com.blindtechnexus.openfire.audio.TtsManager
 import com.blindtechnexus.openfire.data.PreferencesManager
 import com.blindtechnexus.openfire.data.Strings
+import com.blindtechnexus.openfire.model.BattleMenuItem
 import com.blindtechnexus.openfire.model.Combat
-import com.blindtechnexus.openfire.model.ControlMode
-import com.blindtechnexus.openfire.model.DEFAULT_GUNS
+import com.blindtechnexus.openfire.model.DefenceItem
+import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.GameAction
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.GameStats
 import com.blindtechnexus.openfire.model.GestureRouter
 import com.blindtechnexus.openfire.model.HitZone
+import com.blindtechnexus.openfire.model.Inventory
 import com.blindtechnexus.openfire.model.Progression
 import com.blindtechnexus.openfire.model.ResultData
-import com.blindtechnexus.openfire.model.Revive
+import com.blindtechnexus.openfire.model.RobertProfile
+import com.blindtechnexus.openfire.model.RobertRules
 import com.blindtechnexus.openfire.model.Screen
-import com.blindtechnexus.openfire.model.getHpForLevel
+import com.blindtechnexus.openfire.model.Shop
+import com.blindtechnexus.openfire.model.ShopResult
+import com.blindtechnexus.openfire.model.Weapon
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +50,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _stats = MutableStateFlow(Progression.normalize(prefs.loadStats()))
     val stats: StateFlow<GameStats> = _stats.asStateFlow()
 
+    private val _inventory = MutableStateFlow(prefs.loadInventory())
+    val inventory: StateFlow<Inventory> = _inventory.asStateFlow()
+
     private val _currentScreen = MutableStateFlow(
         if (_settings.value.name.isNotBlank()) Screen.MENU else Screen.WELCOME
     )
@@ -55,9 +64,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val _resultData = MutableStateFlow(ResultData())
     val resultData: StateFlow<ResultData> = _resultData.asStateFlow()
 
+    /** False during the four second pause after a victory or a defeat. */
+    private val _resultReady = MutableStateFlow(true)
+    val resultReady: StateFlow<Boolean> = _resultReady.asStateFlow()
+
     private var stepJob: Job? = null
     private var counterJob: Job? = null
-    private var devilFireJob: Job? = null
+    private var robertFireJob: Job? = null
+    private var resultJob: Job? = null
     private var stepCount = 0
     private var foreground = true
 
@@ -67,8 +81,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** Debounce so one physical tap / swipe can never fire (and spend) more than one bullet. */
     private var lastFireAt = 0L
 
+    /**
+     * Timestamp of the last explicit button / gesture action. A tap that
+     * immediately follows a button press must not also activate the quick
+     * menu, otherwise a Fire or Reload button would trigger two actions.
+     */
+    private var lastExplicitActionAt = 0L
+
+    private val robertProfile: RobertProfile
+        get() = RobertRules.profile(_stats.value.round)
+
     private companion object {
-        /** The devil holds this distance once it reaches the player. */
+        /** The Robert holds this distance once it reaches the player. */
         const val ENGAGE_DISTANCE = 2f
 
         /** Fast retreat: metres gained per flee tick. */
@@ -80,11 +104,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         /** Chance that a hit provokes an immediate counter shot. */
         const val COUNTER_FIRE_CHANCE = 0.25f
+
+        /** Result screen lock-out before another game may start. */
+        const val RESULT_LOCK_MS = 4000L
+
+        /** Health percentage considered the "last stage" for automatic defences. */
+        const val LAST_STAGE_FRACTION = 0.20f
     }
 
     init {
         syncSettingsToManagers(_settings.value)
-        // Make sure the welcome / menu screen starts with music at the saved volume.
         updateAudioForScreen(_currentScreen.value)
     }
 
@@ -93,12 +122,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // ---------------------------------------------------------------------
 
     private fun syncSettingsToManagers(s: GameSettings) {
-        // These are plain user settings; the AudioManager/TtsManager apply
-        // them without ever overwriting them with screen-scaled values.
         audioManager.sfxVolume = s.sfxVolume
         audioManager.musicVolume = s.musicVolume
         audioManager.soundTheme = s.soundTheme
         audioManager.hapticsEnabled = s.hapticsEnabled
+        // Footsteps always follow the voice level at 75%.
+        audioManager.walkVolume = s.ttsVolume * 0.75f
 
         ttsManager.speechRate = s.ttsRate
         ttsManager.speechVolume = s.ttsVolume
@@ -108,10 +137,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             ttsManager.initTts(s.ttsEnginePackage.ifEmpty { null })
             syncedVoiceSignature = null
         } else {
-            // Volume drags update on every frame. Re-applying the voice and
-            // speech rate each time can interrupt the current utterance and
-            // make the TTS level appear to jump, so only do it when a
-            // voice-related setting actually changed.
             val signature = "${s.lang}|${s.voiceName}|${s.ttsRate}|${s.ttsEnginePackage}"
             if (signature != syncedVoiceSignature) {
                 ttsManager.applyVoiceSettings()
@@ -127,12 +152,36 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         ttsManager.speak(text, interrupt = true)
     }
 
+    private fun setLog(text: String) {
+        _gameState.update { it.copy(log = text) }
+    }
+
     fun speak(text: String, interrupt: Boolean = true) {
         ttsManager.speak(text, interrupt)
     }
 
-    fun playSound(key: String, volume: Float = 1.0f, posX: Float = 0f, posY: Float = 0f, posZ: Float = 0f) {
+    fun playSound(
+        key: String,
+        volume: Float = 1.0f,
+        posX: Float = 0f,
+        posY: Float = 0f,
+        posZ: Float = 0f
+    ) {
         audioManager.playSound(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
+    }
+
+    private fun toast(text: String) {
+        try {
+            Toast.makeText(getApplication(), text, Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun notEnoughCoins() {
+        playSound("ammo")
+        val text = t("notEnoughCoins")
+        toast(text)
+        msg(text)
     }
 
     fun submitName(inputName: String) {
@@ -158,11 +207,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         syncSettingsToManagers(newSettings)
     }
 
-    /**
-     * Volume sliders write straight through to the persisted settings, so the
-     * chosen level is used by the very next sound, the next game and after a
-     * restart — it can never fall back to an older, lower value.
-     */
     fun setMusicVolume(volume: Float) {
         updateSettings(_settings.value.copy(musicVolume = volume.coerceIn(0f, 1f)))
     }
@@ -176,10 +220,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setLanguage(lang: String) {
-        val updated = _settings.value.copy(lang = lang)
-        updateSettings(updated)
-        // Keep the TTS voice list aligned with the newly selected language so
-        // only voices that can actually speak it are offered.
+        updateSettings(_settings.value.copy(lang = lang))
         ttsManager.refreshVoices()
     }
 
@@ -189,6 +230,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun navigateTo(screen: Screen) {
         stopTimers()
+        resultJob?.cancel()
+        resultJob = null
+        _resultReady.value = true
         ttsManager.stop()
         audioManager.stopScreenAudio()
         playSound("click")
@@ -202,30 +246,34 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 speak(t("settings"))
             }
             Screen.GUIDE -> speak(t("guideTitle"))
+            Screen.SHOP -> speak("${t("shopTitle")}. ${t("shopSubtitle")}. ${coinsSpeech()}")
             Screen.PROFILE -> speak(
                 "${t("profileTitle")}. ${t("round")} ${_stats.value.round}. " +
-                    "${t("level")} ${_stats.value.level}. ${t("needWin")} ${_stats.value.needWinsForNext}. " +
-                    "${t("coins")} ${_stats.value.coins}."
+                    "${t("level")} ${_stats.value.level}. " +
+                    "${t("needWin")} ${_stats.value.needWinsForNext}. ${coinsSpeech()}. " +
+                    "${profileInventorySpeech()}"
             )
             Screen.ABOUT -> speak("${t("aboutTitle")}. ${t("developed")}. ${t("version")}")
             Screen.CHANGELOG -> speak(t("changelogTitle"))
             Screen.MENU -> speak(t("mainMenu"))
             Screen.READER -> speak("${t("readerMsg")} ${t("readerUp")}. ${t("readerDown")}.")
+            Screen.BATTLE -> speakBattleMenu()
             else -> {}
         }
     }
 
+    private fun coinsSpeech(): String = "${t("coins")} ${_stats.value.coins}."
+
     private fun updateAudioForScreen(screen: Screen) {
         when (screen) {
             Screen.WELCOME, Screen.MENU, Screen.SETTINGS, Screen.GUIDE, Screen.PROFILE,
-            Screen.ABOUT, Screen.CHANGELOG -> {
+            Screen.SHOP, Screen.ABOUT, Screen.CHANGELOG -> {
                 audioManager.stopScreenAudio()
                 audioManager.startMusic()
             }
             Screen.JUMP -> {
                 audioManager.stopMusic()
                 audioManager.stopScreenAudio()
-                // 0.45 is the clip's own base level; the SFX setting is applied once inside AudioManager.
                 audioManager.playLoop("airplane", volume = 0.45f)
             }
             Screen.PARA -> {
@@ -240,37 +288,31 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             Screen.BATTLE -> {
                 audioManager.stopMusic()
                 audioManager.stopScreenAudio()
-                updateWalkAudio(_gameState.value.distance, _gameState.value.devilFleeing)
+                updateWalkAudio(_gameState.value.distance, _gameState.value.robertFleeing)
             }
             Screen.RESULT -> {
                 audioManager.stopMusic()
                 audioManager.stopSound("walk")
             }
-            else -> {
-                audioManager.stopScreenAudio()
-            }
         }
     }
 
-    /** Called by the Activity when the app returns to the foreground. */
     fun onAppResumed() {
         foreground = true
         when (_currentScreen.value) {
             Screen.WELCOME, Screen.MENU, Screen.SETTINGS, Screen.GUIDE, Screen.PROFILE,
-            Screen.ABOUT, Screen.CHANGELOG -> audioManager.startMusic()
+            Screen.SHOP, Screen.ABOUT, Screen.CHANGELOG -> audioManager.startMusic()
             Screen.JUMP -> audioManager.playLoop("airplane", volume = 0.45f)
             Screen.BATTLE -> {
                 val state = _gameState.value
-                updateWalkAudio(state.distance, state.devilFleeing)
-                if (state.playerHp > 0 && state.devilHp > 0) {
-                    // The battle was frozen while hidden: restart both the
-                    // continuous fire loop and the movement state machine.
-                    startDevilFireLoop(1200L)
-                    val needsMovement = state.devilState == "retreat" ||
-                        state.devilState == "flank" ||
-                        (state.devilState == "advance" && state.distance > ENGAGE_DISTANCE)
+                updateWalkAudio(state.distance, state.robertFleeing)
+                if (state.playerHp > 0 && state.robertHp > 0) {
+                    startRobertFireLoop(1200L)
+                    val needsMovement = state.robertState == "retreat" ||
+                        state.robertState == "flank" ||
+                        (state.robertState == "advance" && state.distance > ENGAGE_DISTANCE)
                     if (needsMovement) {
-                        planDevilStep(400L)
+                        planRobertStep(400L)
                     }
                 }
             }
@@ -278,13 +320,112 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Called by the Activity when the app goes to the background. */
     fun onAppPaused() {
         foreground = false
-        // No shooting, walking or TTS may continue while the app is hidden.
         stopTimers()
         audioManager.stopAllSounds()
         ttsManager.stop()
+    }
+
+    // ---------------------------------------------------------------------
+    // Shop
+    // ---------------------------------------------------------------------
+
+    private fun applyPurchase(result: ShopResult, nameKey: String, successKey: String) {
+        if (!result.success) {
+            when (result.reasonKey) {
+                "notEnoughCoins" -> notEnoughCoins()
+                null -> {}
+                else -> msg(t(result.reasonKey))
+            }
+            return
+        }
+        _inventory.value = result.inventory
+        prefs.saveInventory(result.inventory)
+        _stats.value = _stats.value.copy(coins = result.coins)
+        prefs.saveStats(_stats.value)
+        playSound("spend")
+        msg("${t(nameKey)}. ${t(successKey)}")
+    }
+
+    fun buyWeapon(weaponId: String) {
+        val weapon = Weapon.fromId(weaponId) ?: return
+        applyPurchase(
+            Shop.buyWeapon(_inventory.value, _stats.value.coins, weapon),
+            weapon.nameKey,
+            "bought"
+        )
+    }
+
+    fun removeWeapon(weaponId: String) {
+        val weapon = Weapon.fromId(weaponId) ?: return
+        applyPurchase(
+            Shop.removeWeapon(_inventory.value, _stats.value.coins, weapon),
+            weapon.nameKey,
+            "removed"
+        )
+    }
+
+    fun buyDefence(itemId: String) {
+        val item = DefenceItem.fromId(itemId) ?: return
+        applyPurchase(
+            Shop.buyDefence(_inventory.value, _stats.value.coins, item),
+            item.nameKey,
+            "bought"
+        )
+    }
+
+    fun buyExtension(extensionId: String) {
+        val extension = Extension.fromId(extensionId) ?: return
+        applyPurchase(
+            Shop.buyExtension(_inventory.value, _stats.value.coins, extension),
+            extension.nameKey,
+            "extensionBought"
+        )
+    }
+
+    fun removeExtension(extensionId: String) {
+        val extension = Extension.fromId(extensionId) ?: return
+        applyPurchase(
+            Shop.removeExtension(_inventory.value, _stats.value.coins, extension),
+            extension.nameKey,
+            "extensionRemoved"
+        )
+    }
+
+    fun toggleExtension(extensionId: String) {
+        val extension = Extension.fromId(extensionId) ?: return
+        val result = Shop.toggleExtension(_inventory.value, _stats.value.coins, extension)
+        if (!result.success) {
+            msg(t(result.reasonKey ?: "notOwned"))
+            return
+        }
+        _inventory.value = result.inventory
+        prefs.saveInventory(result.inventory)
+        playSound("click")
+        val enabled = result.inventory.extensionEnabled(extension)
+        msg(if (enabled) t("extensionEnabledMsg") else t("extensionDisabledMsg"))
+    }
+
+    /** Spoken summary of everything the player owns. */
+    private fun profileInventorySpeech(): String {
+        val inv = _inventory.value
+        val weapons = inv.ownedWeapons().joinToString(", ") { t(it.nameKey) }
+        val extensions = Extension.entries
+            .filter { inv.extensionOwned(it) }
+            .joinToString(", ") { extension ->
+                val state = if (inv.extensionEnabled(extension)) t("enabledState") else t("disabledState")
+                "${t(extension.nameKey)} ${state}"
+            }
+            .ifEmpty { t("noneOwned") }
+        return "${t("profileWeapons")}: $weapons. ${t("profileDefences")}: " +
+            "${inv.medikits} ${t("medkitsPlural")}, ${inv.glueWalls} ${t("glueWallsPlural")}, " +
+            "${inv.covers} ${t("coversPlural")}. ${t("profileExtensions")}: $extensions."
+    }
+
+    fun speakInventory() {
+        if (_currentScreen.value != Screen.BATTLE && _currentScreen.value != Screen.SHOP) return
+        speak(profileInventorySpeech())
     }
 
     // ---------------------------------------------------------------------
@@ -335,68 +476,75 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _gameState.update { it.copy(log = t("aim")) }
         _currentScreen.value = Screen.BATTLE
         updateAudioForScreen(Screen.BATTLE)
-        speak(t("aim"))
-        planDevilStep(1300L)
-        startDevilFireLoop(2600L)
+        speak("${t("aim")} ${t("menuHint")}")
+        planRobertStep(1300L)
+        startRobertFireLoop(2600L)
     }
-
-    private fun devilLoadout(): Pair<Int, Int> {
-        val lv = _stats.value.level
-        return when {
-            lv >= 25 -> Pair(4, 5)
-            lv >= 20 -> Pair(3, 4)
-            lv >= 10 -> Pair(2, 2)
-            else -> Pair(1, 1)
-        }
-    }
-
-    private fun currentMaxHp(): Int = getHpForLevel(_stats.value.level)
 
     private fun resetBattleState() {
         stopTimers()
+        resultJob?.cancel()
+        resultJob = null
+        _resultReady.value = true
         audioManager.stopScreenAudio()
-        val (meds, covers) = devilLoadout()
-        val equalHp = currentMaxHp()
         stepCount = 0
         lastFireAt = 0L
 
+        val round = _stats.value.round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
+        val profile = RobertRules.profile(round)
+        val hp = RobertRules.hpForRound(round)
+        val owned = _inventory.value.ownedWeapons().ifEmpty { Weapon.defaults() }
+        val starting = _inventory.value.startingWeapon()
+        val startIndex = owned.indexOfFirst { it.id == starting.id }.coerceAtLeast(0)
+
         _gameState.value = GameState(
-            playerHp = equalHp,
-            playerMaxHp = equalHp,
-            devilHp = equalHp,
-            devilMaxHp = equalHp,
-            gunIndex = 0, // Starts with Pistol
-            ammo = DEFAULT_GUNS.map { it.mag }, // All three guns start with a full six-bullet magazine
-            medkits = 3,
-            inCover = false,
+            playerHp = hp,
+            playerMaxHp = hp,
+            robertHp = hp,
+            robertMaxHp = hp,
+            round = round,
+            weapons = owned.map { it.id },
+            weaponIndex = startIndex,
+            ammo = owned.map { it.magazine },
+            damaged = owned.map { false },
             distance = Combat.MAX_RANGE,
-            devilCoverHp = 0,
-            devilCoverMax = 4,
-            devilCoversLeft = covers,
-            devilMedkits = meds,
-            devilState = "advance",
-            devilHitsTaken = 0,
-            devilReactAt = 4 + if (Random.nextFloat() < 0.6f) 0 else 1,
-            devilRetreats = 0,
-            log = t("ready"),
+            coverActive = false,
+            coverHits = 0,
+            glueWallActive = false,
+            glueWallProgress = 0,
+            robertCoverActive = false,
+            robertCoverHits = 0,
+            robertGlueWallActive = false,
+            robertGlueWallProgress = 0,
+            robertWeapons = profile.weapons.map { it.id },
+            robertWeaponIndex = 0,
+            robertAmmo = profile.weapons.map { it.magazine },
+            robertDamaged = profile.weapons.map { false },
+            robertMedkits = profile.medikits,
+            robertCovers = profile.covers,
+            robertGlueWalls = profile.glueWalls,
+            robertDefenceArmed = true,
+            robertConsecutiveHits = 0,
+            robertState = "advance",
+            robertHits = 0,
+            robertShots = 0,
+            robertDamage = 0,
+            playerShots = 0,
+            playerHits = 0,
+            consecutiveHeavyHits = 0,
             playerSecondChanceUsed = false,
-            devilSecondChanceUsed = false,
-            devilItemsLeft = 0,
-            devilFleeArmed = true,
-            damagedGuns = List(DEFAULT_GUNS.size) { false },
-            consecutiveHeavyHits = 0
+            menuIndex = BattleMenuItem.PLAY_INDEX,
+            menuActive = false,
+            pendingPurchaseId = null,
+            log = t("ready"),
+            matchWon = false
         )
     }
 
     // ---------------------------------------------------------------------
-    // Devil movement, 3D footsteps, continuous fire
+    // Robert movement, 3D footsteps, continuous fire
     // ---------------------------------------------------------------------
 
-    /**
-     * 3D walking sound. Distance is measured in the 50 m arena; footsteps
-     * alternate between the ears, swell as the devil approaches and fade with
-     * a lower pitch while it flees into the distance.
-     */
     private fun updateWalkAudio(distance: Float, fleeing: Boolean = false) {
         if (_currentScreen.value != Screen.BATTLE) {
             audioManager.stopSound("walk")
@@ -411,46 +559,38 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun planDevilStep(delayMs: Long) {
+    private fun planRobertStep(delayMs: Long) {
         stepJob?.cancel()
         stepJob = viewModelScope.launch {
             delay(delayMs)
-            devilStep()
+            robertStep()
         }
     }
 
-    private fun devilStep() {
+    private fun robertStep() {
         if (!foreground || _currentScreen.value != Screen.BATTLE) return
         val state = _gameState.value
-        if (state.devilHp <= 0 || state.playerHp <= 0) return
+        if (state.robertHp <= 0 || state.playerHp <= 0) return
 
-        when (state.devilState) {
+        when (state.robertState) {
             "retreat" -> {
-                // High-speed flee: the devil can still be hit while running,
-                // but its distance grows very quickly.
                 val newDist = (state.distance + FLEE_STEP).coerceAtMost(Combat.MAX_RANGE)
                 if (newDist >= Combat.MAX_RANGE) {
-                    _gameState.update { it.copy(distance = Combat.MAX_RANGE, devilState = "flank") }
+                    _gameState.update { it.copy(distance = Combat.MAX_RANGE, robertState = "flank") }
                     updateWalkAudio(Combat.MAX_RANGE, fleeing = false)
-                    planDevilStep(1300L + Random.nextInt(700))
+                    planRobertStep(1300L + Random.nextInt(700))
                 } else {
                     _gameState.update { it.copy(distance = newDist) }
                     updateWalkAudio(newDist, fleeing = true)
-                    planDevilStep(FLEE_TICK_MS)
+                    planRobertStep(FLEE_TICK_MS)
                 }
             }
             "flank" -> {
-                val speed = 4.5f + _stats.value.level * 0.05f
+                val speed = 4.5f + _stats.value.round * 0.35f
                 val newDist = max(ENGAGE_DISTANCE, state.distance - speed)
                 if (newDist <= ENGAGE_DISTANCE) {
-                    // Back in position: a devil that dropped below its
-                    // half-health pool may flee again after the next hit.
                     _gameState.update {
-                        it.copy(
-                            distance = ENGAGE_DISTANCE,
-                            devilState = "advance",
-                            devilFleeArmed = true
-                        )
+                        it.copy(distance = ENGAGE_DISTANCE, robertState = "advance")
                     }
                     playSound("jump", posX = 35f, posZ = -ENGAGE_DISTANCE)
                     updateWalkAudio(ENGAGE_DISTANCE, fleeing = false)
@@ -458,121 +598,199 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     _gameState.update { it.copy(distance = newDist) }
                     updateWalkAudio(newDist, fleeing = false)
-                    planDevilStep(300L)
+                    planRobertStep(300L)
                 }
             }
             else -> {
                 if (state.distance > ENGAGE_DISTANCE) {
                     val prox = Combat.proximityOf(state.distance) / 100f
-                    val speed = 2.0f + prox * 4.0f + _stats.value.level * 0.03f
+                    val speed = 2.0f + prox * 4.0f + _stats.value.round * 0.25f
                     val newDist = max(ENGAGE_DISTANCE, state.distance - speed)
                     _gameState.update { it.copy(distance = newDist) }
                     updateWalkAudio(newDist, fleeing = false)
                     if (Random.nextFloat() < 0.10f) {
                         playSound("jump", volume = 0.55f, posZ = -newDist)
                     }
-                    planDevilStep(ADVANCE_TICK_MS)
+                    planRobertStep(ADVANCE_TICK_MS)
                 } else {
-                    // In position. The separate fire loop keeps shooting; the
-                    // footsteps keep a soft presence in both ears.
                     updateWalkAudio(ENGAGE_DISTANCE, fleeing = false)
                 }
             }
         }
     }
 
-    /**
-     * The devil fires continuously for the whole battle, whether it is
-     * advancing, holding position, flanking or fleeing. Its shots use exactly
-     * the same four proximity zones as the player's shots.
-     */
-    private fun startDevilFireLoop(initialDelayMs: Long) {
-        devilFireJob?.cancel()
-        devilFireJob = viewModelScope.launch {
+    private fun startRobertFireLoop(initialDelayMs: Long) {
+        robertFireJob?.cancel()
+        robertFireJob = viewModelScope.launch {
             delay(initialDelayMs)
             while (true) {
                 if (!foreground || _currentScreen.value != Screen.BATTLE) break
                 val state = _gameState.value
-                if (state.playerHp <= 0 || state.devilHp <= 0) break
-                devilAttack()
-                delay(devilFireInterval())
+                if (state.playerHp <= 0 || state.robertHp <= 0) break
+                robertAttack()
+                delay(robertFireInterval())
             }
         }
     }
 
-    private fun devilFireInterval(): Long {
-        val base = (3000L - _stats.value.level * 40L).coerceIn(1600L, 3000L)
+    private fun isRobertWeaponDamaged(state: GameState, weapon: Weapon): Boolean {
+        val index = state.robertWeapons.indexOf(weapon.id)
+        if (index < 0) return false
+        return state.robertDamaged.getOrElse(index) { false }
+    }
+
+    private fun robertFireInterval(): Long {
+        val base = (3000L - _stats.value.round * 220L).coerceIn(1500L, 3000L)
         return base + Random.nextLong(0, 600)
     }
 
     /**
-     * Symmetrical Evil Character attack mechanics (same four zones as the player):
-     * - Proximity 0% to 40%   -> the devil's shot misses.
-     * - Proximity 40% to 70%  -> player loses 10% of max health.
-     * - Proximity 70% to 90%  -> player loses 15% of max health.
-     * - Proximity 90% to 100% -> player loses 20% of max health.
-     *
-     * The player survives the first zero-health hit with half their maximum
-     * health. Three consecutive 90%-100% hits damage the gun in hand.
+     * Robert's attack. It picks one of the weapons it is allowed to use right
+     * now (switching often to confuse the player), reloads after six shots
+     * without paying coins, and obeys the exact same proximity zones.
      */
-    private fun devilAttack() {
+    private fun robertAttack() {
         if (!foreground || _currentScreen.value != Screen.BATTLE) return
         var state = _gameState.value
-        if (state.devilHp <= 0 || state.playerHp <= 0) return
+        if (state.robertHp <= 0 || state.playerHp <= 0) return
 
-        val gun = DEFAULT_GUNS[Random.nextInt(DEFAULT_GUNS.size)]
-        playSound(gun.sound, volume = 0.9f, posX = 0f, posY = 0f, posZ = -state.distance)
-        _gameState.update { it.copy(devilShots = it.devilShots + 1) }
+        val allowed = RobertRules.allowedWeapons(
+            robertProfile,
+            state.glueWallActive,
+            state.robertHp
+        ).ifEmpty { robertProfile.weapons }
+        var pool = allowed.filter { !isRobertWeaponDamaged(state, it) }
+        if (pool.isEmpty()) {
+            // Every weapon is broken: Robert repairs his arsenal for free.
+            _gameState.update { it.copy(robertDamaged = it.robertDamaged.map { false }) }
+            state = _gameState.value
+            pool = allowed
+        }
+        // A raised glue wall can only be answered by the sniper rifle, so the
+        // Robert switches to it automatically whenever it is allowed.
+        val chosen = if (state.glueWallActive && pool.contains(Weapon.SNIPER)) {
+            Weapon.SNIPER
+        } else {
+            pool[Random.nextInt(pool.size)]
+        }
+        val chosenIndex = state.robertWeapons.indexOf(chosen.id).coerceAtLeast(0)
+
+        if (chosenIndex != state.robertWeaponIndex) {
+            _gameState.update { it.copy(robertWeaponIndex = chosenIndex) }
+            playSound(chosen.switchSoundKey, volume = 0.8f, posZ = -state.distance)
+            state = _gameState.value
+        }
+
+        // Six rounds per magazine, then a free reload.
+        if (chosen.needsReload && state.robertAmmoNow <= 0) {
+            _gameState.update { s ->
+                s.copy(
+                    robertAmmo = s.robertAmmo.toMutableList().also {
+                        it[s.robertWeaponIndex] = chosen.magazine
+                    }
+                )
+            }
+            playSound("gunReload", volume = 0.8f, posZ = -state.distance)
+            setLog(t("robertReloaded"))
+            return
+        }
+
+        playSound(chosen.fireSoundKey, volume = 0.9f, posZ = -state.distance)
+        _gameState.update { s ->
+            val nextAmmo = if (chosen.needsReload) {
+                s.robertAmmo.toMutableList().also {
+                    it[s.robertWeaponIndex] = (it[s.robertWeaponIndex] - 1).coerceAtLeast(0)
+                }
+            } else {
+                s.robertAmmo
+            }
+            s.copy(robertShots = s.robertShots + 1, robertAmmo = nextAmmo)
+        }
         state = _gameState.value
 
         val proxPercent = Combat.proximityOf(state.distance)
         val zone = Combat.zoneFor(proxPercent)
 
         if (zone == HitZone.MISS) {
-            // Log only: the 3D gunshot tells the player a shot went wide, and
-            // a spoken miss every few seconds would drown out the hit reports.
+            if (chosen.melee) playSound(chosen.missSoundKey, volume = 0.55f, posZ = -state.distance)
             _gameState.update { it.copy(consecutiveHeavyHits = 0) }
-            setLog("${t("devilMissed")} ${t(gun.nameKey)}.")
+            setLog("${t("robertMissed")} ${t(chosen.nameKey)}.")
             return
         }
 
-        var dealt = Combat.damageFor(state.playerMaxHp, proxPercent)
-
-        // Gloo wall protection reduces impact
-        var wallAbsorbed = false
-        if (state.inCover) {
-            dealt = max(1, (dealt * 0.40f).roundToInt())
-            wallAbsorbed = true
+        // The player's glue wall stops everything until three sniper hits break it.
+        if (state.glueWallActive) {
+            val breaks = Combat.canBreakGlueWall(chosen, proxPercent)
+            val progress = if (breaks) state.glueWallProgress + 1 else 0
+            _gameState.update { it.copy(glueWallProgress = progress) }
+            playSound("glueWallHit", volume = 0.9f)
+            if (breaks) playSound("glueCrack", volume = 0.8f)
+            if (progress >= Combat.GLUE_WALL_BREAK_HITS) {
+                _gameState.update {
+                    it.copy(glueWallActive = false, glueWallProgress = 0)
+                }
+                playSound("glueCrack", volume = 1.0f)
+                msg(t("glueWallDown"))
+            } else {
+                val progressText = if (breaks) {
+                    " ${t("glueWallBreaks")} $progress."
+                } else {
+                    ""
+                }
+                msg("${t("glueWallBlocked")}$progressText")
+            }
+            return
         }
+
+        // The player's cover stops sixteen hits and breaks on the seventeenth.
+        if (state.coverActive) {
+            // The first sixteen hits are absorbed; the seventeenth breaks it.
+            val hits = state.coverHits + 1
+            if (hits > Combat.COVER_MAX_HITS) {
+                _gameState.update { it.copy(coverActive = false, coverHits = 0) }
+                playSound("coverCrack", volume = 1.0f)
+                msg(t("coverBroken"))
+            } else {
+                _gameState.update { it.copy(coverHits = hits) }
+                playSound("coverHit", volume = 0.8f)
+                setLog("${t("coverHitsLeft")} ${Combat.COVER_MAX_HITS - hits}.")
+            }
+            return
+        }
+
+        var dealt = Combat.damageFor(RobertRules.powerFor(chosen), proxPercent)
+        // While the quick menu is open every hit costs only 2 health.
+        if (state.menuActive) dealt = min(2, dealt)
 
         val newPlayerHp = max(0, state.playerHp - dealt)
 
-        // --- Gun damage: three consecutive point-blank hits break the gun in hand.
         var streak = Combat.nextHeavyHitStreak(state.consecutiveHeavyHits, proxPercent)
-        var brokeGun = false
-        val damaged = state.damagedGuns.toMutableList()
-        val activeIndex = state.gunIndex.coerceIn(0, damaged.lastIndex)
-        if (!damaged[activeIndex] && Combat.gunBreaks(streak)) {
+        var brokeWeapon = false
+        val damaged = state.damaged.toMutableList()
+        val activeIndex = state.weaponIndex.coerceIn(0, max(0, damaged.lastIndex))
+        if (damaged.isNotEmpty() && !damaged[activeIndex] && Combat.gunBreaks(streak)) {
             damaged[activeIndex] = true
             streak = 0
-            brokeGun = true
+            brokeWeapon = true
         }
 
         _gameState.update {
             it.copy(
                 playerHp = newPlayerHp,
-                devilHits = it.devilHits + 1,
-                devilDamage = it.devilDamage + dealt,
+                robertHits = it.robertHits + 1,
+                robertDamage = it.robertDamage + dealt,
                 consecutiveHeavyHits = streak,
-                damagedGuns = damaged
+                damaged = damaged
             )
         }
 
+        playSound(chosen.hitSoundKey, volume = 1.0f)
         playSound("damage", volume = 1.0f)
-        val hitHead = if (zone == HitZone.HEAVY) t("youWereHit") else t("devilGrazed")
-        val coverNote = if (wallAbsorbed) " (${t("cover")})" else ""
-        var text = "$hitHead ${t(gun.nameKey)}$coverNote. ${t("hitFor")} $dealt. ${t("yourHealth")} $newPlayerHp."
-        if (brokeGun) {
+
+        val hitHead = if (zone == HitZone.HEAVY) t("youWereHit") else t("youWereGrazed")
+        var text = "$hitHead ${t(chosen.nameKey)}. ${t("hitFor")} $dealt. " +
+            "${t("yourHealth")} $newPlayerHp."
+        if (brokeWeapon) {
             text += " ${t("gunDamaged")} ${t("recovery")}. ${t("coins")}: ${Combat.GUN_RECOVERY_COST}."
         }
 
@@ -584,7 +802,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         playerHp = revivedHp,
                         playerSecondChanceUsed = true,
                         consecutiveHeavyHits = 0,
-                        inCover = false
+                        coverActive = false,
+                        glueWallActive = false
                     )
                 }
                 playSound("medkit")
@@ -597,134 +816,179 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        text += applyAutomaticDefences()
         msg(text)
     }
 
-    /** A hit that lands on the devil is sometimes answered immediately. */
-    private fun devilOnHit() {
-        counterJob?.cancel()
-        if (Random.nextFloat() > COUNTER_FIRE_CHANCE) return
-        counterJob = viewModelScope.launch {
-            // A short reaction pause so a burst of player hits can never
-            // stack several counter shots into the same instant.
-            delay(350L)
-            if (foreground &&
-                _currentScreen.value == Screen.BATTLE &&
-                _gameState.value.devilHp > 0 &&
-                _gameState.value.playerHp > 0
-            ) {
-                devilAttack()
-            }
-        }
-    }
-
     /**
-     * Devil reactions after a player hit: high-speed flee when its health falls
-     * below the half-health pool it received, a medkit when badly hurt, or a
-     * fresh cover when its wall was destroyed.
+     * Automatic helpers: reload, medikit under 50 health, cover and glue wall
+     * in the last stage. They only ever use items the player owns and only
+     * while the extension is enabled.
      */
-    private fun devilAfterHit(): String {
-        val state = _gameState.value
-        if (state.devilHp <= 0) return ""
-
-        if (state.devilState == "advance" &&
-            Revive.shouldDevilFlee(state.devilHp, state.devilMaxHp, state.devilFleeArmed)
-        ) {
-            return devilFlee()?.let { " $it" } ?: ""
-        }
-
+    private fun applyAutomaticDefences(): String {
+        val inv = _inventory.value
         var extra = ""
-        val hpPct = state.devilHp.toFloat() / state.devilMaxHp.toFloat()
+        val state = _gameState.value
 
-        if (state.devilHitsTaken >= state.devilReactAt) {
-            _gameState.update {
-                it.copy(
-                    devilHitsTaken = 0,
-                    devilReactAt = 4 + if (Random.nextFloat() < 0.6f) 0 else 1
-                )
-            }
-            if (hpPct < 0.55f && state.devilMedkits > 0 && state.devilState != "retreat") {
-                val healAmount = (state.devilMaxHp * 0.15f).roundToInt().coerceAtLeast(1)
-                val healed = min(state.devilMaxHp, state.devilHp + healAmount)
-                _gameState.update {
-                    it.copy(devilMedkits = it.devilMedkits - 1, devilHp = healed)
-                }
-                playSound("medkit", posZ = -state.distance)
-                extra += " ${t("devilMedkit")} ${t("enemyHealth")} $healed."
-            } else if (state.devilCoverHp <= 0 && state.devilCoversLeft > 0) {
-                _gameState.update {
-                    it.copy(
-                        devilCoversLeft = it.devilCoversLeft - 1,
-                        devilCoverHp = it.devilCoverMax
-                    )
-                }
-                playSound("gloowall", posZ = -state.distance)
-                extra += " ${t("devilCoverUp")} ${t("devilCover")}: ${state.devilCoverMax}."
-            }
+        val lastStage = state.playerHp <= (state.playerMaxHp * LAST_STAGE_FRACTION).roundToInt()
+
+        if (inv.extensionEnabled(Extension.AUTO_MEDKIT) &&
+            state.playerHp < 50 &&
+            inv.medikits > 0
+        ) {
+            useDefence(DefenceItem.MEDKIT, automatic = true)?.let { extra += " $it" }
+        }
+        if (inv.extensionEnabled(Extension.AUTO_GLUE_WALL) &&
+            lastStage &&
+            !_gameState.value.glueWallActive &&
+            _inventory.value.glueWalls > 0
+        ) {
+            useDefence(DefenceItem.GLUE_WALL, automatic = true)?.let { extra += " $it" }
+        }
+        if (inv.extensionEnabled(Extension.AUTO_COVER) &&
+            lastStage &&
+            !_gameState.value.coverActive &&
+            _inventory.value.covers > 0
+        ) {
+            useDefence(DefenceItem.COVER, automatic = true)?.let { extra += " $it" }
         }
         return extra
     }
 
-    private fun devilFlee(): String? {
-        val state = _gameState.value
-        if (!state.devilFleeArmed) return null
-        if (state.devilState == "retreat" || state.devilState == "flank") return null
-        if (state.devilHp <= 0) return null
-
-        _gameState.update {
-            it.copy(
-                devilState = "retreat",
-                devilFleeArmed = false,
-                devilRetreats = it.devilRetreats + 1
-            )
+    private fun robertOnHit() {
+        counterJob?.cancel()
+        if (Random.nextFloat() > COUNTER_FIRE_CHANCE) return
+        counterJob = viewModelScope.launch {
+            delay(350L)
+            if (foreground &&
+                _currentScreen.value == Screen.BATTLE &&
+                _gameState.value.robertHp > 0 &&
+                _gameState.value.playerHp > 0
+            ) {
+                robertAttack()
+            }
         }
-        playSound("jump", posZ = -state.distance)
-        planDevilStep(120L)
-        return t("devilFled")
+    }
+
+    /** Robert's reaction after taking a hit: flee, heal, cover or glue wall. */
+    private fun robertAfterHit(): String {
+        val state = _gameState.value
+        if (state.robertHp <= 0) return ""
+
+        val profile = robertProfile
+        val consecutive = state.robertConsecutiveHits
+
+        if (state.robertState == "advance" &&
+            RobertRules.shouldFlee(consecutive, profile.fleeAfterHits)
+        ) {
+            _gameState.update {
+                it.copy(robertState = "retreat", robertConsecutiveHits = 0)
+            }
+            playSound("jump", posZ = -state.distance)
+            planRobertStep(120L)
+            return " ${t("robertFled")}"
+        }
+
+        // Re-arm the defence once Robert is healthy again or after two hits.
+        if (state.robertHp > RobertRules.DEFENCE_THRESHOLD_HP || consecutive >= 2) {
+            _gameState.update { it.copy(robertDefenceArmed = true) }
+        }
+
+        val current = _gameState.value
+        if (!RobertRules.shouldUseDefence(current.robertHp, current.robertDefenceArmed)) {
+            return ""
+        }
+
+        val defence = RobertRules.nextDefence(
+            current.robertMedkits,
+            current.robertCovers,
+            current.robertGlueWalls
+        ) ?: return ""
+
+        _gameState.update { it.copy(robertDefenceArmed = false, robertConsecutiveHits = 0) }
+        return when (defence) {
+            DefenceItem.MEDKIT -> {
+                _gameState.update {
+                    it.copy(
+                        robertHp = it.robertMaxHp,
+                        robertMedkits = (it.robertMedkits - 1).coerceAtLeast(0)
+                    )
+                }
+                playSound("medkit", posZ = -current.distance)
+                " ${t("robertMedkit")} ${t("enemyHealth")} ${_gameState.value.robertHp}."
+            }
+            DefenceItem.COVER -> {
+                _gameState.update {
+                    it.copy(
+                        robertCoverActive = true,
+                        robertCoverHits = 0,
+                        robertCovers = (it.robertCovers - 1).coerceAtLeast(0)
+                    )
+                }
+                playSound("cover", posZ = -current.distance)
+                " ${t("robertCoverUp")}"
+            }
+            DefenceItem.GLUE_WALL -> {
+                _gameState.update {
+                    it.copy(
+                        robertGlueWallActive = true,
+                        robertGlueWallProgress = 0,
+                        robertGlueWalls = (it.robertGlueWalls - 1).coerceAtLeast(0)
+                    )
+                }
+                playSound("glueSound", posZ = -current.distance)
+                " ${t("robertGlueWall")}"
+            }
+        }
     }
 
     // ---------------------------------------------------------------------
     // Player firing
     // ---------------------------------------------------------------------
 
-    /**
-     * Symmetrical player firing mechanics:
-     * - All three guns hold six bullets; one bullet is consumed per shot.
-     * - Proximity 0% to 40%   -> miss.
-     * - Proximity 40% to 70%  -> 10% damage.
-     * - Proximity 70% to 90%  -> 15% damage.
-     * - Proximity 90% to 100% -> 20% damage.
-     * - A damaged gun cannot fire until Recovery is paid for.
-     * - Hits count even while the devil is fleeing.
-     */
     fun fire() {
         if (_currentScreen.value != Screen.BATTLE) return
+        markExplicitAction()
 
-        // One physical gesture/tap can only ever fire one bullet.
         val now = System.currentTimeMillis()
-        if (now - lastFireAt < 250L) return
+        if (now - lastFireAt < 220L) return
         lastFireAt = now
 
         var state = _gameState.value
-        if (state.playerHp <= 0 || state.devilHp <= 0) return
+        if (state.playerHp <= 0 || state.robertHp <= 0) return
 
-        if (state.activeGunDamaged) {
+        val weapon = state.activeWeapon
+        if (state.activeWeaponDamaged) {
             playSound("ammo")
             msg("${t("gunDamaged")} ${t("recovery")}. ${t("coins")}: ${Combat.GUN_RECOVERY_COST}.")
             return
         }
 
-        // Atomically consume exactly one bullet from the ACTIVE magazine.
+        if (weapon.needsReload && state.activeAmmo <= 0) {
+            playSound("ammo")
+            val reloaded = autoReloadIfNeeded()
+            if (reloaded == null) {
+                msg(t("outOfAmmo"))
+            } else {
+                msg(reloaded)
+            }
+            return
+        }
+
         var decremented = false
         _gameState.update { s ->
-            val idx = s.gunIndex.coerceIn(0, s.ammo.lastIndex)
-            val current = s.ammo[idx]
-            if (current <= 0 || s.playerHp <= 0 || s.devilHp <= 0 || s.damagedGuns.getOrElse(idx) { false }) {
+            val idx = s.weaponIndex.coerceIn(0, s.weapons.lastIndex)
+            val current = s.ammo.getOrElse(idx) { 0 }
+            if (weapon.needsReload && current <= 0) {
                 s
             } else {
                 decremented = true
                 s.copy(
-                    ammo = s.ammo.toMutableList().also { it[idx] = current - 1 },
+                    ammo = if (weapon.needsReload) {
+                        s.ammo.toMutableList().also { it[idx] = current - 1 }
+                    } else {
+                        s.ammo
+                    },
                     playerShots = s.playerShots + 1
                 )
             }
@@ -736,70 +1000,110 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         state = _gameState.value
-        val gun = DEFAULT_GUNS[state.gunIndex]
-        playSound(gun.sound, posX = 0f, posY = 0f, posZ = 0f)
+        playSound(weapon.fireSoundKey, volume = 1.0f)
 
         val proxPercent = Combat.proximityOf(state.distance)
         val zone = Combat.zoneFor(proxPercent)
 
-        // Below 40% proximity: counted as a miss (also while fleeing, but a
-        // shot fired before the devil got far away can still land).
         if (zone == HitZone.MISS) {
-            msg(t("missed"))
+            // Firearms already played their shot; only melee weapons have a
+            // dedicated miss sound, so the shot is never played twice.
+            if (weapon.melee) playSound(weapon.missSoundKey, volume = 0.6f)
+            msg(autoReloadIfNeeded()?.let { "$it ${t("missed")}" } ?: t("missed"))
             return
         }
 
-        // The devil's raised cover absorbs the shot until it is destroyed.
-        if (state.devilCoverHp > 0) {
-            var remaining = 0
-            _gameState.update { s ->
-                remaining = (s.devilCoverHp - 1).coerceAtLeast(0)
-                s.copy(devilCoverHp = remaining)
+        // Robert's glue wall: only three continuous sniper hits break it.
+        if (state.robertGlueWallActive) {
+            val breaks = Combat.canBreakGlueWall(weapon, proxPercent)
+            val progress = if (breaks) state.robertGlueWallProgress + 1 else 0
+            _gameState.update { it.copy(robertGlueWallProgress = progress) }
+            playSound("glueWallHit", volume = 0.9f)
+            if (breaks) playSound("glueCrack", volume = 0.8f)
+            if (progress >= Combat.GLUE_WALL_BREAK_HITS) {
+                _gameState.update {
+                    it.copy(robertGlueWallActive = false, robertGlueWallProgress = 0)
+                }
+                playSound("glueCrack")
+                msg(t("robertGlueDown"))
+            } else if (breaks) {
+                msg("${t("robertGlueCrack")} ${t("glueWallBreaks")} $progress.")
+            } else {
+                msg(t("robertGlueBlocked"))
             }
-            playSound("hit", volume = 0.7f)
-            playSound("enemyHit", volume = 0.7f, posZ = -state.distance)
-            var text = "${t("coverBreak")} ${t("devilCover")}: $remaining. ${t("enemyHealth")} ${state.devilHp}."
-            if (remaining <= 0) text += " ${t("devilCoverDown")}"
-            msg(text)
-            devilOnHit()
+            robertOnHit()
             return
         }
 
-        val damage = Combat.damageFor(state.devilMaxHp, proxPercent)
-        val newDevilHp = max(0, state.devilHp - damage)
+        // Robert's cover: sixteen hits, broken on the seventeenth.
+        if (state.robertCoverActive) {
+            val hits = state.robertCoverHits + 1
+            if (hits > Combat.COVER_MAX_HITS) {
+                _gameState.update { it.copy(robertCoverActive = false, robertCoverHits = 0) }
+                playSound("coverCrack", volume = 1.0f)
+                msg(t("robertCoverDown"))
+            } else {
+                _gameState.update { it.copy(robertCoverHits = hits) }
+                playSound("coverHit", volume = 0.8f)
+                msg("${t("coverHitsLeft")} ${Combat.COVER_MAX_HITS - hits}.")
+            }
+            robertOnHit()
+            return
+        }
+
+        val damage = Combat.damageFor(weapon.power, proxPercent)
+        val newRobertHp = max(0, state.robertHp - damage)
         _gameState.update {
             it.copy(
-                devilHp = newDevilHp,
+                robertHp = newRobertHp,
                 playerHits = it.playerHits + 1,
-                devilHitsTaken = it.devilHitsTaken + 1
+                robertConsecutiveHits = it.robertConsecutiveHits + 1
             )
         }
 
-        playSound("hit", volume = if (zone == HitZone.HEAVY) 1f else 0.7f)
+        // Three consecutive point-blank hits also damage Robert's weapon. He
+        // switches to another one automatically on his next attack.
+        var robertWeaponBroke = false
+        val heavyStreak = if (zone == HitZone.HEAVY) state.playerHeavyHits + 1 else 0
+        if (heavyStreak >= Combat.HITS_TO_DAMAGE_GUN) {
+            val robertIndex = state.robertWeaponIndex
+            val damagedList = state.robertDamaged.toMutableList()
+            if (robertIndex in damagedList.indices && !damagedList[robertIndex]) {
+                damagedList[robertIndex] = true
+                robertWeaponBroke = true
+            }
+            _gameState.update { it.copy(playerHeavyHits = 0, robertDamaged = damagedList) }
+        } else {
+            _gameState.update { it.copy(playerHeavyHits = heavyStreak) }
+        }
+
+        playSound(weapon.hitSoundKey, volume = if (zone == HitZone.HEAVY) 1f else 0.7f)
         playSound("enemyHit", volume = if (zone == HitZone.HEAVY) 1f else 0.7f, posZ = -state.distance)
 
         var text = "${if (zone == HitZone.HEAVY) t("enemyHit") else t("enemyGrazed")} " +
-            "${t("hitFor")} $damage. ${t("enemyHealth")} $newDevilHp."
+            "${t("hitFor")} $damage. ${t("enemyHealth")} $newRobertHp."
+        if (robertWeaponBroke) {
+            playSound("gunReload", volume = 0.8f)
+            text += " ${t("robertWeaponDamaged")}"
+        }
 
-        if (newDevilHp <= 0) {
-            text += " ${resolveDevilZeroHealth()}"
-            setLog(text)
-            // If the devil actually died the screen is already RESULT.
-            if (_currentScreen.value != Screen.BATTLE) return
+        if (newRobertHp <= 0) {
+            playSound(weapon.hitSoundKey, volume = 1f)
             msg(text)
+            endGame(won = true)
             return
         }
 
-        text += devilAfterHit()
+        text += robertAfterHit()
+        text += autoReloadIfNeeded()?.let { " $it" } ?: ""
 
-        // Ammo pickup chance (15%) — merged into the same announcement so the
-        // hit report is never cut off mid-sentence.
-        if (Random.nextFloat() < 0.15f) {
+        // Ammo pickup chance (15%): merged into the hit report.
+        if (Random.nextFloat() < 0.15f && weapon.needsReload) {
             var pickedUp = false
             _gameState.update { s ->
-                val idx = s.gunIndex
-                val mag = DEFAULT_GUNS[idx].mag
-                val current = s.ammo[idx]
+                val idx = s.weaponIndex
+                val mag = weapon.magazine
+                val current = s.ammo.getOrElse(idx) { 0 }
                 if (current >= mag) {
                     s
                 } else {
@@ -807,285 +1111,296 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     s.copy(ammo = s.ammo.toMutableList().also { it[idx] = min(mag, current + 2) })
                 }
             }
-            if (pickedUp) {
-                text += " ${t("ammoPickup")}"
-            }
+            if (pickedUp) text += " ${t("ammoPickup")}"
         }
 
         msg(text)
-        devilOnHit()
+        robertOnHit()
     }
 
-    /**
-     * Resolves what happens when the devil's health reaches zero:
-     *  1. first zero -> second chance with half its maximum health and all
-     *     three survival items (Gloo Wall, cover, medkit) activated;
-     *  2. later zeros -> one item is consumed to survive;
-     *  3. once every item is exhausted -> the devil dies for good.
-     */
-    private fun resolveDevilZeroHealth(): String {
+    /** Reloads the empty magazine automatically when the extension is owned. */
+    private fun autoReloadIfNeeded(): String? {
         val state = _gameState.value
-        val result = Revive.devilAtZero(
-            maxHp = state.devilMaxHp,
-            itemsLeft = state.devilItemsLeft,
-            secondChanceUsed = state.devilSecondChanceUsed
-        )
-
-        when (result.outcome) {
-            Revive.Outcome.SECOND_CHANCE -> {
-                _gameState.update {
-                    it.copy(
-                        devilHp = result.hp,
-                        devilSecondChanceUsed = true,
-                        devilItemsLeft = result.itemsLeft,
-                        // The survival pack raises the Gloo Wall/cover at once
-                        // and stocks one medkit; the three tracked items are
-                        // then spent one by one whenever health hits zero.
-                        devilCoverHp = it.devilCoverMax,
-                        devilMedkits = max(it.devilMedkits, 1),
-                        devilState = "advance",
-                        devilFleeArmed = true,
-                        devilHitsTaken = 0,
-                        devilReactAt = 4
-                    )
-                }
-                playSound("medkit", posZ = -state.distance)
-                return "${t("devilSecondChance")} ${t("enemyHealth")} ${result.hp}."
-            }
-            Revive.Outcome.USED_ITEM -> {
-                val itemName = when (result.itemIndex) {
-                    0 -> t("glooWall")
-                    1 -> t("cover")
-                    else -> t("medkit")
-                }
-                _gameState.update {
-                    it.copy(
-                        devilHp = result.hp,
-                        devilItemsLeft = result.itemsLeft,
-                        devilState = "advance",
-                        devilFleeArmed = true,
-                        devilHitsTaken = 0
-                    )
-                }
-                playSound(
-                    if (result.itemIndex == 2) "medkit" else "gloowall",
-                    posZ = -state.distance
-                )
-                val exhausted = if (result.itemsLeft == 0) " ${t("devilItemsGone")}" else ""
-                return "${t("devilSurvivedWith")} $itemName. ${t("enemyHealth")} ${result.hp}. " +
-                    "${t("devilItemsLeft")} ${result.itemsLeft}.$exhausted"
-            }
-            Revive.Outcome.DEFEATED -> {
-                _gameState.update { it.copy(devilHp = 0) }
-                endGame(won = true)
-                return t("devilDefeatedFinal")
-            }
+        val weapon = state.activeWeapon
+        if (!weapon.needsReload || state.activeAmmo > 0) return null
+        if (!_inventory.value.extensionEnabled(Extension.AUTO_RELOAD)) return null
+        _gameState.update { s ->
+            val idx = s.weaponIndex.coerceIn(0, s.ammo.lastIndex)
+            s.copy(ammo = s.ammo.toMutableList().also { it[idx] = weapon.magazine })
         }
+        playSound("gunReload")
+        return t("autoReloaded")
     }
 
-    private fun setLog(text: String) {
-        _gameState.update { it.copy(log = text) }
-    }
-
-    // ---------------------------------------------------------------------
-    // Player actions
-    // ---------------------------------------------------------------------
-
-    /**
-     * Deducts [amount] coins. Every time coins are spent the coin
-     * "money spent" sound (money-spend.mp3) plays — mixed together with the
-     * action's own sound (reload, cover, medkit, ...) when one is given.
-     */
-    private fun spendCoins(amount: Int, actionSounds: List<String> = emptyList()): Boolean {
-        if (_stats.value.coins < amount) {
-            playSound("ammo")
-            speak(t("notEnough"))
-            return false
-        }
-        val newCoins = _stats.value.coins - amount
-        val updated = _stats.value.copy(coins = newCoins)
-        _stats.value = updated
-        prefs.saveStats(updated)
-        if (actionSounds.isEmpty()) {
-            playSound("spend", volume = 0.9f)
-        } else {
-            audioManager.playMixed(listOf("spend") + actionSounds, volume = 0.9f)
-        }
-        return true
-    }
-
-    /**
-     * Reload mechanism:
-     * - Reload costs 30 coins; the coin "money spent" sound plays mixed with
-     *   the reload sound (gun-reload.mp3).
-     * - Fills the active magazine back to its full six bullets.
-     * - Announces "Not enough coins." if insufficient funds.
-     */
     fun doReload() {
         if (_currentScreen.value != Screen.BATTLE) return
+        markExplicitAction()
         val state = _gameState.value
-        val idx = state.gunIndex
-        val mag = DEFAULT_GUNS[idx].mag
-        if (state.damagedGuns.getOrElse(idx) { false }) {
-            playSound("ammo")
-            msg("${t("gunDamaged")} ${t("recovery")}. ${t("coins")}: ${Combat.GUN_RECOVERY_COST}.")
+        val weapon = state.activeWeapon
+        if (!weapon.needsReload) {
+            // Melee weapons are always ready: they have no magazine at all.
+            playSound("click")
+            msg(t("meleeNoReload"))
             return
         }
-        if (state.ammo[idx] >= mag) {
-            playSound("click")
+        if (state.activeAmmo >= weapon.magazine) {
+            playSound("ammo")
             msg(t("magFull"))
             return
         }
-        if (!spendCoins(30, listOf("reload"))) {
-            return
-        }
-        var filled = false
         _gameState.update { s ->
-            val i = s.gunIndex
-            val m = DEFAULT_GUNS[i].mag
-            if (s.ammo[i] >= m) {
-                s
-            } else {
-                filled = true
-                s.copy(ammo = s.ammo.toMutableList().also { list -> list[i] = m })
-            }
+            val idx = s.weaponIndex.coerceIn(0, s.ammo.lastIndex)
+            s.copy(ammo = s.ammo.toMutableList().also { it[idx] = weapon.magazine })
         }
-        if (!filled) {
-            playSound("click")
-            return
-        }
-        msg("${t("reloaded")} ${t("coinsSpent")}: 30.")
+        playSound("gunReload")
+        msg(t("reloaded"))
     }
 
     /**
-     * Recovery: repairs every damaged gun for exactly 300 coins.
-     * Reachable from the battle button or a three-finger left swipe.
+     * Right and left swipes walk through the weapons the player actually owns.
+     * The chosen weapon is remembered for the next game.
      */
+    fun switchWeapon(direction: Int) {
+        if (_currentScreen.value != Screen.BATTLE) return
+        markExplicitAction()
+        val state = _gameState.value
+        if (state.weapons.isEmpty()) return
+        val next = ((state.weaponIndex + direction) % state.weapons.size + state.weapons.size) %
+            state.weapons.size
+        _gameState.update { it.copy(weaponIndex = next) }
+        val weapon = _gameState.value.activeWeapon
+
+        playSound(weapon.switchSoundKey)
+        rememberWeapon(weapon)
+
+        val damagedNote = if (_gameState.value.activeWeaponDamaged) {
+            " ${t("damaged")}. ${t("recovery")}: ${Combat.GUN_RECOVERY_COST}."
+        } else {
+            ""
+        }
+        val ammoNote = if (weapon.needsReload) {
+            " ${t("ammo")} ${_gameState.value.activeAmmo}."
+        } else {
+            ""
+        }
+        msg("${t("switchedTo")} ${t(weapon.nameKey)}.$ammoNote$damagedNote")
+    }
+
+    private fun rememberWeapon(weapon: Weapon) {
+        if (_inventory.value.lastWeaponId == weapon.id) return
+        val updated = _inventory.value.copy(lastWeaponId = weapon.id)
+        _inventory.value = updated
+        prefs.saveInventory(updated)
+    }
+
     fun recoverGun() {
         if (_currentScreen.value != Screen.BATTLE) return
+        markExplicitAction()
         val state = _gameState.value
-        if (!state.anyGunDamaged) {
+        if (!state.anyWeaponDamaged) {
             playSound("click")
             msg(t("gunNotDamaged"))
             return
         }
-        if (!spendCoins(Combat.GUN_RECOVERY_COST, listOf("reload"))) {
+        if (_stats.value.coins < Combat.GUN_RECOVERY_COST) {
+            notEnoughCoins()
             return
         }
-        _gameState.update {
-            it.copy(
-                damagedGuns = List(DEFAULT_GUNS.size) { false },
-                consecutiveHeavyHits = 0
-            )
-        }
+        _stats.value = _stats.value.copy(coins = _stats.value.coins - Combat.GUN_RECOVERY_COST)
+        prefs.saveStats(_stats.value)
+        _gameState.update { it.copy(damaged = it.damaged.map { false }) }
+        playSound("spend")
+        playSound("gunReload")
         msg("${t("gunRecovered")} ${t("coinsSpent")}: ${Combat.GUN_RECOVERY_COST}.")
     }
 
-    /**
-     * Gloo Wall deployment:
-     * - Two-finger swipe up (or the cover button / three-finger toggle /
-     *   double swipe-up shortcut).
-     * - Costs 100 coins; the coin "money spent" sound plays mixed with the
-     *   gloo wall sound and the dedicated cover sound effect.
-     * - Re-deploying while already in cover is free and simply announced.
-     */
-    fun deployGlooWall() {
-        if (_currentScreen.value != Screen.BATTLE) return
-        if (_gameState.value.inCover) {
-            playSound("click")
-            msg(t("coverOn"))
-            return
-        }
-        if (!spendCoins(100, listOf("gloowall", "cover"))) {
-            return
-        }
-        _gameState.update { it.copy(inCover = true) }
-        msg(t("glooWallDeployed"))
-    }
+    // ---------------------------------------------------------------------
+    // Quick menu and defences
+    // ---------------------------------------------------------------------
 
-    fun toggleCover() {
+    /** Cycles the quick menu: medikit, cover, glue wall, exit, play. */
+    fun cycleMenu(direction: Int) {
         if (_currentScreen.value != Screen.BATTLE) return
+        markExplicitAction()
         val state = _gameState.value
-        if (!state.inCover) {
-            deployGlooWall()
-        } else {
-            _gameState.update { it.copy(inCover = false) }
-            playSound("click")
-            msg(t("coverOff"))
+        val nextIndex = state.menuIndex + direction
+        _gameState.update {
+            it.copy(menuIndex = nextIndex, menuActive = true, pendingPurchaseId = null)
         }
-    }
-
-    /**
-     * Medkit: costs 100 coins; the coin "money spent" sound plays mixed with
-     * the medkit sound effect.
-     */
-    fun useMedkit() {
-        if (_currentScreen.value != Screen.BATTLE) return
-        val state = _gameState.value
-        if (state.medkits <= 0) {
-            playSound("ammo")
-            msg(t("noMedkits"))
-            return
-        }
-        if (state.playerHp >= state.playerMaxHp) {
-            playSound("click")
-            msg("${t("medkitUsed")} ${state.playerHp}")
-            return
-        }
-        if (!spendCoins(100, listOf("medkit"))) {
-            return
-        }
-        var healed = state.playerHp
-        _gameState.update { s ->
-            val heal = (s.playerMaxHp * 0.30f).roundToInt()
-            val newHp = min(s.playerMaxHp, s.playerHp + heal)
-            healed = newHp
-            s.copy(medkits = s.medkits - 1, playerHp = newHp)
-        }
-        msg("${t("medkitUsed")} $healed")
-    }
-
-    fun switchGun(dir: Int) {
-        if (_currentScreen.value != Screen.BATTLE) return
-        val current = _gameState.value.gunIndex
-        val next = (current + dir + DEFAULT_GUNS.size) % DEFAULT_GUNS.size
-        _gameState.update { it.copy(gunIndex = next) }
         playSound("click")
-        val damagedNote = if (_gameState.value.damagedGuns.getOrElse(next) { false }) {
-            " ${t("damaged")}. ${t("recovery")}: ${Combat.GUN_RECOVERY_COST}."
-        } else ""
-        msg("${t("switchedTo")} ${t(DEFAULT_GUNS[next].nameKey)}.$damagedNote")
+        speakBattleMenu()
+    }
+
+    private fun speakBattleMenu() {
+        val item = _gameState.value.menuItem
+        when (item) {
+            BattleMenuItem.MEDKIT, BattleMenuItem.COVER, BattleMenuItem.GLUE_WALL -> {
+                val defence = item.defence ?: return
+                val count = _inventory.value.count(defence)
+                speak("${t("menuNow")}: ${t(defence.nameKey)}. $count.")
+            }
+            BattleMenuItem.EXIT -> speak("${t("menuNow")}: ${t("exitGame")}.")
+            BattleMenuItem.PLAY -> speak("${t("menuNow")}: ${t("playState")}.")
+        }
+    }
+
+    /**
+     * A single tap activates the highlighted menu item. A defence that is not
+     * owned asks for a confirming second tap and is then bought and used.
+     */
+    fun activateMenuItem() {
+        if (_currentScreen.value != Screen.BATTLE) return
+        markExplicitAction()
+        val state = _gameState.value
+        val item = state.menuItem
+        when (item) {
+            BattleMenuItem.MEDKIT, BattleMenuItem.COVER, BattleMenuItem.GLUE_WALL -> {
+                val defence = item.defence ?: return
+                useDefenceFromMenu(defence)
+            }
+            BattleMenuItem.EXIT -> exitBattle()
+            BattleMenuItem.PLAY -> {
+                _gameState.update { it.copy(menuActive = false, pendingPurchaseId = null) }
+                playSound("click")
+                speak(t("alreadyPlaying"))
+            }
+        }
+    }
+
+    private fun useDefenceFromMenu(defence: DefenceItem) {
+        val inventory = _inventory.value
+        if (inventory.count(defence) > 0) {
+            _gameState.update { it.copy(pendingPurchaseId = null) }
+            val spoken = useDefence(defence)
+            if (spoken != null) msg(spoken)
+            backToPlayState()
+            return
+        }
+
+        val pending = _gameState.value.pendingPurchaseId
+        if (pending == defence.id) {
+            // Second tap: buy one at the shop price, then use it immediately.
+            val purchase = Shop.buyDefence(_inventory.value, _stats.value.coins, defence)
+            if (!purchase.success) {
+                _gameState.update { it.copy(pendingPurchaseId = null) }
+                notEnoughCoins()
+                return
+            }
+            _inventory.value = purchase.inventory
+            prefs.saveInventory(purchase.inventory)
+            _stats.value = _stats.value.copy(coins = purchase.coins)
+            prefs.saveStats(_stats.value)
+            playSound("spend")
+            _gameState.update { it.copy(pendingPurchaseId = null) }
+            val spoken = useDefence(defence)
+            val text = "${t(defence.nameKey)} ${t("itemAutoActivated")}" +
+                (spoken?.let { " $it" } ?: "")
+            msg(text)
+            backToPlayState()
+        } else {
+            _gameState.update { it.copy(pendingPurchaseId = defence.id, menuActive = true) }
+            playSound("ammo")
+            val text = "${t("itemMissingPrompt")} ${t(defence.nameKey)}. ${t("itemMissingTail")}"
+            msg(text)
+        }
+    }
+
+    private fun backToPlayState() {
+        _gameState.update {
+            it.copy(menuIndex = BattleMenuItem.PLAY_INDEX, menuActive = false)
+        }
+    }
+
+    /**
+     * Consumes exactly one defence and applies its effect. Returns the spoken
+     * description, or null when the item could not be used.
+     */
+    private fun useDefence(item: DefenceItem, automatic: Boolean = false): String? {
+        val state = _gameState.value
+        val inventory = _inventory.value
+        if (inventory.count(item) <= 0) return null
+
+        when (item) {
+            DefenceItem.MEDKIT -> {
+                if (state.playerHp >= state.playerMaxHp) {
+                    playSound("click")
+                    return "${t("yourHealth")} ${state.playerHp}."
+                }
+                _gameState.update { it.copy(playerHp = it.playerMaxHp) }
+                consumeDefence(item)
+                playSound("medkit")
+                return (if (automatic) t("autoMedkitUsed") else t("medkitUsed")) +
+                    " ${_gameState.value.playerHp}."
+            }
+            DefenceItem.COVER -> {
+                if (state.coverActive) return null
+                _gameState.update { it.copy(coverActive = true, coverHits = 0) }
+                consumeDefence(item)
+                playSound("cover")
+                return (if (automatic) t("autoCoverUsed") else t("coverDeployed")) +
+                    " ${Combat.COVER_MAX_HITS}."
+            }
+            DefenceItem.GLUE_WALL -> {
+                if (state.glueWallActive) return null
+                _gameState.update { it.copy(glueWallActive = true, glueWallProgress = 0) }
+                consumeDefence(item)
+                playSound("glueSound")
+                return if (automatic) t("autoGlueWallUsed") else t("glooWallDeployed")
+            }
+        }
+    }
+
+    private fun consumeDefence(item: DefenceItem) {
+        val updated = Shop.consume(_inventory.value, item)
+        _inventory.value = updated
+        prefs.saveInventory(updated)
     }
 
     fun speakStatus(own: Boolean) {
         if (_currentScreen.value != Screen.BATTLE) return
+        markExplicitAction()
         val state = _gameState.value
         if (own) {
-            val gun = DEFAULT_GUNS[state.gunIndex]
-            val gunState = if (state.activeGunDamaged) {
+            val weapon = state.activeWeapon
+            val weaponState = if (state.activeWeaponDamaged) {
                 "${t("damaged")}. ${t("recovery")}: ${Combat.GUN_RECOVERY_COST}"
             } else {
-                t(gun.nameKey)
+                t(weapon.nameKey)
             }
+            val weapons = state.weapons
+                .mapNotNull { Weapon.fromId(it) }
+                .joinToString(", ") { "${t(it.nameKey)} ${state.ammo.getOrElse(state.weapons.indexOf(it.id)) { 0 }}" }
+            val inv = _inventory.value
+            val extensions = Extension.entries
+                .filter { inv.extensionOwned(it) }
+                .joinToString(", ") {
+                    "${t(it.nameKey)} ${if (inv.extensionEnabled(it)) t("enabledState") else t("disabledState")}"
+                }
+                .ifEmpty { t("noneOwned") }
             val chance = if (state.playerSecondChanceUsed) " ${t("secondChanceUsed")}." else ""
             speak(
-                "${t("yourHealth")} ${state.playerHp}. ${t("ammo")} ${state.ammo[state.gunIndex]}. " +
-                    "$gunState. ${if (state.inCover) t("coverOn") else t("coverOff")}. " +
-                    "${t("medkits")} ${state.medkits}. ${t("coins")} ${_stats.value.coins}.$chance"
+                "${t("yourHealth")} ${state.playerHp}. ${t("ammo")} ${state.activeAmmo}. " +
+                    "$weaponState. $weapons. " +
+                    "${t("medkits")} ${inv.medikits}. ${t("glooWall")} ${inv.glueWalls}. " +
+                    "${t("cover")} ${inv.covers}. " +
+                    "${if (state.coverActive) t("coverOn") else t("coverOff")}. " +
+                    "${t("profileExtensions")} $extensions. ${t("coins")} ${_stats.value.coins}.$chance"
             )
         } else {
-            val coverText = if (state.devilCoverHp > 0) " ${t("devilCover")} ${state.devilCoverHp}." else ""
-            val itemsText = if (state.devilSecondChanceUsed) {
-                " ${t("devilItemsLeft")} ${state.devilsItemCount()}."
+            val coverText = if (state.robertCoverActive) {
+                " ${t("cover")} ${Combat.COVER_MAX_HITS - state.robertCoverHits}."
             } else ""
+            val glueText = if (state.robertGlueWallActive) {
+                " ${t("glooWall")} ${state.robertGlueWallProgress}."
+            } else ""
+            val weaponText = state.robertWeapon?.let { t(it.nameKey) } ?: ""
             speak(
-                "${t("enemyHealth")} ${state.devilHp}. ${t("distance")} ${state.distance.roundToInt()} " +
-                    "${t("meters")}.$coverText$itemsText"
+                "${t("enemyHealth")} ${state.robertHp}. ${t("distance")} " +
+                    "${state.distance.roundToInt()} ${t("meters")}. $weaponText." +
+                    "$coverText$glueText"
             )
         }
     }
-
-    private fun GameState.devilsItemCount(): Int = devilItemsLeft.coerceAtLeast(0)
 
     fun exitBattle() {
         stopTimers()
@@ -1103,10 +1418,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // ---------------------------------------------------------------------
 
     /**
-     * End Game & Level/Round Progression:
-     * - 10 wins promote one level.
-     * - Completing level 30 ends the round and begins the next round at level 1.
-     * - Immediately plays victory/defeat sound via managed audio channel.
+     * Ends a battle: coins are awarded, 10 wins promote a level, 10 levels
+     * complete a round, the fifth round wins the match, and the result screen
+     * is locked for four seconds.
      */
     private fun endGame(won: Boolean) {
         stopTimers()
@@ -1127,11 +1441,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         var leveled = false
         var roundCompleted = false
+        var matchWon = false
         if (won) {
             val promotion = Progression.applyWin(updatedStats)
             updatedStats = promotion.stats
             leveled = promotion.leveledUp
             roundCompleted = promotion.roundCompleted
+            matchWon = promotion.matchWon
         }
 
         _stats.value = updatedStats
@@ -1142,33 +1458,52 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             coins = gain,
             hits = state.playerHits,
             shots = state.playerShots,
-            devilShots = state.devilShots,
+            robertShots = state.robertShots,
             hp = state.playerHp,
             levelUp = leveled,
-            roundComplete = roundCompleted,
+            roundComplete = roundCompleted || matchWon,
+            matchWon = matchWon,
             round = updatedStats.round,
             level = updatedStats.level
         )
 
+        _gameState.update { it.copy(matchWon = matchWon) }
         _currentScreen.value = Screen.RESULT
         updateAudioForScreen(Screen.RESULT)
         playSound(if (won) "win" else "lose")
+        startResultLock()
 
         var speech = if (won) t("victoryMsg") else t("defeatMsg")
         speech += " ${t("earned")} $gain."
-        if (roundCompleted) {
+        if (matchWon) {
+            speech += " ${t("matchWonMsg")}"
+        } else if (roundCompleted) {
             speech += " ${t("roundCompleted")} ${t("round")} ${updatedStats.round}!"
         } else if (leveled) {
             speech += " ${t("newLevel")} ${updatedStats.level}."
         }
+        speech += " ${t("resultWait")}"
         speak(speech)
     }
 
-    /**
-     * Play Again:
-     * Immediately stops victory or defeat audio before restarting the game.
-     */
+    private fun startResultLock() {
+        resultJob?.cancel()
+        _resultReady.value = false
+        resultJob = viewModelScope.launch {
+            delay(RESULT_LOCK_MS)
+            _resultReady.value = true
+        }
+    }
+
+    /** Play Again: only possible after the four second result lock. */
     fun playAgain() {
+        if (!_resultReady.value) {
+            playSound("ammo")
+            speak(t("waitPlease"))
+            return
+        }
+        resultJob?.cancel()
+        resultJob = null
         stopTimers()
         audioManager.stopSound("win")
         audioManager.stopSound("lose")
@@ -1186,11 +1521,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // Stats
     // ---------------------------------------------------------------------
 
-    /**
-     * Completely wipes the player's statistics: games, wins, kills, coins and
-     * progress all go back to zero, and level and round go back to 1.
-     * The name and audio settings are kept so the app stays usable.
-     */
     fun clearStats() {
         stopTimers()
         audioManager.stopSound("walk")
@@ -1199,10 +1529,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val cleared = GameStats.cleared()
         prefs.clearStats(cleared)
         _stats.value = cleared
+        _inventory.value = Inventory()
         _resultData.value = ResultData()
         resetBattleState()
-        // resetBattleState stops screen audio; the Profile screen must keep
-        // its menu music after the wipe.
         updateAudioForScreen(_currentScreen.value)
 
         playSound("spend", volume = 0.9f)
@@ -1214,9 +1543,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // ---------------------------------------------------------------------
 
     fun handleGesture(direction: String, fingers: Int) {
-        val mode = _settings.value.mode
-        if (mode == ControlMode.BUTTONS) return
-
         when (GestureRouter.route(_currentScreen.value, direction, fingers)) {
             GameAction.CONTINUE -> continueToJump()
             GameAction.BACK_TO_MENU -> navigateTo(Screen.MENU)
@@ -1225,20 +1551,30 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             GameAction.LAND -> doLand()
             GameAction.FIRE -> fire()
             GameAction.RELOAD -> doReload()
-            GameAction.NEXT_GUN -> switchGun(1)
-            GameAction.PREV_GUN -> switchGun(-1)
-            // Two-finger swipe up: Gloo Wall (cover) for 100 coins.
-            GameAction.GLOO_WALL -> deployGlooWall()
-            GameAction.MEDKIT -> useMedkit()
-            GameAction.TOGGLE_COVER -> toggleCover()
-            GameAction.EXIT_BATTLE -> exitBattle()
-            // Three-finger swipe left: repair every damaged gun for 300 coins.
-            GameAction.RECOVER_GUN -> recoverGun()
+            GameAction.NEXT_WEAPON -> switchWeapon(1)
+            GameAction.PREV_WEAPON -> switchWeapon(-1)
+            GameAction.MENU_NEXT -> cycleMenu(1)
+            GameAction.MENU_PREV -> cycleMenu(-1)
+            GameAction.ACTIVATE_MENU -> activateMenuItem()
             GameAction.STATUS_OWN -> speakStatus(own = true)
             GameAction.STATUS_ENEMY -> speakStatus(own = false)
+            GameAction.EXIT_BATTLE -> exitBattle()
             GameAction.PLAY_AGAIN -> playAgain()
             GameAction.NONE -> {}
         }
+    }
+
+    fun handleTap() {
+        // Buttons and gestures set this marker; a tap immediately afterwards
+        // belongs to that action and must not activate the menu as well.
+        if (System.currentTimeMillis() - lastExplicitActionAt < 350L) return
+        if (GestureRouter.tap(_currentScreen.value) == GameAction.ACTIVATE_MENU) {
+            activateMenuItem()
+        }
+    }
+
+    private fun markExplicitAction() {
+        lastExplicitActionAt = System.currentTimeMillis()
     }
 
     private fun stopTimers() {
@@ -1246,13 +1582,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         stepJob = null
         counterJob?.cancel()
         counterJob = null
-        devilFireJob?.cancel()
-        devilFireJob = null
+        robertFireJob?.cancel()
+        robertFireJob = null
     }
 
     override fun onCleared() {
         super.onCleared()
         stopTimers()
+        resultJob?.cancel()
         audioManager.release()
         ttsManager.shutdown()
     }

@@ -105,6 +105,15 @@ class AudioManager(private val context: Context) {
             applyMusicVolume()
         }
 
+    /**
+     * Walking footsteps play at 75% of the current speech (TTS) volume, so the
+     * footstep level always follows the voice level the player chose.
+     */
+    var walkVolume: Float = 0.75f
+        set(value) {
+            field = VolumeMixer.clamp(value)
+        }
+
     var soundTheme: SoundTheme = SoundTheme.TACTICAL
     var hapticsEnabled: Boolean = true
 
@@ -116,28 +125,55 @@ class AudioManager(private val context: Context) {
         context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
     }
 
+    /**
+     * Canonical sound keys mapped to their asset files. Every file name in
+     * assets/sounds matches its use, in lower case, and every key is reused
+     * consistently across the whole codebase.
+     */
     private val soundAliases = mapOf(
-        "click" to listOf("90kqun.mp3", "click.mp3"),
-        "reload" to listOf("gun-reload.mp3", "gun reload.mp3"),
-        "fire" to listOf("gwaweo.mp3", "fire.mp3"),
-        "pistol" to listOf("pistel-sound.mp3", "pistol-sound.mp3", "pistol.mp3"),
-        "shotgun" to listOf("short-gun.mp3", "shotgun.mp3"),
+        "click" to listOf("click.mp3"),
+        "gunReload" to listOf("gun-reload.mp3"),
+        "reload" to listOf("gun-reload.mp3"),
+        // Firearms.
+        "assault" to listOf("assault-sound.mp3"),
+        "pistol" to listOf("pistol-sound.mp3"),
+        "shortGun" to listOf("short-gun.mp3"),
+        "sniperRifle" to listOf("sniper-rifle.mp3"),
+        "fire" to listOf("assault-sound.mp3"),
+        "shotgun" to listOf("short-gun.mp3"),
+        // Melee weapons.
+        "knifeHit" to listOf("knife-hit.mp3"),
+        "knifeMiss" to listOf("knife-miss.mp3"),
+        "knifeSwitch" to listOf("knife-switch.mp3"),
+        "knifeSwish" to listOf("knife-switch.mp3"),
+        "swordHit" to listOf("sword-hit.mp3"),
+        "swordMiss" to listOf("sword-miss.mp3"),
+        "swordGlide" to listOf("sword-glide.mp3"),
+        "swordSwitch" to listOf("sword-switch.mp3"),
+        // Barriers and defences.
+        "glueSound" to listOf("glue-sound.mp3"),
+        "glueCrack" to listOf("glue-crack.mp3"),
+        "glueWallHit" to listOf("glue-wall-hit.mp3"),
+        "coverCrack" to listOf("cover-crack.mp3"),
+        "coverHit" to listOf("cover-hit.mp3"),
+        "cover" to listOf("cover.mp3"),
+        "gloowall" to listOf("glue-sound.mp3"),
+        "medkit" to listOf("medkit.mp3"),
+        // Impacts.
         "hit" to listOf("hit.mp3"),
         "enemyHit" to listOf("enemy-hit.mp3"),
-        "damage" to listOf("0zikl2.mp3", "damage.mp3"),
-        "gloowall" to listOf("49h9c0.mp3", "gloowall.mp3"),
-        "medkit" to listOf("oqvwpr.mp3", "medkit.mp3"),
-        "ammo" to listOf("onm1jd.mp3", "ammo.mp3"),
-        "spend" to listOf("money-spend.mp3", "spend-sound.mp3"),
-        "cover" to listOf("cover-sound.mp3", "cover.mp3"),
-        "jump" to listOf("yz2t5x.mp3", "jump.mp3"),
-        "land" to listOf("yz2t5x.mp3", "land.mp3"),
-        "airplane" to listOf("w3abgf.mp3", "airplane.mp3"),
-        "parachute" to listOf("7yxd6u.mp3", "parachute.mp3"),
-        "win" to listOf("vlw1o1.mp3", "win.mp3"),
-        "lose" to listOf("6zjd1d.mp3", "lose.mp3"),
-        "music" to listOf("0gk0a5.mp3", "background.mp3"),
-        "walk" to listOf("walking-sound.mp3")
+        "damage" to listOf("damage.mp3"),
+        "ammo" to listOf("ammo.mp3"),
+        "spend" to listOf("spend-sound.mp3"),
+        // Flight and results.
+        "jump" to listOf("jump.mp3"),
+        "land" to listOf("jump.mp3"),
+        "airplane" to listOf("airplane.mp3"),
+        "parachute" to listOf("parachute.mp3"),
+        "win" to listOf("win.mp3"),
+        "lose" to listOf("lose.mp3"),
+        "music" to listOf("music.mp3"),
+        "walk" to listOf("walk.mp3")
     )
 
     init {
@@ -418,7 +454,8 @@ class AudioManager(private val context: Context) {
      */
     fun updateWalk3dAudio(distance: Float, lateralOffset: Float = 0f, fleeing: Boolean = false) {
         val prox = (1.0f - (distance / Combat.MAX_RANGE)).coerceIn(0f, 1f)
-        val baseVol = (0.05f + prox * prox * 0.95f).coerceIn(0.05f, 1.0f)
+        // 75% of the TTS volume, shaped by proximity so far footsteps stay quiet.
+        val baseVol = (walkVolume * (0.12f + prox * prox * 0.88f)).coerceIn(0f, 1.0f)
         val (left, right) = calculate3dVolume(
             x = lateralOffset,
             y = 0f,
@@ -626,19 +663,19 @@ class AudioManager(private val context: Context) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 when (key) {
-                    "fire", "shotgun", "pistol" -> {
+                    "assault", "shortGun", "pistol", "sniperRifle", "fire", "shotgun" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE))
                     }
-                    "reload" -> {
+                    "gunReload", "reload" -> {
                         vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 30, 40, 50), -1))
                     }
                     "damage" -> {
                         vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 70, 40, 90), -1))
                     }
-                    "hit", "enemyHit" -> {
+                    "hit", "enemyHit", "knifeHit", "swordHit" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(30, 180))
                     }
-                    "gloowall", "cover" -> {
+                    "glueSound", "cover", "gloowall" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(60, 200))
                     }
                     "medkit" -> {
@@ -657,8 +694,8 @@ class AudioManager(private val context: Context) {
             } else {
                 @Suppress("DEPRECATION")
                 when (key) {
-                    "fire", "shotgun", "pistol", "damage" -> vibrator.vibrate(60)
-                    "hit", "gloowall", "cover", "reload" -> vibrator.vibrate(35)
+                    "assault", "shortGun", "pistol", "damage" -> vibrator.vibrate(60)
+                    "hit", "glueSound", "cover", "gunReload" -> vibrator.vibrate(35)
                 }
             }
         } catch (_: Exception) {}
@@ -672,12 +709,17 @@ class AudioManager(private val context: Context) {
 
         val sampleRate = 22050
         val pcm = when (key) {
-            "fire" -> generateGunshotWave(sampleRate, 0.16f, 320f, 90f)
-            "shotgun" -> generateGunshotWave(sampleRate, 0.28f, 180f, 60f)
+            "assault", "fire" -> generateGunshotWave(sampleRate, 0.16f, 320f, 90f)
+            "shortGun", "shotgun" -> generateGunshotWave(sampleRate, 0.28f, 180f, 60f)
             "pistol" -> generateGunshotWave(sampleRate, 0.12f, 440f, 140f)
-            "reload" -> generateReloadWave(sampleRate, 0.45f)
+            "sniperRifle" -> generateGunshotWave(sampleRate, 0.34f, 260f, 70f)
+            "gunReload", "reload" -> generateReloadWave(sampleRate, 0.45f)
+            "knifeHit", "knifeMiss", "swordHit", "swordMiss" -> generateHitWave(sampleRate, 0.10f)
+            "knifeSwish", "knifeSwitch", "swordGlide", "swordSwitch" ->
+                generateChirpWave(sampleRate, 0.16f, 900f, 320f)
             "damage" -> generateDamageWave(sampleRate, 0.25f)
-            "hit", "enemyHit" -> generateHitWave(sampleRate, 0.10f)
+            "hit", "enemyHit", "coverHit", "glueWallHit" -> generateHitWave(sampleRate, 0.10f)
+            "glueCrack", "coverCrack" -> generateNoiseThudWave(sampleRate, 0.30f, 160f)
             "click" -> generateBeepWave(sampleRate, 0.035f, 1200f)
             "jump" -> generateChirpWave(sampleRate, 0.20f, 220f, 660f)
             "land" -> generateNoiseThudWave(sampleRate, 0.25f, 85f)
@@ -685,7 +727,7 @@ class AudioManager(private val context: Context) {
             "airplane" -> generateEngineLoopWave(sampleRate, 1.2f, 95f)
             "walk" -> generateFootstepWave(sampleRate, 0.14f)
             "medkit" -> generateChimeWave(sampleRate, 0.35f, doubleArrayOf(523.25, 659.25, 783.99))
-            "gloowall" -> generateWallClankWave(sampleRate, 0.3f)
+            "glueSound", "gloowall" -> generateWallClankWave(sampleRate, 0.3f)
             "cover" -> generateCoverWave(sampleRate, 0.5f)
             "ammo" -> generateBeepWave(sampleRate, 0.08f, 900f)
             "spend" -> generateCoinWave(sampleRate, 0.18f)
