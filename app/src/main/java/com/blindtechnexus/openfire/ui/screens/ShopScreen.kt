@@ -55,6 +55,7 @@ fun ShopScreen(viewModel: GameViewModel) {
 
     // Pending confirmation for a removal.
     var pendingWeapon by remember { mutableStateOf<Weapon?>(null) }
+    var pendingDefence by remember { mutableStateOf<DefenceItem?>(null) }
     var pendingExtension by remember { mutableStateOf<Extension?>(null) }
 
     Column(
@@ -161,7 +162,12 @@ fun ShopScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(12.dp))
 
             DefenceItem.entries.forEach { item ->
-                DefenceRow(viewModel, item, inventory)
+                DefenceRow(
+                    viewModel = viewModel,
+                    item = item,
+                    inventory = inventory,
+                    onRemove = { pendingDefence = item }
+                )
                 Spacer(modifier = Modifier.height(10.dp))
             }
         }
@@ -301,6 +307,50 @@ fun ShopScreen(viewModel: GameViewModel) {
         )
     }
 
+    // Confirmation before removing a defence item.
+    pendingDefence?.let { item ->
+        AlertDialog(
+            onDismissRequest = { pendingDefence = null },
+            title = {
+                Text(
+                    text = viewModel.t("removeConfirmTitle"),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "${viewModel.t(item.nameKey)}. ${viewModel.t("removeConfirmMessage")}",
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDefence = null
+                        viewModel.removeDefence(item.id)
+                    },
+                    modifier = Modifier.testTag("shop_defence_confirm_remove")
+                ) {
+                    Text(
+                        text = viewModel.t("confirmRemove"),
+                        color = WarnBright,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDefence = null }) {
+                    Text(text = viewModel.t("cancel"), color = TextAccent)
+                }
+            },
+            containerColor = CardBg,
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
+
     // Confirmation before removing an extension.
     pendingExtension?.let { extension ->
         AlertDialog(
@@ -358,7 +408,8 @@ private fun defenceTotalsText(viewModel: GameViewModel, inventory: Inventory): S
 private fun DefenceRow(
     viewModel: GameViewModel,
     item: DefenceItem,
-    inventory: Inventory
+    inventory: Inventory,
+    onRemove: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
@@ -382,12 +433,26 @@ private fun DefenceRow(
             fontWeight = FontWeight.Bold
         )
         Spacer(modifier = Modifier.height(8.dp))
-        GameButton(
-            text = viewModel.t("buy"),
-            onClick = { viewModel.buyDefence(item.id) },
-            type = ButtonType.PRIMARY,
-            testTag = "shop_defence_${item.id}_buy"
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            GameButton(
+                text = viewModel.t("buy"),
+                onClick = { viewModel.buyDefence(item.id) },
+                type = ButtonType.PRIMARY,
+                modifier = Modifier.weight(1f),
+                testTag = "shop_defence_${item.id}_buy"
+            )
+            GameButton(
+                text = viewModel.t("remove"),
+                onClick = onRemove,
+                type = ButtonType.DANGER,
+                modifier = Modifier.weight(1f),
+                testTag = "shop_defence_${item.id}_remove",
+                enabled = inventory.count(item) > 0
+            )
+        }
     }
 }
 

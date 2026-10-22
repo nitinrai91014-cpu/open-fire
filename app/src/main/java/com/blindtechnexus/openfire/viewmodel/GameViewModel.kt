@@ -375,6 +375,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    /** Discards one owned defence, after the shop confirmed the removal. */
+    fun removeDefence(itemId: String) {
+        val item = DefenceItem.fromId(itemId) ?: return
+        if (_inventory.value.count(item) <= 0) {
+            playSound("ammo")
+            msg(t("nothingToRemove"))
+            return
+        }
+        val updated = Shop.consume(_inventory.value, item)
+        _inventory.value = updated
+        prefs.saveInventory(updated)
+        playSound("click")
+        msg("${t(item.nameKey)}. ${t("removedOne")} ${updated.count(item)}.")
+    }
+
     fun buyExtension(extensionId: String) {
         val extension = Extension.fromId(extensionId) ?: return
         applyPurchase(
