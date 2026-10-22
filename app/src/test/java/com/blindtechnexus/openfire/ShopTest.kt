@@ -92,11 +92,11 @@ class ShopTest {
             inventory = bought.inventory
             coins = bought.coins
         }
-        assertEquals(3, inventory.medkits)
+        assertEquals(3, inventory.medikits)
         assertEquals(1400, coins)
 
         inventory = Shop.consume(inventory, DefenceItem.MEDKIT)
-        assertEquals(2, inventory.medkits)
+        assertEquals(2, inventory.medikits)
         assertTrue(inventory.count(DefenceItem.MEDKIT) >= 0)
     }
 
