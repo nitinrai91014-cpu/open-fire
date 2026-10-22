@@ -33,22 +33,21 @@ object RobertRules {
     /** The Robert's sniper is usable under this health while it is locked. */
     const val LOCKED_SNIPER_MAX_HP = 100
 
-    /** Round health ladder. Round 6 (after the match) falls back to round 1. */
-    fun hpForRound(round: Int): Int = when (round.coerceIn(1, 5)) {
-        1 -> 300
+    /** Round health ladder. Any round outside 1..5 falls back to round 1. */
+    fun hpForRound(round: Int): Int = when (round) {
         2 -> 400
         3 -> 500
         4 -> 600
-        else -> 750
+        5 -> 750
+        else -> 300
     }
 
     /** Consecutive hits needed before the Robert runs far away. */
-    fun fleeAfterHits(round: Int): Int = when (round.coerceIn(1, 5)) {
-        1 -> 2
-        2 -> 2
+    fun fleeAfterHits(round: Int): Int = when (round) {
         3 -> 3
         4 -> 4
-        else -> 5
+        5 -> 5
+        else -> 2
     }
 
     fun profile(round: Int): RobertProfile {
