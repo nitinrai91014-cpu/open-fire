@@ -74,6 +74,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var counterJob: Job? = null
     private var robertFireJob: Job? = null
     private var resultJob: Job? = null
+    private var playerMoveJob: Job? = null
     private var stepCount = 0
     private var foreground = true
 
@@ -97,6 +98,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         /** Fast retreat: metres gained per flee tick. */
         const val FLEE_STEP = 6f
         const val FLEE_TICK_MS = 160L
+
+        /** Player movement step in metres per tick. */
+        const val PLAYER_MOVE_STEP = 0.65f
+        const val PLAYER_MOVE_TICK_MS = 100L
 
         /** Advance tick length. */
         const val ADVANCE_TICK_MS = 550L
@@ -615,6 +620,39 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    /**
+     * Continuous player movement in the 100 m arena:
+     *  - Forward: player advances closer to Robert (decreasing distance).
+     *  - Backward: player retreats/runs away from Robert (increasing distance).
+     * Stops immediately when the user lifts their finger.
+     */
+    fun startPlayerMove(forward: Boolean) {
+        if (_currentScreen.value != Screen.BATTLE) return
+        playerMoveJob?.cancel()
+        playerMoveJob = viewModelScope.launch {
+            while (true) {
+                if (!foreground || _currentScreen.value != Screen.BATTLE) break
+                val state = _gameState.value
+                if (state.playerHp <= 0 || state.robertHp <= 0) break
+                val step = if (forward) -PLAYER_MOVE_STEP else PLAYER_MOVE_STEP
+                val newDist = (state.distance + step).coerceIn(0f, Combat.MAX_RANGE)
+                _gameState.update { it.copy(distance = newDist) }
+                updateWalkAudio(newDist, fleeing = !forward)
+                if (stepJob == null || stepJob?.isActive != true) {
+                    planRobertStep(80L)
+                }
+                delay(PLAYER_MOVE_TICK_MS)
+            }
+        }
+    }
+
+    fun stopPlayerMove() {
+        playerMoveJob?.cancel()
+        playerMoveJob = null
+        val state = _gameState.value
+        updateWalkAudio(state.distance, state.robertFleeing)
+    }
+
     private fun planRobertStep(delayMs: Long) {
         stepJob?.cancel()
         stepJob = viewModelScope.launch {
@@ -844,7 +882,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val progress = if (breaks) state.glueWallProgress + 1 else 0
             _gameState.update { it.copy(glueWallProgress = progress) }
             playSound("glueHit", volume = 0.9f)
-            if (breaks) playSound("glueWallCrack", volume = 0.8f)
             if (progress >= Combat.GLUE_WALL_BREAK_HITS) {
                 _gameState.update {
                     it.copy(glueWallActive = false, glueWallProgress = 0)
@@ -1146,7 +1183,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val progress = if (breaks) state.robertGlueWallProgress + 1 else 0
             _gameState.update { it.copy(robertGlueWallProgress = progress) }
             playSound("glueHit", volume = 0.9f)
-            if (breaks) playSound("glueWallCrack", volume = 0.8f)
             if (progress >= Combat.GLUE_WALL_BREAK_HITS) {
                 _gameState.update {
                     it.copy(robertGlueWallActive = false, robertGlueWallProgress = 0)
@@ -1215,7 +1251,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         if (newRobertHp <= 0) {
-            playSound(weapon.hitSoundKey, volume = 1f)
             msg(text)
             endGame(won = true)
             return
@@ -1705,13 +1740,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun handleTap() {
+    fun handleCenterTap() {
         // Buttons and gestures set this marker; a tap immediately afterwards
         // belongs to that action and must not activate the menu as well.
         if (System.currentTimeMillis() - lastExplicitActionAt < 350L) return
-        if (GestureRouter.tap(_currentScreen.value) == GameAction.ACTIVATE_MENU) {
+        val state = _gameState.value
+        // Only activate if the user is currently switching/active in the menu.
+        // While not switching menus, it doesn't activate anything to prevent accidental exits.
+        if (state.menuActive) {
             activateMenuItem()
         }
+    }
+
+    fun handleTap() {
+        handleCenterTap()
     }
 
     private fun markExplicitAction() {
@@ -1719,6 +1761,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun stopTimers() {
+        playerMoveJob?.cancel()
+        playerMoveJob = null
         stepJob?.cancel()
         stepJob = null
         counterJob?.cancel()

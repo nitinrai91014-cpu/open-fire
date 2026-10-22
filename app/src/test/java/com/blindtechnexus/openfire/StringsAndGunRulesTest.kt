@@ -86,13 +86,13 @@ class StringsAndGunRulesTest {
         assertTrue("Guide must document the quick menu", en.contains("quick menu"))
         assertTrue("Guide must document the extensions", en.contains("automatic reload for 50 coins"))
         assertTrue("Guide must document the four second wait", en.contains("four seconds"))
-        assertTrue("Guide must document the new power table", en.contains("knife 15 percent"))
-        assertTrue("Guide must document the short gun boost", en.contains("18 percent instead of 10 percent"))
+        assertTrue("Guide must document the new power table", en.contains("knife 8 percent"))
+        assertTrue("Guide must document the short gun boost", en.contains("10 percent instead of 8 percent"))
         assertTrue("Guide must document the new prices", en.contains("knife 300 coins"))
         assertTrue("Guide must document the 11 hit cover", en.contains("stops 11 hits"))
         assertTrue("Guide must document the 100 coin recovery", en.contains("100 coins for Recovery"))
         assertTrue("Guide must document the recover menu item", en.contains("exit and recover"))
-        assertTrue("Guide must document the silent battle start", en.contains("complete silence"))
+        assertTrue("Guide must document three screen portions", en.contains("divided into three portions"))
         assertTrue("Guide must document the enemy firing bands", en.contains("40 to 70 percent band"))
     }
 

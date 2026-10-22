@@ -66,12 +66,12 @@ enum class FireRange(
  * Weapon power table, as a percentage of the victim's maximum health at
  * 90%-100% proximity. The player and the Robert use exactly the same table:
  *
- *  - knife         15%
- *  - sword         20%
- *  - assault gun   18%
- *  - pistol        22%
- *  - sniper rifle  25%
- *  - short gun     10%, but 18% at 90%-100% proximity
+ *  - knife         8%
+ *  - sword         12%
+ *  - assault gun   14%
+ *  - pistol        13%
+ *  - sniper rifle  16%
+ *  - short gun     8%, but 10% at 90%-100% proximity
  *
  * There is no preset where a combatant loses after a fixed number of hits:
  * a combatant is defeated only when their health actually reaches zero.
@@ -81,8 +81,8 @@ enum class FireRange(
  * repaired by the Recovery action, which costs [GUN_RECOVERY_COST] coins.
  */
 object Combat {
-    /** Full combat area width in metres (the arena is a 50 m range). */
-    const val MAX_RANGE = 50f
+    /** Full combat area width in metres (the arena is a 100 m range). */
+    const val MAX_RANGE = 100f
 
     const val MISS_ZONE_MIN = 0f
     const val MISS_ZONE_MAX = 40f
@@ -115,10 +115,10 @@ object Combat {
     const val GLUE_WALL_BREAK_PROXIMITY = 90f
 
     /**
-     * The short gun is the one exception of the power table: it only reaches
-     * its full 18% when the target is at 90%-100% proximity.
+     * The short gun is the one exception of the power table: it hits with
+     * 10% under 90%-100% proximity instead of its base 8%.
      */
-    const val SHORT_GUN_CLOSE_POWER_PERCENT = 18
+    const val SHORT_GUN_CLOSE_POWER_PERCENT = 10
 
     /** Converts a distance (50 = far edge, 0 = point-blank) into 0..100% proximity. */
     fun proximityOf(distance: Float): Float =

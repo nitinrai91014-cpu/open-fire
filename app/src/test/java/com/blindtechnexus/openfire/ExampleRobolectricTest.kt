@@ -63,7 +63,7 @@ class ExampleRobolectricTest {
         val pistol = Weapon.entries.find { it.id == "pistol" }
         org.junit.Assert.assertNotNull(pistol)
         assertEquals(6, pistol?.magazine)
-        assertEquals(22, pistol?.powerPercent)
+        assertEquals(13, pistol?.powerPercent)
     }
 
     @Test
@@ -165,8 +165,8 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun testGameDefaultsUseTheFiftyMeterArena() {
+    fun testGameDefaultsUseTheOneHundredMeterArena() {
         assertEquals(Combat.MAX_RANGE, GameState().distance, 0.001f)
-        assertEquals(50f, Combat.MAX_RANGE, 0.001f)
+        assertEquals(100f, Combat.MAX_RANGE, 0.001f)
     }
 }

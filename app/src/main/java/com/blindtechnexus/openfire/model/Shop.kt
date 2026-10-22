@@ -9,9 +9,9 @@ package com.blindtechnexus.openfire.model
  * firearms.
  *
  * Power table (percentage of the victim's maximum health at 90%-100%
- * proximity, before the zone multiplier): knife 15, sword 20, assault gun 18,
- * pistol 22, sniper rifle 25 and short gun 10. The short gun is the only
- * exception: at 90%-100% proximity it hits with 18 instead of 10, see
+ * proximity, before the zone multiplier): knife 8, sword 12, assault gun 14,
+ * pistol 13, sniper rifle 16 and short gun 8. The short gun is the only
+ * exception: at 90%-100% proximity it hits with 10 instead of 8, see
  * [Combat.SHORT_GUN_CLOSE_POWER_PERCENT]. The Robert (the enemy) uses exactly
  * the same table.
  *
@@ -38,7 +38,7 @@ enum class Weapon(
     SHORT_GUN(
         id = "shortGun",
         nameKey = "gunShotgun",
-        powerPercent = 10,
+        powerPercent = 8,
         magazine = 6,
         price = 0,
         ownedByDefault = true,
@@ -51,7 +51,7 @@ enum class Weapon(
     ASSAULT_GUN(
         id = "assaultGun",
         nameKey = "gunAssault",
-        powerPercent = 18,
+        powerPercent = 14,
         magazine = 6,
         price = 0,
         ownedByDefault = true,
@@ -64,7 +64,7 @@ enum class Weapon(
     PISTOL(
         id = "pistol",
         nameKey = "gunPistol",
-        powerPercent = 22,
+        powerPercent = 13,
         magazine = 6,
         price = 499,
         ownedByDefault = false,
@@ -77,7 +77,7 @@ enum class Weapon(
     SNIPER(
         id = "sniper",
         nameKey = "gunSniper",
-        powerPercent = 25,
+        powerPercent = 16,
         magazine = 6,
         price = 549,
         ownedByDefault = false,
@@ -90,7 +90,7 @@ enum class Weapon(
     KNIFE(
         id = "knife",
         nameKey = "gunKnife",
-        powerPercent = 15,
+        powerPercent = 8,
         magazine = 0,
         price = 300,
         ownedByDefault = false,
@@ -103,7 +103,7 @@ enum class Weapon(
     SWORD(
         id = "sword",
         nameKey = "gunSword",
-        powerPercent = 20,
+        powerPercent = 12,
         magazine = 0,
         price = 405,
         ownedByDefault = false,

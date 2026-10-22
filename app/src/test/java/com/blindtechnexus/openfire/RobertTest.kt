@@ -30,7 +30,7 @@ class RobertTest {
         assertEquals(1, profile.medikits)
         assertEquals(0, profile.glueWalls)
         assertEquals(1, profile.covers)
-        assertEquals(listOf(Weapon.SHORT_GUN, Weapon.SNIPER), profile.weapons)
+        assertEquals(listOf(Weapon.SHORT_GUN, Weapon.ASSAULT_GUN, Weapon.SNIPER), profile.weapons)
         assertTrue(profile.sniperLocked)
         assertEquals(2, profile.fleeAfterHits)
     }
@@ -129,9 +129,9 @@ class RobertTest {
                 )
             }
         }
-        assertEquals(18, RobertRules.powerFor(Weapon.SHORT_GUN, 95f))
-        assertEquals(10, RobertRules.powerFor(Weapon.SHORT_GUN, 50f))
-        assertEquals(25, RobertRules.powerFor(Weapon.SNIPER, 100f))
+        assertEquals(10, RobertRules.powerFor(Weapon.SHORT_GUN, 95f))
+        assertEquals(8, RobertRules.powerFor(Weapon.SHORT_GUN, 50f))
+        assertEquals(16, RobertRules.powerFor(Weapon.SNIPER, 100f))
     }
 
     @Test

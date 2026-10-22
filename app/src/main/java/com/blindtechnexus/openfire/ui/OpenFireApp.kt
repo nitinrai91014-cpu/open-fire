@@ -69,6 +69,18 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             pass = PointerEventPass.Initial
                         )
 
+                        val screenHeight = size.height.toFloat().takeIf { it > 0f } ?: 1000f
+                        val isBattle = currentScreen == Screen.BATTLE
+                        val isTop = isBattle && firstDown.position.y < screenHeight * 0.33f
+                        val isBottom = isBattle && firstDown.position.y > screenHeight * 0.67f
+                        val isCenter = isBattle && !isTop && !isBottom
+
+                        if (isTop) {
+                            viewModel.startPlayerMove(forward = true)
+                        } else if (isBottom) {
+                            viewModel.startPlayerMove(forward = false)
+                        }
+
                         // Every finger is tracked from its own touch-down point
                         // so a two-finger swipe never reports a bogus direction.
                         val startPositions = mutableMapOf(firstDown.id to firstDown.position)
@@ -97,13 +109,33 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                 }
                             }
 
+                            if ((isTop || isBottom) && maxDelta >= 60f) {
+                                viewModel.stopPlayerMove()
+                            }
+
                             if (event.changes.none { it.pressed }) break
                         }
 
+                        if (isTop || isBottom) {
+                            viewModel.stopPlayerMove()
+                            val threshold = if (maxFingers >= 2) 36f else 60f
+                            if (maxDelta >= threshold) {
+                                val dir = if (abs(bestDx) >= abs(bestDy)) {
+                                    if (bestDx > 0) "right" else "left"
+                                } else {
+                                    if (bestDy > 0) "down" else "up"
+                                }
+                                viewModel.handleGesture(dir, maxFingers)
+                            }
+                            return@awaitEachGesture
+                        }
+
                         if (maxDelta < TAP_SLOP && maxFingers == 1) {
-                            // A single tap activates the highlighted quick-menu
-                            // item on the battle screen.
-                            viewModel.handleTap()
+                            if (isCenter) {
+                                viewModel.handleCenterTap()
+                            } else {
+                                viewModel.handleTap()
+                            }
                             return@awaitEachGesture
                         }
 

@@ -86,23 +86,23 @@ class CombatTest {
 
     @Test
     fun weaponPowersMatchTheRequestedTable() {
-        assertEquals(15, Weapon.KNIFE.powerPercent)
-        assertEquals(20, Weapon.SWORD.powerPercent)
-        assertEquals(18, Weapon.ASSAULT_GUN.powerPercent)
-        assertEquals(22, Weapon.PISTOL.powerPercent)
-        assertEquals(25, Weapon.SNIPER.powerPercent)
-        assertEquals(10, Weapon.SHORT_GUN.powerPercent)
+        assertEquals(8, Weapon.KNIFE.powerPercent)
+        assertEquals(12, Weapon.SWORD.powerPercent)
+        assertEquals(14, Weapon.ASSAULT_GUN.powerPercent)
+        assertEquals(13, Weapon.PISTOL.powerPercent)
+        assertEquals(16, Weapon.SNIPER.powerPercent)
+        assertEquals(8, Weapon.SHORT_GUN.powerPercent)
     }
 
     @Test
     fun theShortGunIsOnlyStrongAtPointBlank() {
-        assertEquals(10, Combat.powerPercentOf(Weapon.SHORT_GUN, 50f))
-        assertEquals(10, Combat.powerPercentOf(Weapon.SHORT_GUN, 89.9f))
-        assertEquals(18, Combat.powerPercentOf(Weapon.SHORT_GUN, 90f))
-        assertEquals(18, Combat.powerPercentOf(Weapon.SHORT_GUN, 100f))
+        assertEquals(8, Combat.powerPercentOf(Weapon.SHORT_GUN, 50f))
+        assertEquals(8, Combat.powerPercentOf(Weapon.SHORT_GUN, 89.9f))
+        assertEquals(10, Combat.powerPercentOf(Weapon.SHORT_GUN, 90f))
+        assertEquals(10, Combat.powerPercentOf(Weapon.SHORT_GUN, 100f))
         // Every other weapon keeps its own value at point blank.
-        assertEquals(25, Combat.powerPercentOf(Weapon.SNIPER, 100f))
-        assertEquals(15, Combat.powerPercentOf(Weapon.KNIFE, 100f))
+        assertEquals(16, Combat.powerPercentOf(Weapon.SNIPER, 100f))
+        assertEquals(8, Combat.powerPercentOf(Weapon.KNIFE, 100f))
     }
 
     @Test
@@ -116,42 +116,42 @@ class CombatTest {
                 )
             }
         }
-        assertEquals(18, RobertRules.powerFor(Weapon.SHORT_GUN, 95f))
-        assertEquals(10, RobertRules.powerFor(Weapon.SHORT_GUN, 50f))
+        assertEquals(10, RobertRules.powerFor(Weapon.SHORT_GUN, 95f))
+        assertEquals(8, RobertRules.powerFor(Weapon.SHORT_GUN, 50f))
     }
 
     @Test
     fun weaponDamageCombinesTheTableAndTheZone() {
-        assertEquals(45, Combat.weaponDamage(Weapon.KNIFE, 100f, 300))
-        assertEquals(60, Combat.weaponDamage(Weapon.SWORD, 100f, 300))
-        assertEquals(75, Combat.weaponDamage(Weapon.SNIPER, 100f, 300))
-        assertEquals(66, Combat.weaponDamage(Weapon.PISTOL, 100f, 300))
-        assertEquals(54, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 300))
-        // Short gun: 18% at point blank, but only 10% in the strong band.
-        assertEquals(54, Combat.weaponDamage(Weapon.SHORT_GUN, 100f, 300))
-        assertEquals(24, Combat.weaponDamage(Weapon.SHORT_GUN, 80f, 300))
-        assertEquals(15, Combat.weaponDamage(Weapon.SHORT_GUN, 50f, 300))
+        assertEquals(24, Combat.weaponDamage(Weapon.KNIFE, 100f, 300))
+        assertEquals(36, Combat.weaponDamage(Weapon.SWORD, 100f, 300))
+        assertEquals(48, Combat.weaponDamage(Weapon.SNIPER, 100f, 300))
+        assertEquals(39, Combat.weaponDamage(Weapon.PISTOL, 100f, 300))
+        assertEquals(42, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 300))
+        // Short gun: 10% at point blank, but only 8% in the strong band.
+        assertEquals(30, Combat.weaponDamage(Weapon.SHORT_GUN, 100f, 300))
+        assertEquals(19, Combat.weaponDamage(Weapon.SHORT_GUN, 80f, 300))
+        assertEquals(12, Combat.weaponDamage(Weapon.SHORT_GUN, 50f, 300))
         assertEquals(0, Combat.weaponDamage(Weapon.SWORD, 20f, 300))
     }
 
     @Test
-    fun proximityUsesTheFiftyMeterArena() {
-        assertEquals(0f, Combat.proximityOf(50f), 0.001f)
-        assertEquals(40f, Combat.proximityOf(30f), 0.001f)
-        assertEquals(70f, Combat.proximityOf(15f), 0.001f)
-        assertEquals(90f, Combat.proximityOf(5f), 0.001f)
+    fun proximityUsesTheOneHundredMeterArena() {
+        assertEquals(0f, Combat.proximityOf(100f), 0.001f)
+        assertEquals(40f, Combat.proximityOf(60f), 0.001f)
+        assertEquals(70f, Combat.proximityOf(30f), 0.001f)
+        assertEquals(90f, Combat.proximityOf(10f), 0.001f)
         assertEquals(100f, Combat.proximityOf(0f), 0.001f)
-        assertEquals(0f, Combat.proximityOf(80f), 0.001f)
+        assertEquals(0f, Combat.proximityOf(150f), 0.001f)
         assertEquals(100f, Combat.proximityOf(-20f), 0.001f)
     }
 
     @Test
     fun distanceAndProximityAreInverseOperations() {
-        assertEquals(40f, Combat.distanceFor(20f), 0.001f)
-        assertEquals(22.5f, Combat.distanceFor(55f), 0.001f)
-        assertEquals(2.5f, Combat.distanceFor(95f), 0.001f)
+        assertEquals(80f, Combat.distanceFor(20f), 0.001f)
+        assertEquals(45f, Combat.distanceFor(55f), 0.001f)
+        assertEquals(5f, Combat.distanceFor(95f), 0.001f)
         assertEquals(0f, Combat.distanceFor(100f), 0.001f)
-        assertEquals(50f, Combat.distanceFor(0f), 0.001f)
+        assertEquals(100f, Combat.distanceFor(0f), 0.001f)
         for (proximity in listOf(0f, 15f, 40f, 55f, 70f, 95f, 100f)) {
             assertEquals(proximity, Combat.proximityOf(Combat.distanceFor(proximity)), 0.001f)
         }
@@ -171,9 +171,9 @@ class CombatTest {
         assertEquals(HitZone.LIGHT, Combat.zoneFor(FireRange.MID.midProximity))
         assertEquals(HitZone.HEAVY, Combat.zoneFor(FireRange.CLOSE.midProximity))
 
-        assertEquals(40f, FireRange.FAR.targetDistance, 0.001f)
-        assertEquals(22.5f, FireRange.MID.targetDistance, 0.001f)
-        assertEquals(2.5f, FireRange.CLOSE.targetDistance, 0.001f)
+        assertEquals(80f, FireRange.FAR.targetDistance, 0.001f)
+        assertEquals(45f, FireRange.MID.targetDistance, 0.001f)
+        assertEquals(5f, FireRange.CLOSE.targetDistance, 0.001f)
     }
 
     @Test

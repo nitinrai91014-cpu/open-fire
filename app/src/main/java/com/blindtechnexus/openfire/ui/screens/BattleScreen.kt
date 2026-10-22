@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
@@ -137,6 +138,46 @@ fun BattleScreen(viewModel: GameViewModel) {
             type = ButtonType.DANGER,
             testTag = "battle_back_menu_button"
         )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Top Portion (Upper section): Move Forward
+        GameCard(
+            borderColor = Color(0xFF4CAF50),
+            backgroundColor = Color(0xFF1B2E1E),
+            modifier = Modifier.semantics {
+                contentDescription = "${viewModel.t("moveForward")}. ${viewModel.t("forwardHint")}"
+            }
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "▲ ${viewModel.t("moveForward")}",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF81C784)
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = viewModel.t("forwardHint"),
+                        fontSize = 12.sp,
+                        color = TextMuted
+                    )
+                }
+                GameButton(
+                    text = "▲",
+                    onClick = {
+                        viewModel.startPlayerMove(forward = true)
+                    },
+                    type = ButtonType.PRIMARY,
+                    testTag = "move_forward_zone"
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -419,6 +460,45 @@ fun BattleScreen(viewModel: GameViewModel) {
                     .border(1.dp, CardBorder, RoundedCornerShape(8.dp))
                     .padding(10.dp)
             )
+        }
+
+        // Bottom Portion (Lower section): Move Backward / Retreat
+        Spacer(modifier = Modifier.height(14.dp))
+        GameCard(
+            borderColor = Color(0xFF2196F3),
+            backgroundColor = Color(0xFF142436),
+            modifier = Modifier.semantics {
+                contentDescription = "${viewModel.t("moveBackward")}. ${viewModel.t("backwardHint")}"
+            }
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "▼ ${viewModel.t("moveBackward")}",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF64B5F6)
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = viewModel.t("backwardHint"),
+                        fontSize = 12.sp,
+                        color = TextMuted
+                    )
+                }
+                GameButton(
+                    text = "▼",
+                    onClick = {
+                        viewModel.startPlayerMove(forward = false)
+                    },
+                    type = ButtonType.PRIMARY,
+                    testTag = "move_backward_zone"
+                )
+            }
         }
     }
 }
