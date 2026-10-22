@@ -39,7 +39,7 @@ class ExampleRobolectricTest {
         assertEquals("ओपन फायर", Strings.get("title", "hi"))
         assertEquals("ओपन फायर", Strings.get("title", "ne"))
 
-        assertEquals("Version 2.0", Strings.get("version", "en"))
+        assertEquals("Version 2.1", Strings.get("version", "en"))
         assertEquals("Changelog", Strings.get("changelog", "en"))
         assertEquals("Join Telegram Channel", Strings.get("joinTelegram", "en"))
         assertEquals("Contact on WhatsApp", Strings.get("contactWhatsApp", "en"))
@@ -63,7 +63,7 @@ class ExampleRobolectricTest {
         val pistol = Weapon.entries.find { it.id == "pistol" }
         org.junit.Assert.assertNotNull(pistol)
         assertEquals(6, pistol?.magazine)
-        assertEquals(15, pistol?.power)
+        assertEquals(22, pistol?.powerPercent)
     }
 
     @Test

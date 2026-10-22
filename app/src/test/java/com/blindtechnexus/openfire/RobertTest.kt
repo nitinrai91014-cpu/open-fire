@@ -1,12 +1,15 @@
 package com.blindtechnexus.openfire
 
+import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DefenceItem
+import com.blindtechnexus.openfire.model.FireRange
 import com.blindtechnexus.openfire.model.RobertRules
 import com.blindtechnexus.openfire.model.Weapon
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.random.Random
 
 /** Locks the round-by-round Robert rules. */
 class RobertTest {
@@ -114,5 +117,69 @@ class RobertTest {
         assertTrue(RobertRules.shouldFlee(2, 2))
         assertTrue(RobertRules.shouldFlee(3, 3))
         assertFalse(RobertRules.shouldFlee(2, 3))
+    }
+
+    @Test
+    fun theRobertNeverGetsAStrongerWeaponThanThePlayer() {
+        for (weapon in Weapon.entries) {
+            for (proximity in listOf(10f, 50f, 80f, 95f)) {
+                assertEquals(
+                    Combat.powerPercentOf(weapon, proximity),
+                    RobertRules.powerFor(weapon, proximity)
+                )
+            }
+        }
+        assertEquals(18, RobertRules.powerFor(Weapon.SHORT_GUN, 95f))
+        assertEquals(10, RobertRules.powerFor(Weapon.SHORT_GUN, 50f))
+        assertEquals(25, RobertRules.powerFor(Weapon.SNIPER, 100f))
+    }
+
+    @Test
+    fun heRandomlyPrefersTheMidOrTheCloseBand() {
+        val random = Random(20261022)
+        val picked = mutableSetOf<FireRange>()
+        repeat(200) { picked.add(RobertRules.preferredRange(random)) }
+        assertEquals(setOf(FireRange.MID, FireRange.CLOSE), picked)
+        // The confusing band is never a preferred band.
+        assertFalse(picked.contains(FireRange.FAR))
+    }
+
+    @Test
+    fun aDeceptionTripLastsOneOrTwoShots() {
+        val random = Random(99)
+        val shots = mutableSetOf<Int>()
+        repeat(200) { shots.add(RobertRules.deceptionShots(random)) }
+        assertEquals(setOf(1, 2), shots)
+    }
+
+    @Test
+    fun deceptionHappensSometimesButNotAlways() {
+        val random = Random(7)
+        var deceptive = 0
+        repeat(1000) {
+            if (RobertRules.shouldStartDeception(random)) deceptive++
+        }
+        assertTrue("Deception must happen sometimes, got $deceptive", deceptive > 100)
+        assertTrue("Deception must not be the rule, got $deceptive", deceptive < 400)
+    }
+
+    @Test
+    fun aDamagedWeaponOrAGlueWallAlwaysPullsHimToPointBlank() {
+        // The player's weapon is damaged: he closes in and fires continuously.
+        assertEquals(FireRange.CLOSE, RobertRules.fireRangeFor(FireRange.MID, true, false))
+        assertEquals(FireRange.CLOSE, RobertRules.fireRangeFor(FireRange.FAR, true, false))
+        // A raised glue wall can only be broken from 90%-100%.
+        assertEquals(FireRange.CLOSE, RobertRules.fireRangeFor(FireRange.MID, false, true))
+        // Otherwise he keeps the band he picked for himself.
+        assertEquals(FireRange.MID, RobertRules.fireRangeFor(FireRange.MID, false, false))
+        assertEquals(FireRange.FAR, RobertRules.fireRangeFor(FireRange.FAR, false, false))
+    }
+
+    @Test
+    fun theCloseBandIsAlwaysInsideTheNinetyToHundredRange() {
+        val distance = RobertRules.fireRangeFor(FireRange.MID, true, false).targetDistance
+        val proximity = Combat.proximityOf(distance)
+        assertTrue(proximity >= Combat.HEAVY_ZONE_MIN)
+        assertTrue(proximity <= Combat.FULL_PROXIMITY)
     }
 }

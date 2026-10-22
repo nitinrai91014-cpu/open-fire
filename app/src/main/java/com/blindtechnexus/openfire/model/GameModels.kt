@@ -25,7 +25,10 @@ enum class SoundTheme(val title: String) {
 
 /**
  * The five items of the in-game quick menu, in the order they are cycled by a
- * two-finger swipe up or down: Medikit, cover, glue wall, exit and play.
+ * two-finger swipe up or down: medikit, cover, glue wall, exit and recover.
+ *
+ * The old "play" item was replaced by Recovery, which repairs every damaged
+ * weapon for [Combat.GUN_RECOVERY_COST] coins.
  */
 enum class BattleMenuItem(
     val nameKey: String,
@@ -35,10 +38,15 @@ enum class BattleMenuItem(
     COVER("cover", DefenceItem.COVER),
     GLUE_WALL("glooWall", DefenceItem.GLUE_WALL),
     EXIT("exitGame", null),
-    PLAY("playState", null);
+    RECOVER("recoverWeapon", null);
 
     companion object {
-        val PLAY_INDEX: Int = PLAY.ordinal
+        /**
+         * The menu starts on Recover. It is the safe default: while every
+         * weapon works it only announces that nothing is damaged and never
+         * spends a coin.
+         */
+        val RECOVER_INDEX: Int = RECOVER.ordinal
 
         fun at(index: Int): BattleMenuItem {
             val size = BattleMenuItem.entries.size
@@ -114,7 +122,7 @@ data class GameState(
 
     val distance: Float = Combat.MAX_RANGE,
 
-    /** A cover blocks 16 hits; the 17th breaks it. */
+    /** A cover blocks 11 hits; the 12th breaks it. */
     val coverActive: Boolean = false,
     val coverHits: Int = 0,
     /** A glue wall stops everything except three consecutive sniper hits. */
@@ -136,6 +144,13 @@ data class GameState(
     val robertDefenceArmed: Boolean = true,
     val robertConsecutiveHits: Int = 0,
     val robertState: String = "advance", // "advance", "retreat" (fleeing), "flank"
+    /**
+     * The band Robert randomly prefers to fire from ([FireRange.id]):
+     * 40%-70%, 90%-100%, or the 0%-40% deception band.
+     */
+    val robertFireRange: String = FireRange.MID.id,
+    /** Deception shots still to fire from the 0%-40% band (one or two). */
+    val robertDeceptionShots: Int = 0,
     val robertHits: Int = 0,
     val robertShots: Int = 0,
     val robertDamage: Int = 0,
@@ -149,7 +164,7 @@ data class GameState(
     val playerSecondChanceUsed: Boolean = false,
 
     /** Index of the highlighted quick-menu item ([BattleMenuItem]). */
-    val menuIndex: Int = BattleMenuItem.PLAY_INDEX,
+    val menuIndex: Int = BattleMenuItem.RECOVER_INDEX,
     /** True while the player is navigating the menu: hits then cost 2 HP. */
     val menuActive: Boolean = false,
     /** Item waiting for the second confirming tap ("Tap again to buy"). */
@@ -181,6 +196,10 @@ data class GameState(
 
     val robertFleeing: Boolean
         get() = robertState == "retreat"
+
+    /** The band Robert picked for himself, ignoring forced point blank. */
+    val robertRange: FireRange
+        get() = FireRange.fromId(robertFireRange)
 }
 
 data class ResultData(

@@ -29,17 +29,17 @@ class ShopTest {
 
     @Test
     fun weaponPricesMatchTheShop() {
-        assertEquals(200, Weapon.PISTOL.price)
-        assertEquals(300, Weapon.SNIPER.price)
-        assertEquals(250, Weapon.KNIFE.price)
-        assertEquals(340, Weapon.SWORD.price)
+        assertEquals(300, Weapon.KNIFE.price)
+        assertEquals(405, Weapon.SWORD.price)
+        assertEquals(499, Weapon.PISTOL.price)
+        assertEquals(549, Weapon.SNIPER.price)
     }
 
     @Test
     fun buyingAWeaponDeductsCoinsAndAddsIt() {
         val result = Shop.buyWeapon(Inventory(), 1000, Weapon.PISTOL)
         assertTrue(result.success)
-        assertEquals(800, result.coins)
+        assertEquals(501, result.coins)
         assertTrue(result.inventory.ownsWeapon(Weapon.PISTOL))
     }
 
@@ -152,7 +152,7 @@ class ShopTest {
     @Test
     fun theRememberedWeaponIsOnlyUsedWhenItIsStillOwned() {
         assertNull(Inventory(lastWeaponId = Weapon.SWORD.id).rememberedWeapon())
-        val owned = Shop.buyWeapon(Inventory(), 400, Weapon.SWORD).inventory
+        val owned = Shop.buyWeapon(Inventory(), 500, Weapon.SWORD).inventory
             .copy(lastWeaponId = Weapon.SWORD.id)
         assertEquals(Weapon.SWORD, owned.rememberedWeapon())
         assertEquals(Weapon.SWORD, owned.startingWeapon())
