@@ -133,9 +133,9 @@ class ShopTest {
         val consumed = Shop.consume(unlocked.inventory, DefenceItem.ANTI_MISSILE)
         assertEquals(0, consumed.antiMissiles)
 
-        val removed = Shop.removeDefence(unlocked.inventory, 2000, DefenceItem.ANTI_MISSILE)
-        assertTrue(removed.success)
-        assertEquals(0, removed.inventory.antiMissiles)
+        val granted = Shop.grant(Inventory(), DefenceItem.ANTI_MISSILE, 2)
+        assertEquals(2, granted.antiMissiles)
+        assertEquals(0, granted.withCount(DefenceItem.ANTI_MISSILE, 0).antiMissiles)
     }
 
     @Test
