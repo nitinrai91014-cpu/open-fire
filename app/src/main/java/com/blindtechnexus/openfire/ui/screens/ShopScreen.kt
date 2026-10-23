@@ -201,6 +201,7 @@ fun ShopScreen(viewModel: GameViewModel) {
                     viewModel = viewModel,
                     item = item,
                     inventory = inventory,
+                    unlocked = stats.completedRounds >= item.requiredCompletedRounds,
                     onRemove = { pendingDefence = item }
                 )
                 Spacer(modifier = Modifier.height(10.dp))
@@ -475,12 +476,13 @@ fun ShopScreen(viewModel: GameViewModel) {
     }
 }
 
-/** "You've total 5 medikits, 10 glue walls, 2 covers." */
+/** "You've total 5 medikits, 10 glue walls, 2 covers, 1 anti-missile systems." */
 private fun defenceTotalsText(viewModel: GameViewModel, inventory: Inventory): String {
     val medkits = "${inventory.medikits} ${viewModel.t("medkitsPlural")}"
     val glueWalls = "${inventory.glueWalls} ${viewModel.t("glueWallsPlural")}"
     val covers = "${inventory.covers} ${viewModel.t("coversPlural")}"
-    return "${viewModel.t("youHaveTotal")} $medkits, $glueWalls, $covers."
+    val antiMissiles = "${inventory.antiMissiles} ${viewModel.t("antiMissilesPlural")}"
+    return "${viewModel.t("youHaveTotal")} $medkits, $glueWalls, $covers, $antiMissiles."
 }
 
 @Composable
@@ -488,6 +490,7 @@ private fun DefenceRow(
     viewModel: GameViewModel,
     item: DefenceItem,
     inventory: Inventory,
+    unlocked: Boolean,
     onRemove: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -495,11 +498,15 @@ private fun DefenceRow(
             text = "${viewModel.t(item.nameKey)}, ${item.price} ${viewModel.t("coins")}.",
             fontSize = 16.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White
+            color = if (item == DefenceItem.ANTI_MISSILE) WarnBright else Color.White
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = viewModel.t(item.descriptionKey),
+            text = if (unlocked) {
+                viewModel.t(item.descriptionKey)
+            } else {
+                viewModel.t("antiMissileLocked")
+            },
             fontSize = 14.sp,
             color = TextMuted,
             lineHeight = 20.sp

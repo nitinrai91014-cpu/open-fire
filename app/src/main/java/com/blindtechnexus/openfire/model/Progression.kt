@@ -92,6 +92,10 @@ object Progression {
     fun missileUnlocked(stats: GameStats): Boolean =
         stats.completedRounds >= MISSILE_UNLOCK_COMPLETED_ROUNDS
 
+    /** True once round two has been completed, unlocking the anti-missile defence. */
+    fun antiMissileUnlocked(stats: GameStats): Boolean =
+        stats.completedRounds >= MISSILE_UNLOCK_COMPLETED_ROUNDS
+
     /** Keeps loaded stats inside the valid ladder ranges. */
     fun normalize(stats: GameStats): GameStats = stats.copy(
         games = stats.games.coerceAtLeast(0),

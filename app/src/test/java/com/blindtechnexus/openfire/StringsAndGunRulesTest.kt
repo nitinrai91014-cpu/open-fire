@@ -51,15 +51,17 @@ class StringsAndGunRulesTest {
 
     @Test
     fun shopCatalogMatchesTheRequestedPrices() {
-        assertEquals(300, Weapon.KNIFE.price)
-        assertEquals(405, Weapon.SWORD.price)
-        assertEquals(499, Weapon.PISTOL.price)
-        assertEquals(549, Weapon.SNIPER.price)
-        assertEquals(200, DefenceItem.MEDKIT.price)
-        assertEquals(400, DefenceItem.GLUE_WALL.price)
-        assertEquals(350, DefenceItem.COVER.price)
+        assertEquals(500, Weapon.KNIFE.price)
+        assertEquals(750, Weapon.PISTOL.price)
+        assertEquals(950, Weapon.SWORD.price)
+        assertEquals(1200, Weapon.SNIPER.price)
+        assertEquals(3500, Weapon.MISSILE.price)
+        assertEquals(500, DefenceItem.MEDKIT.price)
+        assertEquals(850, DefenceItem.GLUE_WALL.price)
+        assertEquals(650, DefenceItem.COVER.price)
+        assertEquals(3000, DefenceItem.ANTI_MISSILE.price)
         assertEquals(
-            setOf(50, 80, 100),
+            setOf(150, 240, 300),
             Extension.entries.map { it.price }.toSet()
         )
     }
@@ -84,25 +86,27 @@ class StringsAndGunRulesTest {
         assertTrue("Guide must document level health", en.contains("200 health"))
         assertTrue("Guide must document the next round's health", en.contains("level 1 has 700"))
         assertTrue("Guide must document the glue wall", en.contains("glue wall"))
-        assertTrue("Guide must document the cover", en.contains("Cover costs 350 coins"))
+        assertTrue("Guide must document the cover", en.contains("Cover costs 650 coins"))
         assertTrue("Guide must document the quick menu", en.contains("quick menu"))
-        assertTrue("Guide must document the extensions", en.contains("automatic reload for 50 coins"))
+        assertTrue("Guide must document the extensions", en.contains("automatic reload for 150 coins"))
         assertTrue("Guide must document the four second wait", en.contains("four seconds"))
         assertTrue("Guide must document the new power table", en.contains("knife 10 and 10"))
         assertTrue("Guide must document the shotgun boost", en.contains("shotgun 10 and 12"))
         assertTrue("Guide must document Robert's custom powers", en.contains("shotgun zone powers"))
-        assertTrue("Guide must document the new prices", en.contains("knife 300 coins"))
-        assertTrue("Guide must document the Missile", en.contains("Missile costs 2000 coins"))
-        assertTrue("Guide must document missile powers", en.contains("missile power for 600 coins"))
+        assertTrue("Guide must document the new prices", en.contains("knife 500 coins"))
+        assertTrue("Guide must document the Missile", en.contains("Missile costs 3500 coins"))
+        assertTrue("Guide must document missile powers", en.contains("missile power for 1800 coins"))
         assertTrue("Guide must document guaranteed tracking", en.contains("100 percent accuracy"))
         assertTrue("Guide must document the anti-missile rule", en.contains("anti-missile system"))
+        assertTrue("Guide must document anti-missile price", en.contains("Anti-missile system costs 3000 coins"))
         assertTrue("Guide must document pressure running", en.contains("stronger you press"))
         assertTrue("Guide must document the 11 hit cover", en.contains("stops 11 hits"))
         assertTrue("Guide must document the 100 coin recovery", en.contains("100 coins for Recovery"))
-        assertTrue("Guide must document the recover menu item", en.contains("exit and recover"))
+        assertTrue("Guide must document the recover menu item", en.contains("anti-missile system, exit and recover"))
         assertTrue("Guide must document three screen portions", en.contains("divided into three portions"))
         assertTrue("Guide must document the enemy firing bands", en.contains("40 to 70 percent"))
         assertTrue("Guide must document gesture-only gameplay", en.contains("no button controls"))
+        assertTrue("Guide must document keep screen on", en.contains("Keep screen always on"))
     }
 
     @Test

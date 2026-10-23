@@ -19,12 +19,13 @@ import org.junit.Test
 class BattleMenuTest {
 
     @Test
-    fun theMenuRunsMedikitCoverGlueWallExitAndRecover() {
+    fun theMenuRunsMedikitCoverGlueWallAntiMissileExitAndRecover() {
         assertEquals(
             listOf(
                 BattleMenuItem.MEDKIT,
                 BattleMenuItem.COVER,
                 BattleMenuItem.GLUE_WALL,
+                BattleMenuItem.ANTI_MISSILE,
                 BattleMenuItem.EXIT,
                 BattleMenuItem.RECOVER
             ),
@@ -41,6 +42,7 @@ class BattleMenuTest {
     @Test
     fun recoverIsTheSafeDefaultSelection() {
         assertEquals(BattleMenuItem.RECOVER.ordinal, BattleMenuItem.RECOVER_INDEX)
+        assertEquals(5, BattleMenuItem.RECOVER_INDEX)
         assertEquals(BattleMenuItem.RECOVER_INDEX, GameState().menuIndex)
         assertEquals(BattleMenuItem.RECOVER, GameState().menuItem)
         // Nothing is damaged in a fresh battle, so the default tap is free.
@@ -52,18 +54,22 @@ class BattleMenuTest {
     @Test
     fun cyclingWrapsAroundBothEnds() {
         assertEquals(BattleMenuItem.MEDKIT, BattleMenuItem.at(0))
-        assertEquals(BattleMenuItem.RECOVER, BattleMenuItem.at(4))
-        assertEquals(BattleMenuItem.MEDKIT, BattleMenuItem.at(5))
+        assertEquals(BattleMenuItem.ANTI_MISSILE, BattleMenuItem.at(3))
+        assertEquals(BattleMenuItem.EXIT, BattleMenuItem.at(4))
+        assertEquals(BattleMenuItem.RECOVER, BattleMenuItem.at(5))
+        assertEquals(BattleMenuItem.MEDKIT, BattleMenuItem.at(6))
         assertEquals(BattleMenuItem.RECOVER, BattleMenuItem.at(-1))
         assertEquals(BattleMenuItem.EXIT, BattleMenuItem.at(-2))
-        assertEquals(BattleMenuItem.GLUE_WALL, BattleMenuItem.at(-3))
+        assertEquals(BattleMenuItem.ANTI_MISSILE, BattleMenuItem.at(-3))
+        assertEquals(BattleMenuItem.GLUE_WALL, BattleMenuItem.at(-4))
     }
 
     @Test
-    fun onlyTheThreeDefencesCarryAnItem() {
+    fun onlyTheFourDefencesCarryAnItem() {
         assertEquals(DefenceItem.MEDKIT, BattleMenuItem.MEDKIT.defence)
         assertEquals(DefenceItem.COVER, BattleMenuItem.COVER.defence)
         assertEquals(DefenceItem.GLUE_WALL, BattleMenuItem.GLUE_WALL.defence)
+        assertEquals(DefenceItem.ANTI_MISSILE, BattleMenuItem.ANTI_MISSILE.defence)
         assertEquals(null, BattleMenuItem.EXIT.defence)
         assertEquals(null, BattleMenuItem.RECOVER.defence)
     }

@@ -13,8 +13,9 @@ class MissileRulesTest {
 
     @Test
     fun pricesAndUnlockMatchTheRequest() {
-        assertEquals(2000, MissileRules.MISSILE_PRICE)
-        assertEquals(600, MissileRules.MISSILE_POWER_PRICE)
+        assertEquals(3500, MissileRules.MISSILE_PRICE)
+        assertEquals(1800, MissileRules.MISSILE_POWER_PRICE)
+        assertEquals(3000, MissileRules.ANTI_MISSILE_PRICE)
         assertEquals(2, Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS)
         // The flight sound is about fourteen seconds long.
         assertTrue(MissileRules.SOUND_DURATION_MS in 13_000L..16_000L)

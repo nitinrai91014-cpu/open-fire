@@ -118,9 +118,13 @@ class ProgressionTest {
     }
 
     @Test
-    fun missileRequiresTwoCompletedRounds() {
+    fun missileAndAntiMissileRequireTwoCompletedRounds() {
+        assertEquals(5, Progression.LEVELS_PER_ROUND)
         assertFalse(Progression.missileUnlocked(GameStats(completedRounds = 0)))
         assertFalse(Progression.missileUnlocked(GameStats(completedRounds = 1)))
         assertTrue(Progression.missileUnlocked(GameStats(completedRounds = 2)))
+        assertFalse(Progression.antiMissileUnlocked(GameStats(completedRounds = 0)))
+        assertFalse(Progression.antiMissileUnlocked(GameStats(completedRounds = 1)))
+        assertTrue(Progression.antiMissileUnlocked(GameStats(completedRounds = 2)))
     }
 }

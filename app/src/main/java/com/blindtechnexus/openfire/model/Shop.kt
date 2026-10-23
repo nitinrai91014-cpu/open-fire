@@ -78,7 +78,7 @@ enum class Weapon(
         powerPercent = 14,
         closeRangePowerPercent = 15,
         magazine = 6,
-        price = 499,
+        price = 750,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "pistol",
@@ -92,7 +92,7 @@ enum class Weapon(
         powerPercent = 15,
         closeRangePowerPercent = 16,
         magazine = 6,
-        price = 549,
+        price = 1200,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "sniperRifle",
@@ -106,7 +106,7 @@ enum class Weapon(
         powerPercent = 10,
         closeRangePowerPercent = 10,
         magazine = 0,
-        price = 300,
+        price = 500,
         ownedByDefault = false,
         melee = true,
         fireSoundKey = "knifeSwish",
@@ -120,7 +120,7 @@ enum class Weapon(
         powerPercent = 15,
         closeRangePowerPercent = 16,
         magazine = 0,
-        price = 405,
+        price = 950,
         ownedByDefault = false,
         melee = true,
         fireSoundKey = "swordGlide",
@@ -170,34 +170,43 @@ enum class Weapon(
     }
 }
 
-/** The three buyable, consumable defences of the game. */
+/** The four buyable, consumable defences of the game. */
 enum class DefenceItem(
     val id: String,
     val nameKey: String,
     val pluralKey: String,
     val price: Int,
-    val descriptionKey: String
+    val descriptionKey: String,
+    val requiredCompletedRounds: Int = 0
 ) {
     MEDKIT(
         id = "medkit",
         nameKey = "medkit",
         pluralKey = "medkitsPlural",
-        price = 200,
+        price = 500,
         descriptionKey = "defenceMedkitInfo"
     ),
     GLUE_WALL(
         id = "glueWall",
         nameKey = "glooWall",
         pluralKey = "glueWallsPlural",
-        price = 400,
+        price = 850,
         descriptionKey = "defenceGlueWallInfo"
     ),
     COVER(
         id = "cover",
         nameKey = "cover",
         pluralKey = "coversPlural",
-        price = 350,
+        price = 650,
         descriptionKey = "defenceCoverInfo"
+    ),
+    ANTI_MISSILE(
+        id = "antiMissile",
+        nameKey = "antiMissile",
+        pluralKey = "antiMissilesPlural",
+        price = MissileRules.ANTI_MISSILE_PRICE,
+        descriptionKey = "defenceAntiMissileInfo",
+        requiredCompletedRounds = Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS
     );
 
     companion object {
@@ -218,10 +227,10 @@ enum class Extension(
     val price: Int,
     val descriptionKey: String
 ) {
-    AUTO_RELOAD("autoReload", "extAutoReload", 50, "extAutoReloadInfo"),
-    AUTO_MEDKIT("autoMedkit", "extAutoMedkit", 80, "extAutoMedkitInfo"),
-    AUTO_COVER("autoCover", "extAutoCover", 100, "extAutoCoverInfo"),
-    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 100, "extAutoGlueWallInfo");
+    AUTO_RELOAD("autoReload", "extAutoReload", 150, "extAutoReloadInfo"),
+    AUTO_MEDKIT("autoMedkit", "extAutoMedkit", 240, "extAutoMedkitInfo"),
+    AUTO_COVER("autoCover", "extAutoCover", 300, "extAutoCoverInfo"),
+    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 300, "extAutoGlueWallInfo");
 
     companion object {
         fun fromId(id: String?): Extension? = Extension.entries.firstOrNull { it.id == id }
@@ -244,6 +253,7 @@ data class Inventory(
     val medikits: Int = 0,
     val glueWalls: Int = 0,
     val covers: Int = 0,
+    val antiMissiles: Int = 0,
     val extensions: Map<String, ExtensionState> = emptyMap(),
     val lastWeaponId: String = Weapon.SHORT_GUN.id,
     /**
@@ -268,6 +278,7 @@ data class Inventory(
         DefenceItem.MEDKIT -> medikits
         DefenceItem.GLUE_WALL -> glueWalls
         DefenceItem.COVER -> covers
+        DefenceItem.ANTI_MISSILE -> antiMissiles
     }
 
     fun withCount(item: DefenceItem, value: Int): Inventory {
@@ -276,6 +287,7 @@ data class Inventory(
             DefenceItem.MEDKIT -> copy(medikits = safe)
             DefenceItem.GLUE_WALL -> copy(glueWalls = safe)
             DefenceItem.COVER -> copy(covers = safe)
+            DefenceItem.ANTI_MISSILE -> copy(antiMissiles = safe)
         }
     }
 
@@ -391,7 +403,15 @@ object Shop {
     }
 
     /** Defences are repeatable: every purchase adds exactly one item. */
-    fun buyDefence(inventory: Inventory, coins: Int, item: DefenceItem): ShopResult {
+    fun buyDefence(
+        inventory: Inventory,
+        coins: Int,
+        item: DefenceItem,
+        completedRounds: Int = Int.MAX_VALUE
+    ): ShopResult {
+        if (completedRounds < item.requiredCompletedRounds) {
+            return ShopResult(false, coins, inventory, "antiMissileLocked")
+        }
         if (coins < item.price) {
             return ShopResult(false, coins, inventory, "notEnoughCoins")
         }
