@@ -76,7 +76,9 @@ data class GameStats(
     val round: Int = 1,
     val level: Int = 1,
     /** Wins collected inside the current level (0..9). 10 wins promote a level. */
-    val levelWins: Int = 0
+    val levelWins: Int = 0,
+    /** Lifetime completed rounds; unlike [round], this never resets between matches. */
+    val completedRounds: Int = 0
 ) {
     /** Wins still required to reach the next level (always 1..10). */
     val needWinsForNext: Int
@@ -95,7 +97,8 @@ data class GameStats(
             coins = 0,
             round = 1,
             level = 1,
-            levelWins = 0
+            levelWins = 0,
+            completedRounds = 0
         )
     }
 }
@@ -107,11 +110,12 @@ data class GameStats(
  * interface can render the whole battle from one state object.
  */
 data class GameState(
-    val playerHp: Int = 300,
-    val playerMaxHp: Int = 300,
-    val robertHp: Int = 300,
-    val robertMaxHp: Int = 300,
+    val playerHp: Int = 200,
+    val playerMaxHp: Int = 200,
+    val robertHp: Int = 200,
+    val robertMaxHp: Int = 200,
     val round: Int = 1,
+    val level: Int = 1,
 
     /** Weapon ids owned for this battle, in switch order. */
     val weapons: List<String> = Weapon.defaults().map { it.id },

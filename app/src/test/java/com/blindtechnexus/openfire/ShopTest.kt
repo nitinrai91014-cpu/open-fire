@@ -3,6 +3,7 @@ package com.blindtechnexus.openfire
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.ExtensionState
+import com.blindtechnexus.openfire.model.FutureWeapon
 import com.blindtechnexus.openfire.model.Inventory
 import com.blindtechnexus.openfire.model.Shop
 import com.blindtechnexus.openfire.model.Weapon
@@ -147,6 +148,43 @@ class ShopTest {
         assertEquals(80, Extension.AUTO_MEDKIT.price)
         assertEquals(100, Extension.AUTO_COVER.price)
         assertEquals(100, Extension.AUTO_GLUE_WALL.price)
+    }
+
+    @Test
+    fun missileAndMissilePowersHaveTheRequestedPrices() {
+        assertEquals(1500, FutureWeapon.MISSILE.price)
+        assertEquals(500, Extension.MISSILE_POWERS.price)
+        assertEquals(2, FutureWeapon.MISSILE.requiredCompletedRounds)
+    }
+
+    @Test
+    fun missileIsLockedUntilRoundTwoIsCompleted() {
+        val locked = Shop.buyFutureWeapon(Inventory(), 2000, FutureWeapon.MISSILE, 1)
+        assertFalse(locked.success)
+        assertEquals("missileLocked", locked.reasonKey)
+        assertEquals(2000, locked.coins)
+        assertFalse(locked.inventory.ownsFutureWeapon(FutureWeapon.MISSILE))
+
+        val unlocked = Shop.buyFutureWeapon(Inventory(), 2000, FutureWeapon.MISSILE, 2)
+        assertTrue(unlocked.success)
+        assertEquals(500, unlocked.coins)
+        assertTrue(unlocked.inventory.ownsFutureWeapon(FutureWeapon.MISSILE))
+        // Future shop ownership must never add the Missile to real combat.
+        assertEquals(2, unlocked.inventory.ownedWeapons().size)
+        assertFalse(unlocked.inventory.ownedWeapons().any { it.id == FutureWeapon.MISSILE.id })
+    }
+
+    @Test
+    fun missilePowersAlsoAnnouncesTheRoundTwoLock() {
+        val locked = Shop.buyExtension(Inventory(), 1000, Extension.MISSILE_POWERS, 1)
+        assertFalse(locked.success)
+        assertEquals("missileLocked", locked.reasonKey)
+        assertEquals(1000, locked.coins)
+
+        val unlocked = Shop.buyExtension(Inventory(), 1000, Extension.MISSILE_POWERS, 2)
+        assertTrue(unlocked.success)
+        assertEquals(500, unlocked.coins)
+        assertTrue(unlocked.inventory.extensionEnabled(Extension.MISSILE_POWERS))
     }
 
     @Test

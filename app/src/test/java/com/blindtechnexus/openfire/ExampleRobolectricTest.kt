@@ -8,6 +8,7 @@ import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.ExtensionState
+import com.blindtechnexus.openfire.model.FutureWeapon
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.GameStats
@@ -50,12 +51,12 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun testHpForRoundScaling() {
-        assertEquals(300, Progression.hpForRound(1))
-        assertEquals(400, Progression.hpForRound(2))
-        assertEquals(500, Progression.hpForRound(3))
-        assertEquals(600, Progression.hpForRound(4))
-        assertEquals(750, Progression.hpForRound(5))
+    fun testHpForRoundAndLevelScaling() {
+        assertEquals(200, Progression.hpFor(1, 1))
+        assertEquals(600, Progression.hpFor(1, 5))
+        assertEquals(700, Progression.hpFor(2, 1))
+        assertEquals(900, Progression.hpFor(2, 3))
+        assertEquals(2600, Progression.hpFor(5, 5))
     }
 
     @Test
@@ -63,7 +64,8 @@ class ExampleRobolectricTest {
         val pistol = Weapon.entries.find { it.id == "pistol" }
         org.junit.Assert.assertNotNull(pistol)
         assertEquals(6, pistol?.magazine)
-        assertEquals(13, pistol?.powerPercent)
+        assertEquals(14, pistol?.powerPercent)
+        assertEquals(15, pistol?.closeRangePowerPercent)
     }
 
     @Test
@@ -83,7 +85,8 @@ class ExampleRobolectricTest {
             coins = 240,
             round = 2,
             level = 4,
-            levelWins = 4
+            levelWins = 4,
+            completedRounds = 2
         )
         prefs.saveStats(stats)
         val loadedStats = prefs.loadStats()
@@ -93,6 +96,7 @@ class ExampleRobolectricTest {
         assertEquals(4, loadedStats.level)
         assertEquals(240, loadedStats.coins)
         assertEquals(4, loadedStats.levelWins)
+        assertEquals(2, loadedStats.completedRounds)
         assertEquals(6, loadedStats.needWinsForNext)
     }
 
@@ -109,7 +113,8 @@ class ExampleRobolectricTest {
                 Extension.AUTO_RELOAD.id to ExtensionState.ENABLED,
                 Extension.AUTO_COVER.id to ExtensionState.DISABLED
             ),
-            lastWeaponId = Weapon.SWORD.id
+            lastWeaponId = Weapon.SWORD.id,
+            futureWeaponIds = setOf(FutureWeapon.MISSILE.id)
         )
         prefs.saveInventory(inventory)
 
@@ -121,6 +126,8 @@ class ExampleRobolectricTest {
         assertTrue(loaded.extensionEnabled(Extension.AUTO_RELOAD))
         assertEquals(ExtensionState.DISABLED, loaded.extensionState(Extension.AUTO_COVER))
         assertEquals(Weapon.SWORD.id, loaded.lastWeaponId)
+        assertTrue(loaded.ownsFutureWeapon(FutureWeapon.MISSILE))
+        assertEquals(3, loaded.ownedWeapons().size)
     }
 
     @Test

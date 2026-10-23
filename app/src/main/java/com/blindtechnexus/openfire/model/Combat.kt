@@ -63,15 +63,18 @@ enum class FireRange(
  *  - 70% to 90%  -> 80% of the weapon power
  *  - 90% to 100% -> 100% of the weapon power
  *
- * Weapon power table, as a percentage of the victim's maximum health at
- * 90%-100% proximity. The player and the Robert use exactly the same table:
+ * Weapon powers are percentages of the victim's maximum health. Each weapon
+ * has a base value and a close-range value (base / 90%-100%):
  *
- *  - knife         8%
- *  - sword         12%
- *  - assault gun   14%
- *  - pistol        13%
- *  - sniper rifle  16%
- *  - short gun     8%, but 10% at 90%-100% proximity
+ *  - knife          10% / 10%
+ *  - shotgun        10% / 12%
+ *  - assault rifle  13% / 14%
+ *  - pistol         14% / 15%
+ *  - sniper rifle   15% / 16%
+ *  - sword          15% / 16%
+ *
+ * Robert's assault rifle and shotgun instead use his explicit per-zone powers
+ * in [RobertRules], without applying a zone multiplier twice.
  *
  * There is no preset where a combatant loses after a fixed number of hits:
  * a combatant is defeated only when their health actually reaches zero.
@@ -114,11 +117,8 @@ object Combat {
     /** Only a sniper shot at or above this proximity can damage a glue wall. */
     const val GLUE_WALL_BREAK_PROXIMITY = 90f
 
-    /**
-     * The short gun is the one exception of the power table: it hits with
-     * 10% under 90%-100% proximity instead of its base 8%.
-     */
-    const val SHORT_GUN_CLOSE_POWER_PERCENT = 10
+    /** Close-range shotgun power retained as a named combat constant. */
+    const val SHORT_GUN_CLOSE_POWER_PERCENT = 12
 
     /** Converts a distance (50 = far edge, 0 = point-blank) into 0..100% proximity. */
     fun proximityOf(distance: Float): Float =
@@ -139,12 +139,11 @@ object Combat {
 
     /**
      * The power percentage a weapon really uses at this proximity. Every
-     * weapon uses its own table value except the short gun, which is boosted
-     * to [SHORT_GUN_CLOSE_POWER_PERCENT] at point blank.
+     * weapon has a base value and an explicit 90%-100% close-range value.
      */
     fun powerPercentOf(weapon: Weapon, proximityPercent: Float): Int =
-        if (weapon == Weapon.SHORT_GUN && zoneFor(proximityPercent) == HitZone.HEAVY) {
-            SHORT_GUN_CLOSE_POWER_PERCENT
+        if (zoneFor(proximityPercent) == HitZone.HEAVY) {
+            weapon.closeRangePowerPercent
         } else {
             weapon.powerPercent
         }
@@ -167,6 +166,16 @@ object Combat {
         }
         val fullPower = maxHp * powerPercent / 100.0
         return (fullPower * fraction).roundToInt().coerceAtLeast(1)
+    }
+
+    /**
+     * Damage for a power value that already belongs to a specific hit zone.
+     * Unlike [damageFor], this does not apply the 50% / 80% zone multiplier a
+     * second time. Robert's custom assault rifle and shotgun tables use this.
+     */
+    fun damageForDirectPower(powerPercent: Int, proximityPercent: Float, maxHp: Int): Int {
+        if (maxHp <= 0 || zoneFor(proximityPercent) == HitZone.MISS) return 0
+        return (maxHp * powerPercent / 100.0).roundToInt().coerceAtLeast(1)
     }
 
     /** Damage dealt by a specific weapon at the given proximity. */

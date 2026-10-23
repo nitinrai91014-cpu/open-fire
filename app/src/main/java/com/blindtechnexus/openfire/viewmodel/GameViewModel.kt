@@ -13,6 +13,7 @@ import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.FireRange
+import com.blindtechnexus.openfire.model.FutureWeapon
 import com.blindtechnexus.openfire.model.GameAction
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameState
@@ -92,7 +93,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var lastExplicitActionAt = 0L
 
     private val robertProfile: RobertProfile
-        get() = RobertRules.profile(_stats.value.round)
+        get() = RobertRules.profile(_stats.value.round, _stats.value.level)
 
     private companion object {
         /** Fast retreat: metres gained per flee tick. */
@@ -314,11 +315,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             Screen.BATTLE -> {
                 audioManager.stopMusic()
                 audioManager.stopScreenAudio()
-                updateWalkAudio(_gameState.value.distance, _gameState.value.robertFleeing)
+                // Footsteps start only when a fighter is actually running.
+                audioManager.stopFootsteps()
             }
             Screen.RESULT -> {
                 audioManager.stopMusic()
-                audioManager.stopSound("walk")
+                audioManager.stopFootsteps()
             }
         }
     }
@@ -345,7 +347,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             Screen.JUMP -> startAirplaneAudio()
             Screen.BATTLE -> {
                 val state = _gameState.value
-                updateWalkAudio(state.distance, state.robertFleeing)
+                audioManager.stopFootsteps()
                 if (state.playerHp > 0 && state.robertHp > 0) {
                     startRobertFireLoop(1200L)
                     val needsMovement = state.robertState == "retreat" ||
@@ -378,6 +380,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (!result.success) {
             when (result.reasonKey) {
                 "notEnoughCoins" -> notEnoughCoins()
+                "missileLocked" -> {
+                    val text = t("missileLocked")
+                    toast(text)
+                    msg(text)
+                }
                 null -> {}
                 else -> msg(t(result.reasonKey))
             }
@@ -395,6 +402,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val weapon = Weapon.fromId(weaponId) ?: return
         applyPurchase(
             Shop.buyWeapon(_inventory.value, _stats.value.coins, weapon),
+            weapon.nameKey,
+            "bought"
+        )
+    }
+
+    /** Handles the shop-only Missile; no battle weapon or damage logic is added. */
+    fun buyFutureWeapon(weaponId: String) {
+        val weapon = FutureWeapon.fromId(weaponId) ?: return
+        applyPurchase(
+            Shop.buyFutureWeapon(
+                _inventory.value,
+                _stats.value.coins,
+                weapon,
+                _stats.value.completedRounds
+            ),
             weapon.nameKey,
             "bought"
         )
@@ -436,7 +458,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun buyExtension(extensionId: String) {
         val extension = Extension.fromId(extensionId) ?: return
         applyPurchase(
-            Shop.buyExtension(_inventory.value, _stats.value.coins, extension),
+            Shop.buyExtension(
+                _inventory.value,
+                _stats.value.coins,
+                extension,
+                _stats.value.completedRounds
+            ),
             extension.nameKey,
             "extensionBought"
         )
@@ -550,8 +577,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         lastFireAt = 0L
 
         val round = _stats.value.round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
-        val profile = RobertRules.profile(round)
-        val hp = RobertRules.hpForRound(round)
+        val level = _stats.value.level.coerceIn(1, Progression.LEVELS_PER_ROUND)
+        val profile = RobertRules.profile(round, level)
+        val hp = Progression.hpFor(round, level)
         val owned = _inventory.value.ownedWeapons().ifEmpty { Weapon.defaults() }
         val starting = _inventory.value.startingWeapon()
         val startIndex = owned.indexOfFirst { it.id == starting.id }.coerceAtLeast(0)
@@ -562,6 +590,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertHp = hp,
             robertMaxHp = hp,
             round = round,
+            level = level,
             weapons = owned.map { it.id },
             weaponIndex = startIndex,
             ammo = owned.map { it.magazine },
@@ -606,14 +635,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // Robert movement, 3D footsteps, continuous fire
     // ---------------------------------------------------------------------
 
-    private fun updateWalkAudio(distance: Float, fleeing: Boolean = false) {
+    /** Updates Robert's positional loop only while he is actually moving. */
+    private fun updateRobertWalkAudio(distance: Float, fleeing: Boolean = false) {
         if (_currentScreen.value != Screen.BATTLE) {
-            audioManager.stopSound("walk")
+            audioManager.stopSound("enemyWalk")
             return
         }
         stepCount++
         val lateral = if (stepCount % 2 == 0) -12f else 12f
-        audioManager.updateWalk3dAudio(
+        audioManager.updateEnemyWalk3dAudio(
             distance = distance,
             lateralOffset = lateral,
             fleeing = fleeing
@@ -636,8 +666,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 if (state.playerHp <= 0 || state.robertHp <= 0) break
                 val step = if (forward) -PLAYER_MOVE_STEP else PLAYER_MOVE_STEP
                 val newDist = (state.distance + step).coerceIn(0f, Combat.MAX_RANGE)
+                if (newDist == state.distance) {
+                    // At an arena boundary the player cannot actually run.
+                    audioManager.stopSound("playerWalk")
+                    delay(PLAYER_MOVE_TICK_MS)
+                    continue
+                }
                 _gameState.update { it.copy(distance = newDist) }
-                updateWalkAudio(newDist, fleeing = !forward)
+                // Our own footsteps are centred and normal-volume; they never
+                // reuse or reposition Robert's independent walking channel.
+                audioManager.updatePlayerWalkAudio()
                 if (stepJob == null || stepJob?.isActive != true) {
                     planRobertStep(80L)
                 }
@@ -649,8 +687,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun stopPlayerMove() {
         playerMoveJob?.cancel()
         playerMoveJob = null
-        val state = _gameState.value
-        updateWalkAudio(state.distance, state.robertFleeing)
+        audioManager.stopSound("playerWalk")
     }
 
     private fun planRobertStep(delayMs: Long) {
@@ -708,31 +745,33 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         when (_gameState.value.robertState) {
             "retreat" -> {
-                val newDist = (state.distance + FLEE_STEP).coerceAtMost(Combat.MAX_RANGE)
+                val retreatStep = FLEE_STEP * RobertRules.movementSpeedMultiplier(state.round)
+                val newDist = (state.distance + retreatStep).coerceAtMost(Combat.MAX_RANGE)
                 if (newDist >= Combat.MAX_RANGE) {
                     _gameState.update { it.copy(distance = Combat.MAX_RANGE, robertState = "flank") }
-                    updateWalkAudio(Combat.MAX_RANGE, fleeing = false)
+                    audioManager.stopSound("enemyWalk")
                     planRobertStep(1300L + Random.nextInt(700))
                 } else {
                     _gameState.update { it.copy(distance = newDist) }
-                    updateWalkAudio(newDist, fleeing = true)
+                    updateRobertWalkAudio(newDist, fleeing = true)
                     planRobertStep(FLEE_TICK_MS)
                 }
             }
             "flank" -> {
                 val target = robertTargetDistance(_gameState.value)
-                val speed = 4.5f + _stats.value.round * 0.35f
+                val speed = (4.5f + state.round * 0.35f) *
+                    RobertRules.movementSpeedMultiplier(state.round)
                 val newDist = max(target, state.distance - speed)
                 if (newDist <= target + BAND_TOLERANCE_M) {
                     _gameState.update {
                         it.copy(distance = target, robertState = "advance")
                     }
                     playSound("jump", posX = 35f, posZ = -target)
-                    updateWalkAudio(target, fleeing = false)
+                    audioManager.stopSound("enemyWalk")
                     msg(t("devilFlank"))
                 } else {
                     _gameState.update { it.copy(distance = newDist) }
-                    updateWalkAudio(newDist, fleeing = false)
+                    updateRobertWalkAudio(newDist, fleeing = false)
                     planRobertStep(300L)
                 }
             }
@@ -742,7 +781,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 val delta = current.distance - target
                 if (abs(delta) > BAND_TOLERANCE_M) {
                     val prox = Combat.proximityOf(current.distance) / 100f
-                    val speed = (2.0f + prox * 4.0f + _stats.value.round * 0.25f) *
+                    val speed = (2.0f + prox * 4.0f + state.round * 0.25f) *
+                        RobertRules.movementSpeedMultiplier(state.round) *
                         if (pressure) PRESSURE_SPEED_FACTOR else 1f
                     val move = min(abs(delta), speed)
                     val newDist = if (delta > 0f) {
@@ -751,13 +791,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         current.distance + move
                     }
                     _gameState.update { it.copy(distance = newDist) }
-                    updateWalkAudio(newDist, fleeing = delta < 0f)
+                    updateRobertWalkAudio(newDist, fleeing = delta < 0f)
                     if (Random.nextFloat() < 0.10f) {
                         playSound("jump", volume = 0.55f, posZ = -newDist)
                     }
                     planRobertStep(if (pressure) PRESSURE_ADVANCE_TICK_MS else ADVANCE_TICK_MS)
                 } else {
-                    updateWalkAudio(current.distance, fleeing = false)
+                    // Robert has reached his firing band and is stationary.
+                    audioManager.stopSound("enemyWalk")
                 }
             }
         }
@@ -843,7 +884,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        playSound(chosen.fireSoundKey, volume = 0.9f, posZ = -state.distance)
+        // A melee attack must not play its swing/switch sound before the
+        // outcome is known: a miss uses only *-miss and a hit uses *-hit.
+        if (!chosen.melee) {
+            playSound(chosen.fireSoundKey, volume = 0.9f, posZ = -state.distance)
+        }
         _gameState.update { s ->
             val nextAmmo = if (chosen.needsReload) {
                 s.robertAmmo.toMutableList().also {
@@ -915,8 +960,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // The Robert uses exactly the same power table as the player.
-        var dealt = Combat.weaponDamage(chosen, proxPercent, state.playerMaxHp)
+        // Robert's assault rifle and shotgun use his explicit per-zone table;
+        // every other weapon uses the standard player table.
+        var dealt = RobertRules.weaponDamage(chosen, proxPercent, state.playerMaxHp)
         // While the quick menu is open every hit costs only 2 health.
         if (state.menuActive) dealt = min(2, dealt)
 
@@ -1164,7 +1210,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         state = _gameState.value
-        playSound(weapon.fireSoundKey, volume = 1.0f)
+        // Knife and sword sounds are selected strictly after hit/miss is known.
+        if (!weapon.melee) {
+            playSound(weapon.fireSoundKey, volume = 1.0f)
+        }
 
         val proxPercent = Combat.proximityOf(state.distance)
         val zone = Combat.zoneFor(proxPercent)
@@ -1580,7 +1629,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun exitBattle() {
         stopTimers()
-        audioManager.stopSound("walk")
+        audioManager.stopFootsteps()
         audioManager.stopScreenAudio()
         ttsManager.stop()
         playSound("click")
@@ -1594,13 +1643,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // ---------------------------------------------------------------------
 
     /**
-     * Ends a battle: coins are awarded, 10 wins promote a level, 10 levels
+     * Ends a battle: coins are awarded, 10 wins promote a level, five levels
      * complete a round, the fifth round wins the match, and the result screen
      * is locked for four seconds.
      */
     private fun endGame(won: Boolean) {
         stopTimers()
-        audioManager.stopSound("walk")
+        audioManager.stopFootsteps()
 
         val state = _gameState.value
         val base = if (won) 150 else 30
@@ -1699,7 +1748,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearStats() {
         stopTimers()
-        audioManager.stopSound("walk")
+        audioManager.stopFootsteps()
         ttsManager.stop()
 
         val cleared = GameStats.cleared()
@@ -1741,15 +1790,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun handleCenterTap() {
-        // Buttons and gestures set this marker; a tap immediately afterwards
-        // belongs to that action and must not activate the menu as well.
-        if (System.currentTimeMillis() - lastExplicitActionAt < 350L) return
-        val state = _gameState.value
-        // Only activate if the user is currently switching/active in the menu.
-        // While not switching menus, it doesn't activate anything to prevent accidental exits.
-        if (state.menuActive) {
-            activateMenuItem()
-        }
+        // The center third is the menu activation surface. Recover is the
+        // safe default, so a tap is valid even before the first menu swipe.
+        // Swipe and tap dispatch are mutually exclusive, so no button-style
+        // debounce is needed here.
+        activateMenuItem()
     }
 
     fun handleTap() {
@@ -1769,6 +1814,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         counterJob = null
         robertFireJob?.cancel()
         robertFireJob = null
+        audioManager.stopFootsteps()
     }
 
     override fun onCleared() {

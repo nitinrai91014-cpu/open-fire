@@ -8,12 +8,11 @@ package com.blindtechnexus.openfire.model
  * can still be damaged by three consecutive point-blank hits, exactly like
  * firearms.
  *
- * Power table (percentage of the victim's maximum health at 90%-100%
- * proximity, before the zone multiplier): knife 8, sword 12, assault gun 14,
- * pistol 13, sniper rifle 16 and short gun 8. The short gun is the only
- * exception: at 90%-100% proximity it hits with 10 instead of 8, see
- * [Combat.SHORT_GUN_CLOSE_POWER_PERCENT]. The Robert (the enemy) uses exactly
- * the same table.
+ * Every weapon has a base power and an explicit close-range power, measured
+ * as a percentage of the victim's maximum health. Base / 90%-100% values are:
+ * knife 10/10, shotgun 10/12, assault rifle 13/14, pistol 14/15,
+ * sniper rifle 15/16 and sword 15/16. Robert's assault rifle and shotgun use
+ * his own per-zone tables in [RobertRules].
  *
  * Every weapon hit also plays the sound of the fighter that was hit: the
  * weapon's own hit sound (knife-hit, sword-hit or gun-hit) is always mixed
@@ -22,8 +21,10 @@ package com.blindtechnexus.openfire.model
 enum class Weapon(
     val id: String,
     val nameKey: String,
-    /** Damage in percent of the victim's health at 90%-100% proximity. */
+    /** Base damage in percent of the victim's maximum health. */
     val powerPercent: Int,
+    /** Damage in percent at 90%-100% proximity (can differ from base power). */
+    val closeRangePowerPercent: Int,
     /** Rounds in a full magazine. Melee weapons use 0. */
     val magazine: Int,
     /** Shop price. 0 = never sold, the weapon is received by default. */
@@ -38,7 +39,8 @@ enum class Weapon(
     SHORT_GUN(
         id = "shortGun",
         nameKey = "gunShotgun",
-        powerPercent = 8,
+        powerPercent = 10,
+        closeRangePowerPercent = 12,
         magazine = 6,
         price = 0,
         ownedByDefault = true,
@@ -51,7 +53,8 @@ enum class Weapon(
     ASSAULT_GUN(
         id = "assaultGun",
         nameKey = "gunAssault",
-        powerPercent = 14,
+        powerPercent = 13,
+        closeRangePowerPercent = 14,
         magazine = 6,
         price = 0,
         ownedByDefault = true,
@@ -64,7 +67,8 @@ enum class Weapon(
     PISTOL(
         id = "pistol",
         nameKey = "gunPistol",
-        powerPercent = 13,
+        powerPercent = 14,
+        closeRangePowerPercent = 15,
         magazine = 6,
         price = 499,
         ownedByDefault = false,
@@ -77,7 +81,8 @@ enum class Weapon(
     SNIPER(
         id = "sniper",
         nameKey = "gunSniper",
-        powerPercent = 16,
+        powerPercent = 15,
+        closeRangePowerPercent = 16,
         magazine = 6,
         price = 549,
         ownedByDefault = false,
@@ -90,7 +95,8 @@ enum class Weapon(
     KNIFE(
         id = "knife",
         nameKey = "gunKnife",
-        powerPercent = 8,
+        powerPercent = 10,
+        closeRangePowerPercent = 10,
         magazine = 0,
         price = 300,
         ownedByDefault = false,
@@ -103,7 +109,8 @@ enum class Weapon(
     SWORD(
         id = "sword",
         nameKey = "gunSword",
-        powerPercent = 12,
+        powerPercent = 15,
+        closeRangePowerPercent = 16,
         magazine = 0,
         price = 405,
         ownedByDefault = false,
@@ -126,6 +133,31 @@ enum class Weapon(
         fun forSale(): List<Weapon> = Weapon.entries.filter { it.price > 0 }
 
         fun fromId(id: String?): Weapon? = Weapon.entries.firstOrNull { it.id == id }
+    }
+}
+
+/**
+ * Shop-only weapons reserved for future combat design. They can be owned and
+ * persisted, but are deliberately not part of [Weapon] and can never enter a
+ * battle loadout yet.
+ */
+enum class FutureWeapon(
+    val id: String,
+    val nameKey: String,
+    val price: Int,
+    val descriptionKey: String,
+    val requiredCompletedRounds: Int
+) {
+    MISSILE(
+        id = "missile",
+        nameKey = "gunMissile",
+        price = 1500,
+        descriptionKey = "missileInfo",
+        requiredCompletedRounds = Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS
+    );
+
+    companion object {
+        fun fromId(id: String?): FutureWeapon? = entries.firstOrNull { it.id == id }
     }
 }
 
@@ -174,7 +206,8 @@ enum class Extension(
     AUTO_RELOAD("autoReload", "extAutoReload", 50, "extAutoReloadInfo"),
     AUTO_MEDKIT("autoMedkit", "extAutoMedkit", 80, "extAutoMedkitInfo"),
     AUTO_COVER("autoCover", "extAutoCover", 100, "extAutoCoverInfo"),
-    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 100, "extAutoGlueWallInfo");
+    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 100, "extAutoGlueWallInfo"),
+    MISSILE_POWERS("missilePowers", "extMissilePowers", 500, "extMissilePowersInfo");
 
     companion object {
         fun fromId(id: String?): Extension? = Extension.entries.firstOrNull { it.id == id }
@@ -198,11 +231,16 @@ data class Inventory(
     val glueWalls: Int = 0,
     val covers: Int = 0,
     val extensions: Map<String, ExtensionState> = emptyMap(),
-    val lastWeaponId: String = Weapon.SHORT_GUN.id
+    val lastWeaponId: String = Weapon.SHORT_GUN.id,
+    /** Shop-only future items; intentionally excluded from [ownedWeapons]. */
+    val futureWeaponIds: Set<String> = emptySet()
 ) {
     fun ownsWeapon(weapon: Weapon): Boolean =
         weapon.ownedByDefault || weaponIds.contains(weapon.id)
 
+    fun ownsFutureWeapon(weapon: FutureWeapon): Boolean = futureWeaponIds.contains(weapon.id)
+
+    /** Only real battle weapons are returned; the future Missile is excluded. */
     fun ownedWeapons(): List<Weapon> = Weapon.entries.filter { ownsWeapon(it) }
 
     fun count(item: DefenceItem): Int = when (item) {
@@ -273,6 +311,29 @@ object Shop {
         )
     }
 
+    /** Buys a shop-only future weapon without adding any combat behaviour. */
+    fun buyFutureWeapon(
+        inventory: Inventory,
+        coins: Int,
+        weapon: FutureWeapon,
+        completedRounds: Int
+    ): ShopResult {
+        if (completedRounds < weapon.requiredCompletedRounds) {
+            return ShopResult(false, coins, inventory, "missileLocked")
+        }
+        if (inventory.ownsFutureWeapon(weapon)) {
+            return ShopResult(false, coins, inventory, "alreadyOwned")
+        }
+        if (coins < weapon.price) {
+            return ShopResult(false, coins, inventory, "notEnoughCoins")
+        }
+        return ShopResult(
+            success = true,
+            coins = coins - weapon.price,
+            inventory = inventory.copy(futureWeaponIds = inventory.futureWeaponIds + weapon.id)
+        )
+    }
+
     fun removeWeapon(inventory: Inventory, coins: Int, weapon: Weapon): ShopResult {
         if (weapon.ownedByDefault || !inventory.ownsWeapon(weapon)) {
             return ShopResult(false, coins, inventory, "cannotRemoveWeapon")
@@ -303,7 +364,17 @@ object Shop {
         )
     }
 
-    fun buyExtension(inventory: Inventory, coins: Int, extension: Extension): ShopResult {
+    fun buyExtension(
+        inventory: Inventory,
+        coins: Int,
+        extension: Extension,
+        completedRounds: Int = 0
+    ): ShopResult {
+        if (extension == Extension.MISSILE_POWERS &&
+            completedRounds < Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS
+        ) {
+            return ShopResult(false, coins, inventory, "missileLocked")
+        }
         if (inventory.extensionOwned(extension)) {
             return ShopResult(false, coins, inventory, "alreadyOwned")
         }
