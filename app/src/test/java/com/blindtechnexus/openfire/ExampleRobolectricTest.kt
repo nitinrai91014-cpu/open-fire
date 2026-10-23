@@ -8,7 +8,6 @@ import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.ExtensionState
-import com.blindtechnexus.openfire.model.FutureWeapon
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.GameStats
@@ -105,7 +104,12 @@ class ExampleRobolectricTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val prefs = PreferencesManager(context)
         val inventory = Inventory(
-            weaponIds = setOf(Weapon.SHORT_GUN.id, Weapon.ASSAULT_GUN.id, Weapon.SWORD.id),
+            weaponIds = setOf(
+                Weapon.SHORT_GUN.id,
+                Weapon.ASSAULT_GUN.id,
+                Weapon.SWORD.id,
+                Weapon.MISSILE.id
+            ),
             medikits = 7,
             glueWalls = 2,
             covers = 5,
@@ -114,7 +118,7 @@ class ExampleRobolectricTest {
                 Extension.AUTO_COVER.id to ExtensionState.DISABLED
             ),
             lastWeaponId = Weapon.SWORD.id,
-            futureWeaponIds = setOf(FutureWeapon.MISSILE.id)
+            missilePowers = 3
         )
         prefs.saveInventory(inventory)
 
@@ -126,8 +130,10 @@ class ExampleRobolectricTest {
         assertTrue(loaded.extensionEnabled(Extension.AUTO_RELOAD))
         assertEquals(ExtensionState.DISABLED, loaded.extensionState(Extension.AUTO_COVER))
         assertEquals(Weapon.SWORD.id, loaded.lastWeaponId)
-        assertTrue(loaded.ownsFutureWeapon(FutureWeapon.MISSILE))
-        assertEquals(3, loaded.ownedWeapons().size)
+        // The missile is a real battle weapon and its powers persist.
+        assertTrue(loaded.ownsWeapon(Weapon.MISSILE))
+        assertEquals(3, loaded.missilePowers)
+        assertEquals(4, loaded.ownedWeapons().size)
     }
 
     @Test

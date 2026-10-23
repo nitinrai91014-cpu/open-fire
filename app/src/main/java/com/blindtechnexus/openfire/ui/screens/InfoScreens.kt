@@ -193,6 +193,12 @@ fun ProfileScreen(viewModel: GameViewModel) {
                 fontSize = 15.sp,
                 color = Color.White
             )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "${viewModel.t("extMissilePowers")}: ${inventory.missilePowers}",
+                fontSize = 15.sp,
+                color = Color.White
+            )
 
             Spacer(modifier = Modifier.height(14.dp))
             Text(
@@ -449,7 +455,10 @@ fun ChangelogScreen(viewModel: GameViewModel) {
                 "New base and close-range weapon powers: knife 10/10, shotgun 10/12, assault rifle 13/14, pistol 14/15, sniper rifle 15/16 and sword 15/16. Robert has dedicated assault rifle and shotgun zone tables.",
                 "Gesture-only gameplay: no buttons appear after Play Game. Hold the top or bottom third to run, release to stop, and tap the center third for the quick menu.",
                 "Independent mixed footsteps keep your own running sound centered while Robert approaches or retreats in 3D, with faster movement in every later round.",
-                "The future Missile (1500 coins) and Missile Powers extension (500 coins) unlock after round two is completed; neither adds combat logic yet.",
+                "The Missile (2000 coins) unlocks after round two and now fights for real: switch to it like any weapon, swipe up to launch, and it always tracks and completely destroys its target through running, glue walls and covers — the looping missile sound plays while the enemy flees to the far edge, then stops for the explosion and hit sound at impact. Every launch consumes one stackable Missile Power (600 coins, bought and used like a defence; swipe down with the missile selected to buy one mid-battle).",
+                "New round loadouts: round one starts with a glue wall and a cover, then two medikits and a cover from level three; round two carries three medikits, a glue wall, two covers, the knife and the sword; round three carries three medikits, two glue walls, four covers and the pistol; from round four every weapon is available, including Robert's one desperation missile per game and his end-game anti-missile interceptors (one in round four, two in round five, only below 100 health).",
+                "Smarter Robert: he reads the fight instead of firing on a fixed clock — continuous close fire while advantaged, and a full-speed escape when an exchange turns one-sided against him.",
+                "Positional audio rework: head-on fighting stays perfectly centred (only flanks pan), footsteps play at the speech level with a speed-scaled rate and distance volume refreshed every half second (quarter second at a sprint), and pressing the running zones harder makes you run faster thanks to quicker, pressure-sensitive long-press detection.",
                 "New prices: knife 300 coins, sword 405 coins, pistol 499 coins and sniper rifle 549 coins.",
                 "A cover now stops only 11 hits and breaks on the 12th.",
                 "The quick menu item Play was replaced by Recover, which repairs every damaged weapon for 100 coins instead of 300.",

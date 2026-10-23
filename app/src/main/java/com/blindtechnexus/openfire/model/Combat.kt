@@ -21,15 +21,20 @@ enum class HitZone {
 }
 
 /**
- * The three bands the Robert randomly prefers to fight from.
+ * The bands Robert fights from.
  *
- *  - [FAR]   (0% to 40% proximity): every shot misses. He holds it for only
- *            one or two shots at a time, purely to confuse the real player.
- *  - [MID]   (40% to 70% proximity): half of the weapon power.
- *  - [CLOSE] (90% to 100% proximity): the full weapon power.
+ *  - [FAR]    (0% to 40% proximity): every shot misses. He holds it for only
+ *             one or two shots at a time, purely to confuse the real player.
+ *  - [MID]    (40% to 70% proximity): half of the weapon power.
+ *  - [STRONG] (70% to 90% proximity): 80% of the weapon power. Robert pushes
+ *             into this band while he holds a moderate advantage.
+ *  - [CLOSE]  (90% to 100% proximity): the full weapon power. Robert pushes
+ *             into this band while he holds a big advantage, and whenever
+ *             the player's weapon is damaged or a glue wall is up.
  *
- * The 70% to 90% band is never held on purpose: it is only crossed while the
- * Robert walks from one band to the other.
+ * The randomly stored preference is still [MID] or [CLOSE]; the situational
+ * AI in [RobertRules.situationalRange] promotes it to [STRONG] or [CLOSE]
+ * while Robert is winning and demotes it to [MID] while he is losing.
  */
 enum class FireRange(
     val id: String,
@@ -38,6 +43,7 @@ enum class FireRange(
 ) {
     FAR("far", Combat.MISS_ZONE_MIN, Combat.MISS_ZONE_MAX),
     MID("mid", Combat.MISS_ZONE_MAX, Combat.LIGHT_ZONE_MAX),
+    STRONG("strong", Combat.LIGHT_ZONE_MAX, Combat.STRONG_ZONE_MAX),
     CLOSE("close", Combat.HEAVY_ZONE_MIN, Combat.FULL_PROXIMITY);
 
     /** The proximity the Robert aims at while he holds this band. */

@@ -29,8 +29,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
-import com.blindtechnexus.openfire.model.FutureWeapon
 import com.blindtechnexus.openfire.model.Inventory
+import com.blindtechnexus.openfire.model.MissileRules
 import com.blindtechnexus.openfire.model.Progression
 import com.blindtechnexus.openfire.model.Screen
 import com.blindtechnexus.openfire.model.Weapon
@@ -59,6 +59,7 @@ fun ShopScreen(viewModel: GameViewModel) {
     var pendingWeapon by remember { mutableStateOf<Weapon?>(null) }
     var pendingDefence by remember { mutableStateOf<DefenceItem?>(null) }
     var pendingExtension by remember { mutableStateOf<Extension?>(null) }
+    var pendingMissilePowerRemove by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -118,11 +119,20 @@ fun ShopScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(12.dp))
             Weapon.forSale().forEach { weapon ->
                 val owned = inventory.ownsWeapon(weapon)
+                val detail = if (weapon.missileLauncher) {
+                    if (stats.completedRounds >= weapon.requiredCompletedRounds) {
+                        "${viewModel.t("missileInfo")} ${viewModel.t("missileRequiresPowers")}"
+                    } else {
+                        viewModel.t("missileLocked")
+                    }
+                } else {
+                    "${viewModel.t("weaponPower")}: ${weapon.powerPercent}%. " +
+                        "${viewModel.t("closeRangePower")}: ${weapon.closeRangePowerPercent}%. " +
+                        "${viewModel.t("ammo")}: ${weapon.magazine}."
+                }
                 ShopItemRow(
                     title = "${viewModel.t(weapon.nameKey)}, ${weapon.price} ${viewModel.t("coins")}.",
-                    detail = "${viewModel.t("weaponPower")}: ${weapon.powerPercent}%. " +
-                        "${viewModel.t("closeRangePower")}: ${weapon.closeRangePowerPercent}%. " +
-                        "${viewModel.t("ammo")}: ${weapon.magazine}.",
+                    detail = detail,
                     owned = owned,
                     buyLabel = viewModel.t("buy"),
                     removeLabel = viewModel.t("remove"),
@@ -132,15 +142,28 @@ fun ShopScreen(viewModel: GameViewModel) {
                 )
                 Spacer(modifier = Modifier.height(10.dp))
             }
-            FutureWeapon.entries.forEach { weapon ->
-                FutureWeaponRow(
-                    viewModel = viewModel,
-                    weapon = weapon,
-                    inventory = inventory,
-                    unlocked = stats.completedRounds >= weapon.requiredCompletedRounds
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ------------------------------------------------------------------
+        // Missile powers: stackable consumables, exactly like defences.
+        // ------------------------------------------------------------------
+        GameCard {
+            Text(
+                text = viewModel.t("extMissilePowers"),
+                fontSize = 21.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            MissilePowerRow(
+                viewModel = viewModel,
+                inventory = inventory,
+                unlocked = Progression.missileUnlocked(stats),
+                onRemove = { pendingMissilePowerRemove = true }
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -214,13 +237,7 @@ fun ShopScreen(viewModel: GameViewModel) {
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = if (extension == Extension.MISSILE_POWERS &&
-                            !Progression.missileUnlocked(stats)
-                        ) {
-                            viewModel.t("missileLocked")
-                        } else {
-                            viewModel.t(extension.descriptionKey)
-                        },
+                        text = viewModel.t(extension.descriptionKey),
                         fontSize = 14.sp,
                         color = TextMuted,
                         lineHeight = 20.sp
@@ -369,6 +386,50 @@ fun ShopScreen(viewModel: GameViewModel) {
         )
     }
 
+    // Confirmation before removing one stacked missile power.
+    if (pendingMissilePowerRemove) {
+        AlertDialog(
+            onDismissRequest = { pendingMissilePowerRemove = false },
+            title = {
+                Text(
+                    text = viewModel.t("removeConfirmTitle"),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "${viewModel.t("extMissilePowers")}. ${viewModel.t("removeConfirmMessage")}",
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingMissilePowerRemove = false
+                        viewModel.removeMissilePower()
+                    },
+                    modifier = Modifier.testTag("shop_missile_power_confirm_remove")
+                ) {
+                    Text(
+                        text = viewModel.t("confirmRemove"),
+                        color = WarnBright,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingMissilePowerRemove = false }) {
+                    Text(text = viewModel.t("cancel"), color = TextAccent)
+                }
+            },
+            containerColor = CardBg,
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
+
     // Confirmation before removing an extension.
     pendingExtension?.let { extension ->
         AlertDialog(
@@ -475,49 +536,59 @@ private fun DefenceRow(
 }
 
 @Composable
-private fun FutureWeaponRow(
+private fun MissilePowerRow(
     viewModel: GameViewModel,
-    weapon: FutureWeapon,
     inventory: Inventory,
-    unlocked: Boolean
+    unlocked: Boolean,
+    onRemove: () -> Unit
 ) {
-    val owned = inventory.ownsFutureWeapon(weapon)
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = "${viewModel.t(weapon.nameKey)}, ${weapon.price} ${viewModel.t("coins")}.",
+            text = "${viewModel.t("extMissilePowers")}, ${MissileRules.MISSILE_POWER_PRICE} " +
+                "${viewModel.t("coins")}.",
             fontSize = 16.sp,
             fontWeight = FontWeight.Bold,
             color = Color.White
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = if (unlocked) viewModel.t(weapon.descriptionKey) else viewModel.t("missileLocked"),
+            text = if (unlocked) {
+                viewModel.t("extMissilePowersInfo")
+            } else {
+                viewModel.t("missileLocked")
+            },
             fontSize = 14.sp,
             color = TextMuted,
             lineHeight = 20.sp
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = viewModel.t("missileRequiresPowers"),
+            text = "${viewModel.t("owned")}: ${inventory.missilePowers}",
             fontSize = 14.sp,
             color = WarnBright,
-            lineHeight = 20.sp
+            fontWeight = FontWeight.Bold
         )
         Spacer(modifier = Modifier.height(8.dp))
-        if (owned) {
-            Text(
-                text = viewModel.t("owned"),
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Bold,
-                color = WarnBright
-            )
-        } else {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             // Keep the locked row clickable so its unlock condition is spoken.
+            // Buying is repeatable: powers stack like defences.
             GameButton(
                 text = viewModel.t("buy"),
-                onClick = { viewModel.buyFutureWeapon(weapon.id) },
+                onClick = { viewModel.buyMissilePower() },
                 type = ButtonType.PRIMARY,
-                testTag = "shop_future_weapon_${weapon.id}_buy"
+                modifier = Modifier.weight(1f),
+                testTag = "shop_missile_power_buy"
+            )
+            GameButton(
+                text = viewModel.t("remove"),
+                onClick = onRemove,
+                type = ButtonType.DANGER,
+                modifier = Modifier.weight(1f),
+                testTag = "shop_missile_power_remove",
+                enabled = inventory.missilePowers > 0
             )
         }
     }

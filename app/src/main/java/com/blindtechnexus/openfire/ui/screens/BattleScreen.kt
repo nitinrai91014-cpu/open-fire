@@ -80,10 +80,11 @@ fun BattleScreen(viewModel: GameViewModel) {
         BattleMenuItem.EXIT -> viewModel.t("exitGame")
         BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
     }
-    val ammoStatus = if (weapon.needsReload) {
-        "${viewModel.t("ammo")}: ${gameState.activeAmmo}"
-    } else {
-        "${viewModel.t("ammo")}: ${viewModel.t("noAmmoNeeded")}"
+    val ammoStatus = when {
+        weapon.missileLauncher ->
+            "${viewModel.t("extMissilePowers")}: ${inventory.missilePowers}"
+        weapon.needsReload -> "${viewModel.t("ammo")}: ${gameState.activeAmmo}"
+        else -> "${viewModel.t("ammo")}: ${viewModel.t("noAmmoNeeded")}"
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -193,6 +194,20 @@ fun BattleScreen(viewModel: GameViewModel) {
                     color = TextMuted,
                     textAlign = TextAlign.Center
                 )
+                if (gameState.missileInFlight) {
+                    Spacer(modifier = Modifier.height(5.dp))
+                    AlertBox(
+                        text = if (gameState.missileFromPlayer) {
+                            viewModel.t("missileLaunched")
+                        } else {
+                            viewModel.t("robertMissileLaunched")
+                        }
+                    )
+                }
+                if (weapon.missileLauncher && inventory.missilePowers <= 0) {
+                    Spacer(modifier = Modifier.height(5.dp))
+                    AlertBox(text = viewModel.t("missileNoPower"))
+                }
                 if (gameState.pendingPurchaseId != null) {
                     Spacer(modifier = Modifier.height(5.dp))
                     AlertBox(
@@ -229,7 +244,8 @@ fun BattleScreen(viewModel: GameViewModel) {
                 Text(
                     text = "${viewModel.t("medkits")}: ${inventory.medikits} | " +
                         "${viewModel.t("glooWall")}: ${inventory.glueWalls} | " +
-                        "${viewModel.t("cover")}: ${inventory.covers}",
+                        "${viewModel.t("cover")}: ${inventory.covers} | " +
+                        "${viewModel.t("extMissilePowers")}: ${inventory.missilePowers}",
                     fontSize = 14.sp,
                     color = TextAccent,
                     textAlign = TextAlign.Center
@@ -251,7 +267,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                     lineHeight = 17.sp
                 )
                 val activeExtensions = Extension.entries.filter {
-                    it != Extension.MISSILE_POWERS && inventory.extensionEnabled(it)
+                    inventory.extensionEnabled(it)
                 }
                 if (activeExtensions.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(5.dp))

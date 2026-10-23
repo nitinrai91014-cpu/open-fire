@@ -57,10 +57,60 @@ class VolumeMixerTest {
         assertTrue("Close footsteps must be loudest", close > mid)
         assertTrue("Far footsteps must be quietest", mid > far)
         assertTrue("Far footsteps must still be audible", far > 0f)
+
+        // The live distance gain used by the footstep tracks.
+        assertEquals(1f, VolumeMixer.walkDistanceGain(0f, 100f), 0.0001f)
+        assertTrue(VolumeMixer.walkDistanceGain(50f, 100f) < 0.5f)
+        assertTrue(VolumeMixer.walkDistanceGain(100f, 100f) > 0f)
+        assertTrue(
+            VolumeMixer.walkDistanceGain(20f, 100f) >
+                VolumeMixer.walkDistanceGain(80f, 100f)
+        )
     }
 
     @Test
-    fun fleeingFootstepsUseALowerPitch() {
-        assertTrue(VolumeMixer.walkPitch(true) < VolumeMixer.walkPitch(false))
+    fun footstepRateRisesWithMovementSpeed() {
+        assertTrue(VolumeMixer.walkRate(2f) < VolumeMixer.walkRate(6f))
+        assertTrue(VolumeMixer.walkRate(6f) < VolumeMixer.walkRate(12f))
+        // Slow movement is slowed down, a sprint is sped up, both clamped.
+        assertTrue(VolumeMixer.walkRate(1f) < 1f)
+        assertTrue(VolumeMixer.walkRate(14f) > 1f)
+        assertEquals(0.6f, VolumeMixer.walkRate(0f), 0.0001f)
+        assertEquals(1.9f, VolumeMixer.walkRate(100f), 0.0001f)
+    }
+
+    @Test
+    fun footstepVolumeRefreshesEveryHalfSecondOrQuarterSecondWhenFast() {
+        assertEquals(500L, VolumeMixer.walkUpdateIntervalMs(3f))
+        assertEquals(500L, VolumeMixer.walkUpdateIntervalMs(7.9f))
+        assertEquals(250L, VolumeMixer.walkUpdateIntervalMs(8f))
+        assertEquals(250L, VolumeMixer.walkUpdateIntervalMs(20f))
+    }
+
+    @Test
+    fun headOnSoundsStayPerfectlyCentredAtFullVolume() {
+        // Straight motion (no sideways offset) never pans at all.
+        assertEquals(0f, VolumeMixer.panFor(0f, 30f), 0.0001f)
+        assertEquals(0f, VolumeMixer.panFor(0f, 100f), 0.0001f)
+        // Tiny offsets inside the head-on cone are centred too.
+        assertEquals(0f, VolumeMixer.panFor(1f, 40f), 0.0001f)
+        assertEquals(0f, VolumeMixer.panFor(-2f, 50f), 0.0001f)
+        // A centred sound plays at full volume in both ears, exactly like
+        // the mono speech voice — no harsh mixed dip in the middle.
+        val (left, right) = VolumeMixer.panGains(0f)
+        assertEquals(1f, left, 0.0001f)
+        assertEquals(1f, right, 0.0001f)
+    }
+
+    @Test
+    fun onlyAGenuineSidewaysOffsetPansAndEvenThenGently() {
+        // A flank far to the right pans right, but never hard.
+        val flankPan = VolumeMixer.panFor(60f, 65f)
+        assertTrue(flankPan > 0f)
+        assertTrue(flankPan < 1f)
+        val (left, right) = VolumeMixer.panGains(flankPan)
+        assertTrue(right > left)
+        assertTrue(left > 0f)
+        assertTrue(VolumeMixer.panFor(-60f, 65f) < 0f)
     }
 }

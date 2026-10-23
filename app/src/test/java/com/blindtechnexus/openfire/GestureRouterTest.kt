@@ -2,8 +2,10 @@ package com.blindtechnexus.openfire
 
 import com.blindtechnexus.openfire.model.GameAction
 import com.blindtechnexus.openfire.model.GestureRouter
+import com.blindtechnexus.openfire.model.RunPressure
 import com.blindtechnexus.openfire.model.Screen
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -63,5 +65,34 @@ class GestureRouterTest {
         assertEquals(GameAction.NONE, GestureRouter.route(Screen.SHOP, "down", 2))
         assertEquals(GameAction.NONE, GestureRouter.route(Screen.SETTINGS, "down", 2))
         assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "up", 0))
+    }
+
+    @Test
+    fun theRunHoldIsRecognisedQuickly() {
+        assertEquals(200L, RunPressure.LONG_PRESS_TIMEOUT_MS)
+    }
+
+    @Test
+    fun strongerPressesRunFaster() {
+        val light = RunPressure.speedFactor(0.2f)
+        val medium = RunPressure.speedFactor(0.55f)
+        val strong = RunPressure.speedFactor(0.9f)
+        assertTrue(light < medium)
+        assertTrue(medium < strong)
+        // A strong press runs at well over twice a light press.
+        assertTrue(strong > light * 2f)
+        assertEquals(RunPressure.MIN_SPEED_FACTOR, RunPressure.speedFactor(0.05f), 0.0001f)
+        assertEquals(RunPressure.MAX_SPEED_FACTOR, RunPressure.speedFactor(1.0f), 0.0001f)
+        // Pressures beyond the usual sensor range are clamped, not faster.
+        assertEquals(RunPressure.MAX_SPEED_FACTOR, RunPressure.speedFactor(2.0f), 0.0001f)
+    }
+
+    @Test
+    fun unknownPressureFallsBackToADefaultRun() {
+        // Devices without a usable pressure sensor must still run normally.
+        assertEquals(RunPressure.DEFAULT_SPEED_FACTOR, RunPressure.speedFactor(0f), 0.0001f)
+        assertEquals(RunPressure.DEFAULT_SPEED_FACTOR, RunPressure.speedFactor(-1f), 0.0001f)
+        assertEquals(RunPressure.DEFAULT_SPEED_FACTOR, RunPressure.speedFactor(Float.NaN), 0.0001f)
+        assertEquals(1.0f, RunPressure.DEFAULT_SPEED_FACTOR, 0.0001f)
     }
 }

@@ -147,7 +147,26 @@ data class GameState(
     /** True when the Robert may spend its next defence. */
     val robertDefenceArmed: Boolean = true,
     val robertConsecutiveHits: Int = 0,
-    val robertState: String = "advance", // "advance", "retreat" (fleeing), "flank"
+    /** Shots Robert has fired during the current exchange of hits. */
+    val robertExchangeShots: Int = 0,
+    /**
+     * Sideways offset of Robert in metres for positional audio. Zero means
+     * directly head-on (the normal fight). Only a flank or a dodge moves
+     * him sideways; running straight never pans him left or right.
+     */
+    val robertLateral: Float = 0f,
+    val robertState: String = "advance", // "advance", "retreat", "flank", "missileFlee"
+
+    /** True while a guided missile is in the air (either fighter's). */
+    val missileInFlight: Boolean = false,
+    /** True when the missile in the air was launched by the player. */
+    val missileFromPlayer: Boolean = false,
+    /** True when Robert will fire his anti-missile interceptor at impact. */
+    val missileInterceptPlanned: Boolean = false,
+    /** Missile powers Robert may still spend this game (rounds 4 and 5). */
+    val robertMissilePowers: Int = 0,
+    /** Anti-missile interceptors Robert may still fire this game. */
+    val robertAntiMissiles: Int = 0,
     /**
      * The band Robert randomly prefers to fire from ([FireRange.id]):
      * 40%-70%, 90%-100%, or the 0%-40% deception band.
