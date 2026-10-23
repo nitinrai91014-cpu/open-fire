@@ -77,6 +77,14 @@ class BattleMenuTest {
         assertEquals("advance", state.robertState)
         assertFalse(state.robertFleeing)
         assertFalse(state.activeWeaponDamaged)
+        // Head-on by default, with no missile activity in the air.
+        assertEquals(0f, state.robertLateral, 0.0001f)
+        assertFalse(state.missileInFlight)
+        assertFalse(state.missileFromPlayer)
+        assertFalse(state.missileInterceptPlanned)
+        assertEquals(0, state.robertMissilePowers)
+        assertEquals(0, state.robertAntiMissiles)
+        assertEquals(0, state.robertExchangeShots)
     }
 
     @Test

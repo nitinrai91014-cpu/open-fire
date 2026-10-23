@@ -37,7 +37,7 @@ class StringsAndGunRulesTest {
 
     @Test
     fun firearmsHoldExactlySixRoundsAndMeleeNeverReloads() {
-        val firearms = Weapon.entries.filter { !it.melee }
+        val firearms = Weapon.entries.filter { !it.melee && !it.missileLauncher }
         assertEquals(4, firearms.size)
         for (weapon in firearms) {
             assertEquals("Weapon '${weapon.id}' must hold six rounds", 6, weapon.magazine)
@@ -59,7 +59,7 @@ class StringsAndGunRulesTest {
         assertEquals(400, DefenceItem.GLUE_WALL.price)
         assertEquals(350, DefenceItem.COVER.price)
         assertEquals(
-            setOf(50, 80, 100, 500),
+            setOf(50, 80, 100),
             Extension.entries.map { it.price }.toSet()
         )
     }
@@ -92,8 +92,11 @@ class StringsAndGunRulesTest {
         assertTrue("Guide must document the shotgun boost", en.contains("shotgun 10 and 12"))
         assertTrue("Guide must document Robert's custom powers", en.contains("shotgun zone powers"))
         assertTrue("Guide must document the new prices", en.contains("knife 300 coins"))
-        assertTrue("Guide must document the Missile", en.contains("Missile costs 1500 coins"))
-        assertTrue("Guide must document Missile Powers", en.contains("Missile Powers for 500 coins"))
+        assertTrue("Guide must document the Missile", en.contains("Missile costs 2000 coins"))
+        assertTrue("Guide must document missile powers", en.contains("missile power for 600 coins"))
+        assertTrue("Guide must document guaranteed tracking", en.contains("100 percent accuracy"))
+        assertTrue("Guide must document the anti-missile rule", en.contains("anti-missile system"))
+        assertTrue("Guide must document pressure running", en.contains("stronger you press"))
         assertTrue("Guide must document the 11 hit cover", en.contains("stops 11 hits"))
         assertTrue("Guide must document the 100 coin recovery", en.contains("100 coins for Recovery"))
         assertTrue("Guide must document the recover menu item", en.contains("exit and recover"))

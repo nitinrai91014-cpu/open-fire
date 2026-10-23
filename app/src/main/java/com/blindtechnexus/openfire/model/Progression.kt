@@ -20,7 +20,7 @@ object Progression {
     const val INITIAL_HEALTH = 200
     const val HEALTH_PER_LEVEL = 100
 
-    /** Number of completed rounds needed to unlock the future Missile item. */
+    /** Completed rounds needed to unlock the missile and its powers. */
     const val MISSILE_UNLOCK_COMPLETED_ROUNDS = 2
 
     data class WinResult(

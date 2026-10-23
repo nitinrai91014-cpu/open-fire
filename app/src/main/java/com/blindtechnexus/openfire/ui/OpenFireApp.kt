@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import com.blindtechnexus.openfire.model.RunPressure
 import com.blindtechnexus.openfire.model.Screen
 import com.blindtechnexus.openfire.ui.screens.AboutScreen
 import com.blindtechnexus.openfire.ui.screens.BattleScreen
@@ -91,11 +92,19 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             var longPressActive = false
                             var longPressCancelled = false
 
-                            // A real long press is required. Movement no longer starts
-                            // on touch-down, and a swipe cancels the pending hold.
+                            // Sample the touch pressure from the very first
+                            // sample so the run can start at the pressed
+                            // intensity: stronger press, faster run.
+                            if (isTop || isBottom) {
+                                viewModel.updateMovePressure(firstDown.pressure)
+                            }
+
+                            // The hold is recognised quickly. Movement still
+                            // never starts on touch-down, and a swipe cancels
+                            // the pending hold.
                             val longPressJob = if (isTop || isBottom) {
                                 launch {
-                                    delay(viewConfiguration.longPressTimeoutMillis)
+                                    delay(RunPressure.LONG_PRESS_TIMEOUT_MS)
                                     if (!longPressCancelled && maxFingers == 1 && maxDelta < TAP_SLOP) {
                                         longPressActive = true
                                         viewModel.startPlayerMove(forward = isTop)
@@ -130,6 +139,14 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                             maxDelta = distance
                                             bestDx = dx
                                             bestDy = dy
+                                        }
+                                        // Live pressure of the primary finger
+                                        // keeps driving the running speed.
+                                        if ((isTop || isBottom) &&
+                                            change.id == firstDown.id &&
+                                            change.pressed
+                                        ) {
+                                            viewModel.updateMovePressure(change.pressure)
                                         }
                                     }
 

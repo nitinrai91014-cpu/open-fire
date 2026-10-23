@@ -5,7 +5,6 @@ import android.content.SharedPreferences
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.ExtensionState
-import com.blindtechnexus.openfire.model.FutureWeapon
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameStats
 import com.blindtechnexus.openfire.model.Inventory
@@ -31,9 +30,16 @@ class PreferencesManager(context: Context) {
         const val FILE_SETTINGS = "settings"
         const val FILE_PROFILE = "profile"
         const val FILE_INVENTORY = "inventory"
-        const val SCHEMA_VERSION = 2
+        const val SCHEMA_VERSION = 3
 
         const val KEY_SCHEMA = "schema"
+
+        // Pre-missile profile keys, read once for migration: the missile was
+        // a shop-only "future weapon" and its power was a permanent
+        // extension. Owners keep the missile and receive one power for it.
+        const val LEGACY_FUTURE_WEAPONS = "futureWeapons"
+        const val LEGACY_MISSILE_POWERS_EXTENSION = "ext.missilePowers"
+        const val LEGACY_MISSILE_ID = "missile"
     }
 
     init {
@@ -165,20 +171,37 @@ class PreferencesManager(context: Context) {
             }
             if (state != ExtensionState.NOT_OWNED) extensions[extension.id] = state
         }
-        val futureWeaponIds = map["futureWeapons"]
-            ?.split(',')
-            ?.mapNotNull { FutureWeapon.fromId(it.trim()) }
-            ?.map { it.id }
-            ?.toSet()
-            ?: emptySet()
+        // Migration: a missile bought while it was a shop-only future
+        // weapon becomes the real battle weapon, and a bought (permanent)
+        // Missile Powers extension becomes one consumable missile power.
+        val migratedWeaponIds = if (
+            map[LEGACY_FUTURE_WEAPONS]
+                ?.split(',')
+                ?.map { it.trim() }
+                ?.contains(LEGACY_MISSILE_ID) == true
+        ) {
+            weaponIds + LEGACY_MISSILE_ID
+        } else {
+            weaponIds
+        }
+        val legacyPowerOwned = map[LEGACY_MISSILE_POWERS_EXTENSION]
+            ?.let { raw ->
+                try {
+                    ExtensionState.valueOf(raw) != ExtensionState.NOT_OWNED
+                } catch (_: Exception) {
+                    false
+                }
+            } ?: false
+        val missilePowers = map["missilePowers"]?.toIntOrNull()?.coerceAtLeast(0)
+            ?: if (legacyPowerOwned) 1 else 0
         return Inventory(
-            weaponIds = weaponIds + Weapon.defaults().map { it.id },
+            weaponIds = migratedWeaponIds + Weapon.defaults().map { it.id },
             medikits = map["medikits"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             glueWalls = map["glueWalls"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             covers = map["covers"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             extensions = extensions,
             lastWeaponId = Weapon.fromId(map["lastWeapon"])?.id ?: Weapon.SHORT_GUN.id,
-            futureWeaponIds = futureWeaponIds
+            missilePowers = missilePowers
         )
     }
 
@@ -190,7 +213,7 @@ class PreferencesManager(context: Context) {
             "glueWalls" to inventory.glueWalls.toString(),
             "covers" to inventory.covers.toString(),
             "lastWeapon" to inventory.lastWeaponId,
-            "futureWeapons" to inventory.futureWeaponIds.joinToString(",")
+            "missilePowers" to inventory.missilePowers.toString()
         )
         for (extension in Extension.entries) {
             values["ext.${extension.id}"] = inventory.extensionState(extension).name

@@ -4,11 +4,26 @@ import kotlin.random.Random
 
 /**
  * Robert's health, survival items, weapons and fleeing behaviour scale with
- * the current round. His maximum health also depends on the current level.
+ * the current round (and, in round one, with the current level). His
+ * maximum health also depends on the current level.
  *
- * In round one he carries the assault rifle and shotgun. His sniper rifle is
- * present but locked until the existing glue-wall / low-health condition is
- * met. Later rounds retain the established loadout progression.
+ *  - Round 1, levels 1-2: 1 glue wall and 1 cover (no medkits).
+ *    Round 1, levels 3-5: 2 medkits and 1 cover (no glue walls).
+ *    Weapons: assault rifle and shotgun; the sniper rifle is present but
+ *    locked until the glue-wall / low-health condition is met.
+ *  - Round 2 (all levels): 3 medkits, 1 glue wall and 2 covers. The knife
+ *    and the sword join his weapons.
+ *  - Round 3 (all levels): 3 medkits, 2 glue walls and 4 covers. The
+ *    pistol joins his weapons and the sniper rifle unlocks.
+ *  - Round 4 (all levels): 5 medkits, 3 glue walls and 5 covers. Every
+ *    weapon is available, including one missile power per game, and he
+ *    carries one anti-missile interceptor.
+ *  - Round 5 (all levels): 5 medkits, 4 glue walls and 7 covers. Every
+ *    weapon is available, including one missile power per game, and he
+ *    carries two anti-missile interceptors.
+ *
+ * The missile itself never enters his random weapon rotation: it is fired
+ * only through [MissileRules.shouldEnemyLaunch], exactly once per game.
  */
 data class RobertProfile(
     val round: Int,
@@ -20,7 +35,11 @@ data class RobertProfile(
     /** True while the sniper rifle may only be used under the special rule. */
     val sniperLocked: Boolean,
     /** Consecutive hits that make Robert run far away. */
-    val fleeAfterHits: Int
+    val fleeAfterHits: Int,
+    /** Missile powers he may spend this game (round four and later). */
+    val missilePowers: Int = 0,
+    /** Anti-missile interceptors he carries this game (see [MissileRules]). */
+    val antiMissiles: Int = 0
 )
 
 object RobertRules {
@@ -48,17 +67,29 @@ object RobertRules {
     fun movementSpeedMultiplier(round: Int): Float =
         1.2f + (round.coerceIn(1, Progression.ROUNDS_PER_MATCH) - 1) * 0.2f
 
+    /** Every standard battle weapon (the missile is handled separately). */
+    val ALL_STANDARD_WEAPONS: List<Weapon> =
+        Weapon.entries.filter { !it.missileLauncher }
+
     fun profile(round: Int, level: Int = 1): RobertProfile {
         val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
         val safeLevel = level.coerceIn(1, Progression.LEVELS_PER_ROUND)
         val maxHp = Progression.hpFor(safeRound, safeLevel)
         val weapons = when (safeRound) {
             1 -> listOf(Weapon.ASSAULT_GUN, Weapon.SHORT_GUN, Weapon.SNIPER)
-            2 -> listOf(Weapon.ASSAULT_GUN, Weapon.SHORT_GUN, Weapon.SNIPER)
-            3 -> listOf(Weapon.SHORT_GUN, Weapon.ASSAULT_GUN, Weapon.SNIPER, Weapon.KNIFE)
-            4 -> listOf(
+            // Round two adds the knife and the sword.
+            2 -> listOf(
+                Weapon.ASSAULT_GUN,
+                Weapon.SHORT_GUN,
+                Weapon.SNIPER,
+                Weapon.KNIFE,
+                Weapon.SWORD
+            )
+            // Round three adds the pistol: from here on he owns them all.
+            3 -> listOf(
                 Weapon.SHORT_GUN,
                 Weapon.ASSAULT_GUN,
+                Weapon.PISTOL,
                 Weapon.SNIPER,
                 Weapon.KNIFE,
                 Weapon.SWORD
@@ -73,11 +104,25 @@ object RobertRules {
             )
         }
         return when (safeRound) {
-            1 -> RobertProfile(1, maxHp, 1, 0, 1, weapons, true, fleeAfterHits(1))
-            2 -> RobertProfile(2, maxHp, 2, 1, 1, weapons, true, fleeAfterHits(2))
-            3 -> RobertProfile(3, maxHp, 4, 2, 3, weapons, false, fleeAfterHits(3))
-            4 -> RobertProfile(4, maxHp, 5, 3, 3, weapons, false, fleeAfterHits(4))
-            else -> RobertProfile(5, maxHp, 6, 5, 7, weapons, false, fleeAfterHits(5))
+            1 -> if (safeLevel <= 2) {
+                // Levels 1 and 2: one glue wall and one cover, no medkits.
+                RobertProfile(1, maxHp, 0, 1, 1, weapons, true, fleeAfterHits(1))
+            } else {
+                // Levels 3, 4 and 5: two medkits and one cover, no glue walls.
+                RobertProfile(1, maxHp, 2, 0, 1, weapons, true, fleeAfterHits(1))
+            }
+            2 -> RobertProfile(2, maxHp, 3, 1, 2, weapons, true, fleeAfterHits(2))
+            3 -> RobertProfile(3, maxHp, 3, 2, 4, weapons, false, fleeAfterHits(3))
+            4 -> RobertProfile(
+                4, maxHp, 5, 3, 5, weapons, false, fleeAfterHits(4),
+                missilePowers = MissileRules.enemyMissilePowersForRound(4),
+                antiMissiles = MissileRules.antiMissilesForRound(4)
+            )
+            else -> RobertProfile(
+                5, maxHp, 5, 4, 7, weapons, false, fleeAfterHits(5),
+                missilePowers = MissileRules.enemyMissilePowersForRound(5),
+                antiMissiles = MissileRules.antiMissilesForRound(5)
+            )
         }
     }
 
@@ -174,11 +219,123 @@ object RobertRules {
     fun shouldFlee(consecutiveHits: Int, fleeAfterHits: Int): Boolean =
         fleeAfterHits > 0 && consecutiveHits >= fleeAfterHits
 
+    /**
+     * True when a one-sided exchange must make Robert run as fast as
+     * possible: he has sustained two or three hits in a row but has only
+     * managed to answer with one or two shots, all inside combat range
+     * (proximity at least 40%, so the hits could really hurt him).
+     */
+    fun shouldFleeFromExchange(
+        hitsTakenInRow: Int,
+        shotsFiredInExchange: Int,
+        proximityPercent: Float
+    ): Boolean =
+        hitsTakenInRow >= 2 &&
+            shotsFiredInExchange <= 2 &&
+            Combat.zoneFor(proximityPercent) != HitZone.MISS
+
     /** Which defence Robert uses next: medkit first, then cover, then glue wall. */
     fun nextDefence(medikits: Int, covers: Int, glueWalls: Int): DefenceItem? = when {
         medikits > 0 -> DefenceItem.MEDKIT
         covers > 0 -> DefenceItem.COVER
         glueWalls > 0 -> DefenceItem.GLUE_WALL
         else -> null
+    }
+
+    // ------------------------------------------------------------------
+    // Situational decisions: who is winning, where to stand, how fast
+    // to fire. Robert never fires on a fixed clock any more.
+    // ------------------------------------------------------------------
+
+    /** Health-fraction gap that counts as a moderate / big advantage. */
+    const val MODERATE_ADVANTAGE_GAP = 0.10f
+    const val BIG_ADVANTAGE_GAP = 0.25f
+
+    /** Who currently holds the upper hand in a fight. */
+    enum class CombatSituation {
+        /** The player's weapon is damaged: Robert presses at point blank. */
+        PRESSURE,
+        /** Robert is clearly healthier: he fires continuously, close in. */
+        ADVANTAGE,
+        /** Roughly even: a varied, human-like pace. */
+        EVEN,
+        /** Robert is losing: sparse fire while he repositions or flees. */
+        DISADVANTAGE
+    }
+
+    /** Robert's health advantage: his fraction minus the player's (-1..1). */
+    fun advantageGap(
+        robertHp: Int,
+        robertMaxHp: Int,
+        playerHp: Int,
+        playerMaxHp: Int
+    ): Float {
+        if (robertMaxHp <= 0 || playerMaxHp <= 0) return 0f
+        val robertFraction = robertHp.toFloat() / robertMaxHp.toFloat()
+        val playerFraction = playerHp.toFloat() / playerMaxHp.toFloat()
+        return (robertFraction - playerFraction).coerceIn(-1f, 1f)
+    }
+
+    fun assessSituation(
+        robertHp: Int,
+        robertMaxHp: Int,
+        playerHp: Int,
+        playerMaxHp: Int,
+        playerWeaponDamaged: Boolean
+    ): CombatSituation {
+        if (playerWeaponDamaged) return CombatSituation.PRESSURE
+        val gap = advantageGap(robertHp, robertMaxHp, playerHp, playerMaxHp)
+        return when {
+            gap > MODERATE_ADVANTAGE_GAP -> CombatSituation.ADVANTAGE
+            gap < -MODERATE_ADVANTAGE_GAP -> CombatSituation.DISADVANTAGE
+            else -> CombatSituation.EVEN
+        }
+    }
+
+    /**
+     * The band Robert holds for the current situation. A forced point blank
+     * (damaged weapon or glue wall) always wins. Otherwise a big advantage
+     * pushes him into the 90%-100% band, a moderate advantage into the
+     * 70%-90% band, and a disadvantage pulls him back to the 40%-70% band.
+     * An active 0%-40% deception trip is always allowed to finish.
+     */
+    fun situationalRange(
+        stored: FireRange,
+        playerWeaponDamaged: Boolean,
+        playerGlueWallActive: Boolean,
+        robertHp: Int,
+        robertMaxHp: Int,
+        playerHp: Int,
+        playerMaxHp: Int,
+        deceptionShotsLeft: Int
+    ): FireRange {
+        if (playerWeaponDamaged || playerGlueWallActive) return FireRange.CLOSE
+        if (stored == FireRange.FAR && deceptionShotsLeft > 0) return FireRange.FAR
+        val gap = advantageGap(robertHp, robertMaxHp, playerHp, playerMaxHp)
+        return when {
+            gap >= BIG_ADVANTAGE_GAP -> FireRange.CLOSE
+            gap > MODERATE_ADVANTAGE_GAP -> FireRange.STRONG
+            gap < -MODERATE_ADVANTAGE_GAP -> FireRange.MID
+            else -> stored
+        }
+    }
+
+    /** The inclusive delay window (ms) before Robert's next shot. */
+    fun fireIntervalWindow(situation: CombatSituation, fleeing: Boolean): LongRange = when {
+        fleeing -> 2_200L..3_200L
+        situation == CombatSituation.PRESSURE -> 620L..1_000L
+        situation == CombatSituation.ADVANTAGE -> 750L..1_150L
+        situation == CombatSituation.EVEN -> 1_400L..2_200L
+        else -> 2_000L..3_000L
+    }
+
+    /** A jittered delay before Robert's next shot, for the situation. */
+    fun fireIntervalMs(situation: CombatSituation, fleeing: Boolean, random: Random): Long {
+        val window = fireIntervalWindow(situation, fleeing)
+        return if (window.last <= window.first) {
+            window.first
+        } else {
+            window.first + (random.nextFloat() * (window.last - window.first)).toLong()
+        }
     }
 }

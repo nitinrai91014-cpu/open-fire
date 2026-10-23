@@ -21,7 +21,6 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -48,7 +47,11 @@ class AudioManager(private val context: Context) {
             "music",
             "walk",
             "playerWalk",
-            "enemyWalk"
+            "enemyWalk",
+            // The missile loop must be stoppable the instant it impacts,
+            // and the explosion is a multi-second tail: both stream.
+            "missile",
+            "explosion"
         )
 
         /** Pending play requests older than this are dropped (stale intent). */
@@ -116,10 +119,11 @@ class AudioManager(private val context: Context) {
         }
 
     /**
-     * Walking footsteps play at 75% of the current speech (TTS) volume, so the
-     * footstep level always follows the voice level the player chose.
+     * Walking footsteps play at the same level as the speech (TTS) volume,
+     * so approaching and receding movement is always as clear as the voice
+     * the player chose. Only the 3D distance gain is applied on top.
      */
-    var walkVolume: Float = 0.75f
+    var walkVolume: Float = 1.0f
         set(value) {
             field = VolumeMixer.clamp(value)
         }
@@ -201,7 +205,12 @@ class AudioManager(private val context: Context) {
         // Two independent players mix the same footstep asset: the local
         // player stays centred while Robert is attenuated by his 3D distance.
         "playerWalk" to listOf("walk.mp3"),
-        "enemyWalk" to listOf("walk.mp3")
+        "enemyWalk" to listOf("walk.mp3"),
+        // Guided missile: the launch flight sound (looped while the target
+        // flees) and the impact explosion, always mixed with enemy-hit or
+        // player-hit for the destroyed fighter.
+        "missile" to listOf("missile-sound.mp3"),
+        "explosion" to listOf("explosion-sound.mp3")
     )
 
     init {
@@ -360,6 +369,12 @@ class AudioManager(private val context: Context) {
      * 3D spatial panning & distance attenuation.
      * x: -100 (far left) to +100 (far right)
      * z: distance away along line of sight (devil approaches from 100 to 0)
+     *
+     * The player and Robert fight head-on: any sound with no real sideways
+     * offset is centred exactly (full volume in both ears, like the speech
+     * voice), so running straight forward or backward never smears the
+     * image between the channels. Only a genuine sideways offset pans,
+     * and even then gently.
      */
     fun calculate3dVolume(
         x: Float = 0f,
@@ -372,11 +387,7 @@ class AudioManager(private val context: Context) {
         val distGain = 1.0f / (1.0f + 0.022f * max(0f, dist - 5f))
         val clampedDistGain = distGain.coerceIn(0.10f, 1.0f)
 
-        // Azimuth panning: -1.0 is full left, 0 center, +1.0 full right
-        val pan = if (dist > 0.01f) (x / max(1f, dist)).coerceIn(-1.0f, 1.0f) else 0f
-        val angle = (pan + 1.0f) * (Math.PI.toFloat() / 4.0f) // 0 to PI/2
-        val leftGain = cos(angle)
-        val rightGain = sin(angle)
+        val (leftGain, rightGain) = VolumeMixer.panGains(VolumeMixer.panFor(x, dist))
 
         val totalVol = VolumeMixer.sfx(sfxVolume, baseVol, clampedDistGain)
         val left = (totalVol * leftGain).coerceIn(0f, 1f)
@@ -473,56 +484,94 @@ class AudioManager(private val context: Context) {
     }
 
     /**
-     * Updates only Robert's positional walking loop. Distance attenuation is
-     * applied exactly once by [calculate3dVolume]: footsteps become louder as
-     * he approaches and quieter as he retreats.
+     * Live footstep mix state: when each track last refreshed its volume
+     * (every 0.5 s, or every 0.25 s while running fast) and the gains it
+     * currently plays at, so approach / retreat swells stay smooth instead
+     * of stepping harshly on every movement tick.
+     */
+    private val walkLastApplyAt = ConcurrentHashMap<String, Long>()
+    private val walkCurrentGains = ConcurrentHashMap<String, Pair<Float, Float>>()
+
+    /**
+     * Updates only Robert's positional walking loop. His footsteps sit at
+     * the speech level, attenuated once by his real distance: louder as he
+     * approaches, quieter as he retreats, centred while he runs straight
+     * and panned only by a genuine sideways offset. The playback rate
+     * follows his movement speed in metres per second.
      */
     fun updateEnemyWalk3dAudio(
         distance: Float,
         lateralOffset: Float = 0f,
+        speedMps: Float = 0f,
         fleeing: Boolean = false
     ) {
+        val safeDistance = distance.coerceIn(0f, Combat.MAX_RANGE)
+        // Legacy callers without a speed still get a sensible rate.
+        val effectiveSpeed = when {
+            speedMps > 0f -> speedMps
+            fleeing -> 12f
+            else -> 5f
+        }
+        val base = walkVolume * VolumeMixer.walkDistanceGain(safeDistance, Combat.MAX_RANGE)
+        val (panLeft, panRight) = VolumeMixer.panGains(
+            VolumeMixer.panFor(lateralOffset, safeDistance)
+        )
         updateWalkingTrack(
             key = "enemyWalk",
-            posX = lateralOffset,
-            posZ = -distance.coerceIn(0f, Combat.MAX_RANGE),
-            fleeing = fleeing
+            left = (base * panLeft).coerceIn(0f, 1f),
+            right = (base * panRight).coerceIn(0f, 1f),
+            speedMps = effectiveSpeed
         )
     }
 
     /**
-     * The local player's own footsteps stay centred and at the normal walking
-     * volume regardless of Robert's distance, as heard while running yourself.
+     * The local player's own footsteps stay centred at the speech level
+     * regardless of Robert's distance, exactly as heard while running
+     * yourself. Only the playback rate follows the running speed (which
+     * itself follows how strongly the screen is pressed).
      */
-    fun updatePlayerWalkAudio() {
-        updateWalkingTrack(key = "playerWalk", posX = 0f, posZ = 0f, fleeing = false)
+    fun updatePlayerWalkAudio(speedMps: Float = 6.5f) {
+        updateWalkingTrack(
+            key = "playerWalk",
+            left = walkVolume,
+            right = walkVolume,
+            speedMps = speedMps
+        )
     }
 
-    private fun updateWalkingTrack(key: String, posX: Float, posZ: Float, fleeing: Boolean) {
-        val (left, right) = calculate3dVolume(
-            x = posX,
-            y = 0f,
-            z = posZ,
-            baseVol = walkVolume
-        )
+    private fun updateWalkingTrack(key: String, left: Float, right: Float, speedMps: Float) {
         synchronized(playerLock) {
-            val player = managedPlayers[key]
-            if (player != null && player.isPlaying) {
-                try {
-                    player.setVolume(left, right)
-                } catch (_: Exception) {}
-                applyWalkPitch(player, fleeing)
-            } else {
-                playManagedTrack(
-                    key,
-                    volume = walkVolume,
-                    posX = posX,
-                    posY = 0f,
-                    posZ = posZ,
-                    loop = true
-                )
-                managedPlayers[key]?.let { applyWalkPitch(it, fleeing) }
+            var player = managedPlayers[key]
+            if (player == null || !player.isPlaying) {
+                walkLastApplyAt.remove(key)
+                walkCurrentGains.remove(key)
+                playManagedTrack(key, volume = 1.0f, posX = 0f, posY = 0f, posZ = 0f, loop = true)
+                player = managedPlayers[key] ?: return
             }
+            // Refresh the live volume every 0.5 s (0.25 s at a fast run);
+            // between refreshes the player simply keeps its current level.
+            val now = System.currentTimeMillis()
+            val lastApplied = walkLastApplyAt[key]
+            if (lastApplied != null && now - lastApplied < VolumeMixer.walkUpdateIntervalMs(speedMps)) {
+                return
+            }
+            // Glide toward the target gains so distance changes sound like
+            // continuous approach / retreat, never like volume steps.
+            val current = walkCurrentGains[key]
+            val smoothed = if (current == null) {
+                Pair(left, right)
+            } else {
+                Pair(
+                    current.first + (left - current.first) * 0.6f,
+                    current.second + (right - current.second) * 0.6f
+                )
+            }
+            try {
+                player.setVolume(smoothed.first.coerceIn(0f, 1f), smoothed.second.coerceIn(0f, 1f))
+            } catch (_: Exception) {}
+            applyWalkRate(player, speedMps)
+            walkCurrentGains[key] = smoothed
+            walkLastApplyAt[key] = now
         }
     }
 
@@ -533,12 +582,11 @@ class AudioManager(private val context: Context) {
         stopSound("enemyWalk")
     }
 
-    /** Approaching footsteps rise in pitch; fleeing footsteps fall. */
-    private fun applyWalkPitch(player: MediaPlayer, fleeing: Boolean) {
+    /** Faster movement plays the steps faster; slow movement slows them. */
+    private fun applyWalkRate(player: MediaPlayer, speedMps: Float) {
         try {
             player.playbackParams = PlaybackParams()
-                .setPitch(VolumeMixer.walkPitch(fleeing))
-                .setSpeed(1.0f)
+                .setSpeed(VolumeMixer.walkRate(speedMps))
         } catch (_: Exception) {}
     }
 
@@ -590,12 +638,12 @@ class AudioManager(private val context: Context) {
             }
             player.prepare()
             player.start()
-            if (key == "walk" || key == "playerWalk" || key == "enemyWalk") {
-                applyWalkPitch(player, fleeing = false)
-            }
             synchronized(playerLock) {
                 managedPlayers[key] = player
             }
+            // Footstep volume / rate are owned by updateWalkingTrack, which
+            // applies them immediately after starting a track.
+            triggerHapticForSound(key)
         } catch (e: Exception) {
             Log.e(TAG, "Failed playing managed track $key", e)
         }
@@ -606,6 +654,8 @@ class AudioManager(private val context: Context) {
      */
     fun stopSound(key: String) {
         dropPendingPlays(key)
+        walkLastApplyAt.remove(key)
+        walkCurrentGains.remove(key)
         stopManagedTrack(key)
         val streams = activeSfxStreams.remove(key)
         if (streams != null) {
@@ -644,6 +694,8 @@ class AudioManager(private val context: Context) {
         stopSound("airplane")
         stopSound("airplaneEngine")
         stopFootsteps()
+        stopSound("missile")
+        stopSound("explosion")
         stopSound("jump")
         stopSound("land")
     }
@@ -744,6 +796,12 @@ class AudioManager(private val context: Context) {
                     "jump", "parachute", "land" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(25, 100))
                     }
+                    "missile" -> {
+                        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 60, 40, 60, 40, 90), -1))
+                    }
+                    "explosion" -> {
+                        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 140, 60, 200, 60, 260), -1))
+                    }
                     "win" -> {
                         vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 80, 50, 120, 60, 180), -1))
                     }
@@ -792,6 +850,8 @@ class AudioManager(private val context: Context) {
             "cover" -> generateCoverWave(sampleRate, 0.5f)
             "ammo" -> generateBeepWave(sampleRate, 0.08f, 900f)
             "spend" -> generateCoinWave(sampleRate, 0.18f)
+            "missile" -> generateChirpWave(sampleRate, 1.2f, 300f, 1400f)
+            "explosion" -> generateNoiseThudWave(sampleRate, 0.9f, 70f)
             "win" -> generateFanfareWave(sampleRate, 0.7f, true)
             "lose" -> generateFanfareWave(sampleRate, 0.7f, false)
             else -> generateBeepWave(sampleRate, 0.05f, 800f)

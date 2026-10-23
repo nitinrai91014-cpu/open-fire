@@ -12,7 +12,9 @@ package com.blindtechnexus.openfire.model
  * as a percentage of the victim's maximum health. Base / 90%-100% values are:
  * knife 10/10, shotgun 10/12, assault rifle 13/14, pistol 14/15,
  * sniper rifle 15/16 and sword 15/16. Robert's assault rifle and shotgun use
- * his own per-zone tables in [RobertRules].
+ * his own per-zone tables in [RobertRules]. The missile is the exception: it
+ * does not use the zone tables at all, because a launched missile always
+ * tracks its target and destroys it completely (see [MissileRules]).
  *
  * Every weapon hit also plays the sound of the fighter that was hit: the
  * weapon's own hit sound (knife-hit, sword-hit or gun-hit) is always mixed
@@ -25,7 +27,7 @@ enum class Weapon(
     val powerPercent: Int,
     /** Damage in percent at 90%-100% proximity (can differ from base power). */
     val closeRangePowerPercent: Int,
-    /** Rounds in a full magazine. Melee weapons use 0. */
+    /** Rounds in a full magazine. Melee weapons and the missile use 0. */
     val magazine: Int,
     /** Shop price. 0 = never sold, the weapon is received by default. */
     val price: Int,
@@ -34,7 +36,13 @@ enum class Weapon(
     val fireSoundKey: String,
     val switchSoundKey: String,
     val hitSoundKey: String,
-    val missSoundKey: String
+    val missSoundKey: String,
+    /**
+     * True only for the missile launcher. It lives in the normal weapon
+     * inventory and is switched to with the usual gun-switch sound, but it
+     * has no magazine: every launch consumes one stackable missile power.
+     */
+    val missileLauncher: Boolean = false
 ) {
     SHORT_GUN(
         id = "shortGun",
@@ -119,11 +127,37 @@ enum class Weapon(
         switchSoundKey = "swordSwitch",
         hitSoundKey = "swordHit",
         missSoundKey = "swordMiss"
+    ),
+    MISSILE(
+        id = "missile",
+        nameKey = "gunMissile",
+        // Display value only: a missile hit reduces the target directly to
+        // zero health, so the normal zone damage tables never apply to it.
+        powerPercent = 100,
+        closeRangePowerPercent = 100,
+        magazine = 0,
+        price = MissileRules.MISSILE_PRICE,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "missile",
+        // Switching to the missile plays the same gun-switch sound as every
+        // other firearm.
+        switchSoundKey = "gunReload",
+        hitSoundKey = "explosion",
+        missSoundKey = "missile",
+        missileLauncher = true
     );
 
-    /** Melee weapons are always "loaded"; firearms need a reload after six shots. */
+    /** Completed rounds required before this weapon can be bought (0 = none). */
+    val requiredCompletedRounds: Int
+        get() = if (missileLauncher) Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS else 0
+
+    /**
+     * Melee weapons are always "loaded"; firearms need a reload after six
+     * shots. The missile never reloads either: it is fed by missile powers.
+     */
     val needsReload: Boolean
-        get() = !melee
+        get() = !melee && !missileLauncher
 
     companion object {
         /** The weapons every player owns without buying them. */
@@ -133,31 +167,6 @@ enum class Weapon(
         fun forSale(): List<Weapon> = Weapon.entries.filter { it.price > 0 }
 
         fun fromId(id: String?): Weapon? = Weapon.entries.firstOrNull { it.id == id }
-    }
-}
-
-/**
- * Shop-only weapons reserved for future combat design. They can be owned and
- * persisted, but are deliberately not part of [Weapon] and can never enter a
- * battle loadout yet.
- */
-enum class FutureWeapon(
-    val id: String,
-    val nameKey: String,
-    val price: Int,
-    val descriptionKey: String,
-    val requiredCompletedRounds: Int
-) {
-    MISSILE(
-        id = "missile",
-        nameKey = "gunMissile",
-        price = 1500,
-        descriptionKey = "missileInfo",
-        requiredCompletedRounds = Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS
-    );
-
-    companion object {
-        fun fromId(id: String?): FutureWeapon? = entries.firstOrNull { it.id == id }
     }
 }
 
@@ -196,7 +205,13 @@ enum class DefenceItem(
     }
 }
 
-/** Optional automatic helpers that can be bought, enabled and disabled. */
+/**
+ * Optional automatic helpers that can be bought, enabled and disabled.
+ *
+ * Missile power is deliberately NOT an extension any more: it is a
+ * stackable, consumable item (like a defence), so it is counted directly in
+ * [Inventory.missilePowers] and bought through [Shop.buyMissilePower].
+ */
 enum class Extension(
     val id: String,
     val nameKey: String,
@@ -206,8 +221,7 @@ enum class Extension(
     AUTO_RELOAD("autoReload", "extAutoReload", 50, "extAutoReloadInfo"),
     AUTO_MEDKIT("autoMedkit", "extAutoMedkit", 80, "extAutoMedkitInfo"),
     AUTO_COVER("autoCover", "extAutoCover", 100, "extAutoCoverInfo"),
-    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 100, "extAutoGlueWallInfo"),
-    MISSILE_POWERS("missilePowers", "extMissilePowers", 500, "extMissilePowersInfo");
+    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 100, "extAutoGlueWallInfo");
 
     companion object {
         fun fromId(id: String?): Extension? = Extension.entries.firstOrNull { it.id == id }
@@ -232,16 +246,23 @@ data class Inventory(
     val covers: Int = 0,
     val extensions: Map<String, ExtensionState> = emptyMap(),
     val lastWeaponId: String = Weapon.SHORT_GUN.id,
-    /** Shop-only future items; intentionally excluded from [ownedWeapons]. */
-    val futureWeaponIds: Set<String> = emptySet()
+    /**
+     * Stacked missile powers. Like a defence, every missile launch consumes
+     * exactly one, after which another must be bought for the next launch.
+     */
+    val missilePowers: Int = 0
 ) {
     fun ownsWeapon(weapon: Weapon): Boolean =
         weapon.ownedByDefault || weaponIds.contains(weapon.id)
 
-    fun ownsFutureWeapon(weapon: FutureWeapon): Boolean = futureWeaponIds.contains(weapon.id)
-
-    /** Only real battle weapons are returned; the future Missile is excluded. */
+    /** All owned battle weapons in switch order, including the missile. */
     fun ownedWeapons(): List<Weapon> = Weapon.entries.filter { ownsWeapon(it) }
+
+    val hasMissilePower: Boolean
+        get() = missilePowers > 0
+
+    fun withMissilePowers(value: Int): Inventory =
+        copy(missilePowers = value.coerceAtLeast(0))
 
     fun count(item: DefenceItem): Int = when (item) {
         DefenceItem.MEDKIT -> medikits
@@ -297,7 +318,21 @@ data class ShopResult(
  * extensions all use exactly the same prices.
  */
 object Shop {
-    fun buyWeapon(inventory: Inventory, coins: Int, weapon: Weapon): ShopResult {
+    /**
+     * Buys a weapon. [completedRounds] is the profile's lifetime completed
+     * round count; only the missile checks it (it unlocks after round two).
+     * The app always passes the real value; the permissive default only keeps
+     * pure price tests of the unrestricted weapons free of progression setup.
+     */
+    fun buyWeapon(
+        inventory: Inventory,
+        coins: Int,
+        weapon: Weapon,
+        completedRounds: Int = Int.MAX_VALUE
+    ): ShopResult {
+        if (completedRounds < weapon.requiredCompletedRounds) {
+            return ShopResult(false, coins, inventory, "missileLocked")
+        }
         if (inventory.ownsWeapon(weapon)) {
             return ShopResult(false, coins, inventory, "alreadyOwned")
         }
@@ -311,28 +346,31 @@ object Shop {
         )
     }
 
-    /** Buys a shop-only future weapon without adding any combat behaviour. */
-    fun buyFutureWeapon(
+    /**
+     * Buys exactly one missile power. Powers stack like defences: the player
+     * may buy several in a row and every missile launch consumes only one.
+     */
+    fun buyMissilePower(
         inventory: Inventory,
         coins: Int,
-        weapon: FutureWeapon,
         completedRounds: Int
     ): ShopResult {
-        if (completedRounds < weapon.requiredCompletedRounds) {
+        if (completedRounds < Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS) {
             return ShopResult(false, coins, inventory, "missileLocked")
         }
-        if (inventory.ownsFutureWeapon(weapon)) {
-            return ShopResult(false, coins, inventory, "alreadyOwned")
-        }
-        if (coins < weapon.price) {
+        if (coins < MissileRules.MISSILE_POWER_PRICE) {
             return ShopResult(false, coins, inventory, "notEnoughCoins")
         }
         return ShopResult(
             success = true,
-            coins = coins - weapon.price,
-            inventory = inventory.copy(futureWeaponIds = inventory.futureWeaponIds + weapon.id)
+            coins = coins - MissileRules.MISSILE_POWER_PRICE,
+            inventory = inventory.withMissilePowers(inventory.missilePowers + 1)
         )
     }
+
+    /** Removes exactly one missile power (a launch, or a shop removal). */
+    fun consumeMissilePower(inventory: Inventory): Inventory =
+        inventory.withMissilePowers(inventory.missilePowers - 1)
 
     fun removeWeapon(inventory: Inventory, coins: Int, weapon: Weapon): ShopResult {
         if (weapon.ownedByDefault || !inventory.ownsWeapon(weapon)) {
@@ -367,14 +405,8 @@ object Shop {
     fun buyExtension(
         inventory: Inventory,
         coins: Int,
-        extension: Extension,
-        completedRounds: Int = 0
+        extension: Extension
     ): ShopResult {
-        if (extension == Extension.MISSILE_POWERS &&
-            completedRounds < Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS
-        ) {
-            return ShopResult(false, coins, inventory, "missileLocked")
-        }
         if (inventory.extensionOwned(extension)) {
             return ShopResult(false, coins, inventory, "alreadyOwned")
         }

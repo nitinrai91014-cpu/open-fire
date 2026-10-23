@@ -3,8 +3,8 @@ package com.blindtechnexus.openfire
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.ExtensionState
-import com.blindtechnexus.openfire.model.FutureWeapon
 import com.blindtechnexus.openfire.model.Inventory
+import com.blindtechnexus.openfire.model.MissileRules
 import com.blindtechnexus.openfire.model.Shop
 import com.blindtechnexus.openfire.model.Weapon
 import org.junit.Assert.assertEquals
@@ -25,6 +25,9 @@ class ShopTest {
         assertFalse(inventory.ownsWeapon(Weapon.SNIPER))
         assertFalse(inventory.ownsWeapon(Weapon.KNIFE))
         assertFalse(inventory.ownsWeapon(Weapon.SWORD))
+        assertFalse(inventory.ownsWeapon(Weapon.MISSILE))
+        assertEquals(0, inventory.missilePowers)
+        assertFalse(inventory.hasMissilePower)
         assertEquals(2, inventory.ownedWeapons().size)
     }
 
@@ -151,40 +154,75 @@ class ShopTest {
     }
 
     @Test
-    fun missileAndMissilePowersHaveTheRequestedPrices() {
-        assertEquals(1500, FutureWeapon.MISSILE.price)
-        assertEquals(500, Extension.MISSILE_POWERS.price)
-        assertEquals(2, FutureWeapon.MISSILE.requiredCompletedRounds)
+    fun missileAndMissilePowerHaveTheRequestedPrices() {
+        assertEquals(2000, Weapon.MISSILE.price)
+        assertEquals(2000, MissileRules.MISSILE_PRICE)
+        assertEquals(600, MissileRules.MISSILE_POWER_PRICE)
+        assertEquals(2, Weapon.MISSILE.requiredCompletedRounds)
+        assertTrue(Weapon.MISSILE.missileLauncher)
+        assertEquals(0, Weapon.MISSILE.magazine)
+        assertFalse(Weapon.MISSILE.needsReload)
+        // Switching to the missile uses the shared gun-switch sound.
+        assertEquals("gunReload", Weapon.MISSILE.switchSoundKey)
+        // Missile power is a consumable, never a permanent extension.
+        assertFalse(Extension.entries.any { it.id == "missilePowers" })
     }
 
     @Test
     fun missileIsLockedUntilRoundTwoIsCompleted() {
-        val locked = Shop.buyFutureWeapon(Inventory(), 2000, FutureWeapon.MISSILE, 1)
+        val locked = Shop.buyWeapon(Inventory(), 5000, Weapon.MISSILE, completedRounds = 1)
         assertFalse(locked.success)
         assertEquals("missileLocked", locked.reasonKey)
-        assertEquals(2000, locked.coins)
-        assertFalse(locked.inventory.ownsFutureWeapon(FutureWeapon.MISSILE))
+        assertEquals(5000, locked.coins)
+        assertFalse(locked.inventory.ownsWeapon(Weapon.MISSILE))
 
-        val unlocked = Shop.buyFutureWeapon(Inventory(), 2000, FutureWeapon.MISSILE, 2)
+        val unlocked = Shop.buyWeapon(Inventory(), 5000, Weapon.MISSILE, completedRounds = 2)
         assertTrue(unlocked.success)
-        assertEquals(500, unlocked.coins)
-        assertTrue(unlocked.inventory.ownsFutureWeapon(FutureWeapon.MISSILE))
-        // Future shop ownership must never add the Missile to real combat.
-        assertEquals(2, unlocked.inventory.ownedWeapons().size)
-        assertFalse(unlocked.inventory.ownedWeapons().any { it.id == FutureWeapon.MISSILE.id })
+        assertEquals(3000, unlocked.coins)
+        assertTrue(unlocked.inventory.ownsWeapon(Weapon.MISSILE))
+        // The missile is a real battle weapon in the switch inventory.
+        assertEquals(3, unlocked.inventory.ownedWeapons().size)
+        assertTrue(unlocked.inventory.ownedWeapons().contains(Weapon.MISSILE))
+
+        val again = Shop.buyWeapon(unlocked.inventory, 5000, Weapon.MISSILE, completedRounds = 2)
+        assertFalse(again.success)
+        assertEquals("alreadyOwned", again.reasonKey)
     }
 
     @Test
-    fun missilePowersAlsoAnnouncesTheRoundTwoLock() {
-        val locked = Shop.buyExtension(Inventory(), 1000, Extension.MISSILE_POWERS, 1)
+    fun missilePowersStackLikeDefencesAndAreConsumedOnePerLaunch() {
+        val locked = Shop.buyMissilePower(Inventory(), 5000, completedRounds = 1)
         assertFalse(locked.success)
         assertEquals("missileLocked", locked.reasonKey)
-        assertEquals(1000, locked.coins)
+        assertEquals(5000, locked.coins)
+        assertEquals(0, locked.inventory.missilePowers)
 
-        val unlocked = Shop.buyExtension(Inventory(), 1000, Extension.MISSILE_POWERS, 2)
-        assertTrue(unlocked.success)
-        assertEquals(500, unlocked.coins)
-        assertTrue(unlocked.inventory.extensionEnabled(Extension.MISSILE_POWERS))
+        var inventory = Inventory()
+        var coins = 5000
+        repeat(3) {
+            val bought = Shop.buyMissilePower(inventory, coins, completedRounds = 2)
+            assertTrue(bought.success)
+            inventory = bought.inventory
+            coins = bought.coins
+        }
+        assertEquals(3, inventory.missilePowers)
+        assertTrue(inventory.hasMissilePower)
+        assertEquals(3200, coins)
+
+        // Exactly one power is consumed per use; the rest stay stacked.
+        inventory = Shop.consumeMissilePower(inventory)
+        assertEquals(2, inventory.missilePowers)
+        inventory = Shop.consumeMissilePower(inventory)
+        inventory = Shop.consumeMissilePower(inventory)
+        assertEquals(0, inventory.missilePowers)
+        assertFalse(inventory.hasMissilePower)
+        // The count can never go negative.
+        assertEquals(0, Shop.consumeMissilePower(inventory).missilePowers)
+
+        val broke = Shop.buyMissilePower(Inventory(), 599, completedRounds = 2)
+        assertFalse(broke.success)
+        assertEquals("notEnoughCoins", broke.reasonKey)
+        assertEquals(599, broke.coins)
     }
 
     @Test

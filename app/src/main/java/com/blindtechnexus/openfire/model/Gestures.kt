@@ -84,3 +84,43 @@ object GestureRouter {
     fun tap(screen: Screen): GameAction =
         if (screen == Screen.BATTLE) GameAction.ACTIVATE_MENU else GameAction.NONE
 }
+
+/**
+ * Pressure-sensitive running.
+ *
+ * Holding the top or bottom third of the battle screen runs; the hold is
+ * recognised after [LONG_PRESS_TIMEOUT_MS] (much sooner than the platform
+ * long-press default) and the reported touch pressure drives the speed:
+ * the stronger the press, the faster the run. Devices that report no
+ * usable pressure (a constant or non-positive value from the first sample)
+ * fall back to a firm default speed, so running always works.
+ */
+object RunPressure {
+    /** How quickly a held touch becomes a run. */
+    const val LONG_PRESS_TIMEOUT_MS = 200L
+
+    /** Speed multiplier for the lightest / strongest recognised press. */
+    const val MIN_SPEED_FACTOR = 0.45f
+    const val MAX_SPEED_FACTOR = 2.2f
+
+    /** Speed used while no pressure is known (pre-press / unknown sensor). */
+    const val DEFAULT_SPEED_FACTOR = 1.0f
+
+    /** Pressures below this are treated as the lightest touch. */
+    const val LIGHT_PRESSURE = 0.15f
+
+    /** Pressures at (or above) this are treated as a full-force press. */
+    const val FULL_PRESSURE = 1.0f
+
+    /**
+     * Maps a raw touch pressure (0..1 on most devices, sometimes larger)
+     * to a running speed multiplier. The mapping is deliberately strong:
+     * pressing notably harder almost doubles the running speed.
+     */
+    fun speedFactor(pressure: Float): Float {
+        if (pressure.isNaN() || pressure <= 0f) return DEFAULT_SPEED_FACTOR
+        val normalized = ((pressure - LIGHT_PRESSURE) / (FULL_PRESSURE - LIGHT_PRESSURE))
+            .coerceIn(0f, 1f)
+        return MIN_SPEED_FACTOR + normalized * (MAX_SPEED_FACTOR - MIN_SPEED_FACTOR)
+    }
+}

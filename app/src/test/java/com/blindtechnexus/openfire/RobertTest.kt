@@ -26,36 +26,188 @@ class RobertTest {
     }
 
     @Test
-    fun roundOneLoadoutHasAssaultShotgunAndConditionallyLockedSniper() {
-        val profile = RobertRules.profile(1, 1)
-        assertEquals(1, profile.medikits)
-        assertEquals(0, profile.glueWalls)
-        assertEquals(1, profile.covers)
-        assertEquals(listOf(Weapon.ASSAULT_GUN, Weapon.SHORT_GUN, Weapon.SNIPER), profile.weapons)
-        assertTrue(profile.sniperLocked)
-        assertEquals(2, profile.fleeAfterHits)
+    fun roundOneLevelsOneAndTwoHaveOneCoverAndOneGlueWall() {
+        for (level in listOf(1, 2)) {
+            val profile = RobertRules.profile(1, level)
+            assertEquals("level $level medikits", 0, profile.medikits)
+            assertEquals("level $level glueWalls", 1, profile.glueWalls)
+            assertEquals("level $level covers", 1, profile.covers)
+            assertEquals(
+                listOf(Weapon.ASSAULT_GUN, Weapon.SHORT_GUN, Weapon.SNIPER),
+                profile.weapons
+            )
+            assertTrue(profile.sniperLocked)
+            assertEquals(2, profile.fleeAfterHits)
+            assertEquals(0, profile.missilePowers)
+            assertEquals(0, profile.antiMissiles)
+        }
     }
 
     @Test
-    fun laterRoundLoadoutsRemainIntact() {
-        val roundTwo = RobertRules.profile(2, 1)
-        assertEquals(2, roundTwo.medikits)
-        assertEquals(1, roundTwo.glueWalls)
-        assertTrue(roundTwo.sniperLocked)
+    fun roundOneLevelsThreeToFiveHaveTwoMedkitsAndOneCover() {
+        for (level in listOf(3, 4, 5)) {
+            val profile = RobertRules.profile(1, level)
+            assertEquals("level $level medikits", 2, profile.medikits)
+            assertEquals("level $level glueWalls", 0, profile.glueWalls)
+            assertEquals("level $level covers", 1, profile.covers)
+            assertEquals(
+                listOf(Weapon.ASSAULT_GUN, Weapon.SHORT_GUN, Weapon.SNIPER),
+                profile.weapons
+            )
+            assertTrue(profile.sniperLocked)
+        }
+    }
 
+    @Test
+    fun roundTwoAddsKnifeAndSwordWithTheNewDefences() {
+        val roundTwo = RobertRules.profile(2, 1)
+        assertEquals(3, roundTwo.medikits)
+        assertEquals(1, roundTwo.glueWalls)
+        assertEquals(2, roundTwo.covers)
+        assertTrue(roundTwo.weapons.contains(Weapon.KNIFE))
+        assertTrue(roundTwo.weapons.contains(Weapon.SWORD))
+        assertFalse(roundTwo.weapons.contains(Weapon.PISTOL))
+        assertFalse(roundTwo.weapons.contains(Weapon.MISSILE))
+        assertTrue(roundTwo.sniperLocked)
+        assertEquals(0, roundTwo.missilePowers)
+        assertEquals(0, roundTwo.antiMissiles)
+        // The loadout is the same throughout the round.
+        assertEquals(roundTwo.weapons, RobertRules.profile(2, 5).weapons)
+        assertEquals(3, RobertRules.profile(2, 5).medikits)
+    }
+
+    @Test
+    fun roundThreeAddsThePistolThroughoutTheRound() {
         val roundThree = RobertRules.profile(3, 1)
-        assertEquals(4, roundThree.medikits)
+        assertEquals(3, roundThree.medikits)
+        assertEquals(2, roundThree.glueWalls)
+        assertEquals(4, roundThree.covers)
+        assertTrue(roundThree.weapons.contains(Weapon.PISTOL))
         assertTrue(roundThree.weapons.contains(Weapon.KNIFE))
+        assertEquals(RobertRules.ALL_STANDARD_WEAPONS.toSet(), roundThree.weapons.toSet())
         assertFalse(roundThree.sniperLocked)
         assertEquals(3, roundThree.fleeAfterHits)
+        assertEquals(0, roundThree.missilePowers)
+        assertEquals(4, RobertRules.profile(3, 5).covers)
+    }
 
+    @Test
+    fun roundFourHasEveryWeaponOneMissileAndOneInterceptor() {
         val roundFour = RobertRules.profile(4, 1)
-        assertTrue(roundFour.weapons.contains(Weapon.SWORD))
+        assertEquals(5, roundFour.medikits)
+        assertEquals(3, roundFour.glueWalls)
+        assertEquals(5, roundFour.covers)
+        assertEquals(RobertRules.ALL_STANDARD_WEAPONS.toSet(), roundFour.weapons.toSet())
+        // The missile is a once-per-game special, not a random rotation weapon.
+        assertFalse(roundFour.weapons.contains(Weapon.MISSILE))
+        assertEquals(1, roundFour.missilePowers)
+        assertEquals(1, roundFour.antiMissiles)
         assertEquals(4, roundFour.fleeAfterHits)
+    }
 
+    @Test
+    fun roundFiveIsStrongerWithTwoInterceptors() {
         val roundFive = RobertRules.profile(5, 1)
-        assertEquals(Weapon.entries.toSet(), roundFive.weapons.toSet())
+        assertEquals(5, roundFive.medikits)
+        assertEquals(4, roundFive.glueWalls)
+        assertEquals(7, roundFive.covers)
+        assertEquals(RobertRules.ALL_STANDARD_WEAPONS.toSet(), roundFive.weapons.toSet())
+        assertFalse(roundFive.weapons.contains(Weapon.MISSILE))
+        assertEquals(1, roundFive.missilePowers)
+        assertEquals(2, roundFive.antiMissiles)
         assertEquals(5, roundFive.fleeAfterHits)
+    }
+
+    @Test
+    fun situationalRangePushesAnAdvantagedRobertClose() {
+        fun range(robertHp: Int, playerHp: Int) = RobertRules.situationalRange(
+            stored = FireRange.MID,
+            playerWeaponDamaged = false,
+            playerGlueWallActive = false,
+            robertHp = robertHp,
+            robertMaxHp = 1000,
+            playerHp = playerHp,
+            playerMaxHp = 1000,
+            deceptionShotsLeft = 0
+        )
+        // Big advantage: the 90%-100% band. Moderate: the 70%-90% band.
+        val bigProx = Combat.proximityOf(range(900, 400).targetDistance)
+        assertTrue(bigProx >= 90f && bigProx <= 100f)
+        val moderateProx = Combat.proximityOf(range(800, 650).targetDistance)
+        assertTrue(moderateProx >= 70f && moderateProx <= 90f)
+        // Even fight keeps the stored band; losing pulls back to 40%-70%.
+        assertEquals(FireRange.MID, range(600, 600))
+        val losingProx = Combat.proximityOf(range(300, 800).targetDistance)
+        assertTrue(losingProx >= 40f && losingProx <= 70f)
+        // Forced point blank always wins, deception always finishes.
+        assertEquals(
+            FireRange.CLOSE,
+            RobertRules.situationalRange(FireRange.FAR, true, false, 100, 1000, 900, 1000, 2)
+        )
+        assertEquals(
+            FireRange.FAR,
+            RobertRules.situationalRange(FireRange.FAR, false, false, 900, 1000, 100, 1000, 1)
+        )
+    }
+
+    @Test
+    fun situationalFireIntervalsAreNeverAFixedClock() {
+        val random = Random(7)
+        fun samples(situation: RobertRules.CombatSituation, fleeing: Boolean) =
+            (1..60).map { RobertRules.fireIntervalMs(situation, fleeing, random) }
+
+        val advantage = samples(RobertRules.CombatSituation.ADVANTAGE, false)
+        assertTrue(advantage.all { it in 750L..1_150L })
+        assertTrue("advantage fire must vary", advantage.distinct().size > 10)
+
+        val pressure = samples(RobertRules.CombatSituation.PRESSURE, false)
+        assertTrue(pressure.all { it in 620L..1_000L })
+
+        val even = samples(RobertRules.CombatSituation.EVEN, false)
+        assertTrue(even.all { it in 1_400L..2_200L })
+        assertTrue("even fire must vary", even.distinct().size > 10)
+
+        val disadvantage = samples(RobertRules.CombatSituation.DISADVANTAGE, false)
+        assertTrue(disadvantage.all { it in 2_000L..3_000L })
+
+        // Advantage always fires faster than even, even faster than losing.
+        assertTrue(advantage.max() < even.min())
+        assertTrue(even.max() <= disadvantage.max())
+        // While fleeing he barely fires at all.
+        assertTrue(samples(RobertRules.CombatSituation.ADVANTAGE, true).all { it >= 2_200L })
+    }
+
+    @Test
+    fun aOneSidedExchangeMakesHimRunAway() {
+        // Two or three sustained hits against one or two answering shots.
+        assertTrue(RobertRules.shouldFleeFromExchange(2, 1, 55f))
+        assertTrue(RobertRules.shouldFleeFromExchange(3, 2, 95f))
+        assertTrue(RobertRules.shouldFleeFromExchange(2, 0, 40f))
+        // Not after a single hit, not when he is answering properly, and
+        // never for hits that could not hurt him (the 0%-40% miss band).
+        assertFalse(RobertRules.shouldFleeFromExchange(1, 1, 95f))
+        assertFalse(RobertRules.shouldFleeFromExchange(2, 3, 95f))
+        assertFalse(RobertRules.shouldFleeFromExchange(3, 1, 20f))
+    }
+
+    @Test
+    fun situationAssessmentFollowsTheHealthGap() {
+        assertEquals(
+            RobertRules.CombatSituation.PRESSURE,
+            RobertRules.assessSituation(100, 1000, 900, 1000, playerWeaponDamaged = true)
+        )
+        assertEquals(
+            RobertRules.CombatSituation.ADVANTAGE,
+            RobertRules.assessSituation(900, 1000, 500, 1000, playerWeaponDamaged = false)
+        )
+        assertEquals(
+            RobertRules.CombatSituation.EVEN,
+            RobertRules.assessSituation(600, 1000, 550, 1000, playerWeaponDamaged = false)
+        )
+        assertEquals(
+            RobertRules.CombatSituation.DISADVANTAGE,
+            RobertRules.assessSituation(300, 1000, 800, 1000, playerWeaponDamaged = false)
+        )
     }
 
     @Test

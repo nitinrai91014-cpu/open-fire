@@ -134,6 +134,7 @@ class CombatTest {
         }
         assertEquals(80f, FireRange.FAR.targetDistance, 0.001f)
         assertEquals(45f, FireRange.MID.targetDistance, 0.001f)
+        assertEquals(20f, FireRange.STRONG.targetDistance, 0.001f)
         assertEquals(5f, FireRange.CLOSE.targetDistance, 0.001f)
     }
 
