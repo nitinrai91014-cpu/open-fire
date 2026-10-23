@@ -263,7 +263,7 @@ class ShopTest {
     @Test
     fun theRememberedWeaponIsOnlyUsedWhenItIsStillOwned() {
         assertNull(Inventory(lastWeaponId = Weapon.SWORD.id).rememberedWeapon())
-        val owned = Shop.buyWeapon(Inventory(), 500, Weapon.SWORD).inventory
+        val owned = Shop.buyWeapon(Inventory(), 1000, Weapon.SWORD).inventory
             .copy(lastWeaponId = Weapon.SWORD.id)
         assertEquals(Weapon.SWORD, owned.rememberedWeapon())
         assertEquals(Weapon.SWORD, owned.startingWeapon())
