@@ -159,9 +159,10 @@ class CombatTest {
     fun coverAndRecoveryRulesAreStable() {
         assertEquals(11, Combat.COVER_MAX_HITS)
         assertEquals(100, Combat.GUN_RECOVERY_COST)
-        assertEquals(200, DefenceItem.MEDKIT.price)
-        assertEquals(400, DefenceItem.GLUE_WALL.price)
-        assertEquals(350, DefenceItem.COVER.price)
+        assertEquals(500, DefenceItem.MEDKIT.price)
+        assertEquals(850, DefenceItem.GLUE_WALL.price)
+        assertEquals(650, DefenceItem.COVER.price)
+        assertEquals(3000, DefenceItem.ANTI_MISSILE.price)
     }
 
     @Test

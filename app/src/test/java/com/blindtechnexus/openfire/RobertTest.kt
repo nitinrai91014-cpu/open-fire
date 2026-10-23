@@ -26,11 +26,11 @@ class RobertTest {
     }
 
     @Test
-    fun roundOneLevelsOneAndTwoHaveOneCoverAndOneGlueWall() {
+    fun roundOneLevelsOneAndTwoHaveTwoMedkitsAndOneCover() {
         for (level in listOf(1, 2)) {
             val profile = RobertRules.profile(1, level)
-            assertEquals("level $level medikits", 0, profile.medikits)
-            assertEquals("level $level glueWalls", 1, profile.glueWalls)
+            assertEquals("level $level medikits", 2, profile.medikits)
+            assertEquals("level $level glueWalls", 0, profile.glueWalls)
             assertEquals("level $level covers", 1, profile.covers)
             assertEquals(
                 listOf(Weapon.ASSAULT_GUN, Weapon.SHORT_GUN, Weapon.SNIPER),
@@ -44,12 +44,12 @@ class RobertTest {
     }
 
     @Test
-    fun roundOneLevelsThreeToFiveHaveTwoMedkitsAndOneCover() {
+    fun roundOneLevelsThreeToFiveHaveTwoMedkitsAndTwoCovers() {
         for (level in listOf(3, 4, 5)) {
             val profile = RobertRules.profile(1, level)
             assertEquals("level $level medikits", 2, profile.medikits)
             assertEquals("level $level glueWalls", 0, profile.glueWalls)
-            assertEquals("level $level covers", 1, profile.covers)
+            assertEquals("level $level covers", 2, profile.covers)
             assertEquals(
                 listOf(Weapon.ASSAULT_GUN, Weapon.SHORT_GUN, Weapon.SNIPER),
                 profile.weapons
@@ -178,11 +178,16 @@ class RobertTest {
     }
 
     @Test
-    fun aOneSidedExchangeMakesHimRunAway() {
-        // Two or three sustained hits against one or two answering shots.
+    fun aOneSidedExchangeMakesHimRunAwayWhenDisadvantaged() {
+        // Two or three sustained hits against one or two answering shots while disadvantaged.
+        assertTrue(RobertRules.shouldFleeFromExchange(2, 1, 55f, atDisadvantage = true))
+        assertTrue(RobertRules.shouldFleeFromExchange(3, 2, 95f, atDisadvantage = true))
+        assertTrue(RobertRules.shouldFleeFromExchange(2, 0, 40f, atDisadvantage = true))
+        // Default parameter remains true.
         assertTrue(RobertRules.shouldFleeFromExchange(2, 1, 55f))
-        assertTrue(RobertRules.shouldFleeFromExchange(3, 2, 95f))
-        assertTrue(RobertRules.shouldFleeFromExchange(2, 0, 40f))
+        // Never flees from exchange when holding the advantage.
+        assertFalse(RobertRules.shouldFleeFromExchange(2, 1, 55f, atDisadvantage = false))
+        assertFalse(RobertRules.shouldFleeFromExchange(3, 2, 95f, atDisadvantage = false))
         // Not after a single hit, not when he is answering properly, and
         // never for hits that could not hurt him (the 0%-40% miss band).
         assertFalse(RobertRules.shouldFleeFromExchange(1, 1, 95f))

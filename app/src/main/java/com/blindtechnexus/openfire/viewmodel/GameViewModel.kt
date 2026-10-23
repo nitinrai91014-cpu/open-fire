@@ -257,6 +257,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         ttsManager.refreshVoices()
     }
 
+    fun setKeepScreenOn(enabled: Boolean) {
+        updateSettings(_settings.value.copy(keepScreenOn = enabled))
+    }
+
     // ---------------------------------------------------------------------
     // Navigation and screen audio
     // ---------------------------------------------------------------------
@@ -403,8 +407,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (!result.success) {
             when (result.reasonKey) {
                 "notEnoughCoins" -> notEnoughCoins()
-                "missileLocked" -> {
-                    val text = t("missileLocked")
+                "missileLocked", "antiMissileLocked" -> {
+                    playSound("ammo")
+                    val text = t(result.reasonKey)
                     toast(text)
                     msg(text)
                 }
@@ -474,7 +479,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun buyDefence(itemId: String) {
         val item = DefenceItem.fromId(itemId) ?: return
         applyPurchase(
-            Shop.buyDefence(_inventory.value, _stats.value.coins, item),
+            Shop.buyDefence(
+                _inventory.value,
+                _stats.value.coins,
+                item,
+                _stats.value.completedRounds
+            ),
             item.nameKey,
             "bought"
         )
@@ -540,7 +550,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             .ifEmpty { t("noneOwned") }
         return "${t("profileWeapons")}: $weapons. ${t("profileDefences")}: " +
             "${inv.medikits} ${t("medkitsPlural")}, ${inv.glueWalls} ${t("glueWallsPlural")}, " +
-            "${inv.covers} ${t("coversPlural")}. ${t("extMissilePowers")} ${inv.missilePowers}. " +
+            "${inv.covers} ${t("coversPlural")}, ${inv.antiMissiles} ${t("antiMissilesPlural")}. " +
+            "${t("extMissilePowers")} ${inv.missilePowers}. " +
             "${t("profileExtensions")}: $extensions."
     }
 
@@ -757,6 +768,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         stepJob = viewModelScope.launch {
             delay(delayMs)
             robertStep()
+        }
+    }
+
+    /**
+     * Wakes Robert's movement loop whenever his situational target band shifts
+     * (for example after gaining an advantage or when a glue wall or damaged
+     * weapon forces him into close range).
+     */
+    private fun ensureRobertPositioned(delayMs: Long = 180L) {
+        val state = _gameState.value
+        if (state.playerHp <= 0 || state.robertHp <= 0 || state.missileInFlight) return
+        if (stepJob?.isActive == true) return
+        if (abs(state.distance - robertTargetDistance(state)) > BAND_TOLERANCE_M) {
+            planRobertStep(delayMs)
         }
     }
 
@@ -1056,6 +1081,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _gameState.update { it.copy(robertDeceptionShots = shotsLeft) }
             if (shotsLeft <= 0) {
                 rollRobertFireRange(allowDeception = false)
+                ensureRobertPositioned()
             }
         }
 
@@ -1166,6 +1192,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 playSound("medkit")
                 text += " ${t("playerSecondChance")} ${t("yourHealth")} $revivedHp."
+                ensureRobertPositioned()
                 msg(text)
             } else {
                 msg(text)
@@ -1175,6 +1202,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         text += applyAutomaticDefences()
+        ensureRobertPositioned()
         msg(text)
     }
 
@@ -1237,16 +1265,26 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val consecutive = state.robertConsecutiveHits
 
         // He runs as fast as possible either after the round's hit streak,
-        // or immediately when an exchange turns one-sided against him:
-        // two or three sustained hits while he managed only one or two
-        // answering shots inside combat range.
+        // or immediately when he is at a disadvantage and an exchange turns
+        // one-sided against him: two or three sustained hits while he managed
+        // only one or two answering shots inside combat range.
+        val situation = RobertRules.assessSituation(
+            robertHp = state.robertHp,
+            robertMaxHp = state.robertMaxHp,
+            playerHp = state.playerHp,
+            playerMaxHp = state.playerMaxHp,
+            playerWeaponDamaged = isPlayerWeaponLocked(state)
+        )
+        val disadvantaged = situation == RobertRules.CombatSituation.DISADVANTAGE ||
+            state.robertHp < state.playerHp
         val mustFlee = RobertRules.shouldFlee(consecutive, profile.fleeAfterHits) ||
             RobertRules.shouldFleeFromExchange(
                 hitsTakenInRow = consecutive,
                 shotsFiredInExchange = state.robertExchangeShots,
-                proximityPercent = Combat.proximityOf(state.distance)
+                proximityPercent = Combat.proximityOf(state.distance),
+                atDisadvantage = disadvantaged
             )
-        if (state.robertState == "advance" && mustFlee) {
+        if ((state.robertState == "advance" || state.robertState == "flank") && mustFlee) {
             _gameState.update {
                 it.copy(
                     robertState = "retreat",
@@ -1289,6 +1327,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 playSound("medkit", posZ = -current.distance)
+                ensureRobertPositioned()
                 " ${t("robertMedkit")} ${t("enemyHealth")} ${_gameState.value.robertHp}."
             }
             DefenceItem.COVER -> {
@@ -1313,6 +1352,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 playSound("glueSound", posZ = -current.distance)
                 " ${t("robertGlueWall")}"
             }
+            DefenceItem.ANTI_MISSILE -> ""
         }
     }
 
@@ -1419,13 +1459,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         missileImpactAtMs = 0L
         audioManager.stopSound("missile")
         audioManager.stopSound("enemyWalk")
-        playSound("explosion")
 
         if (state.missileFromPlayer) {
-            if (state.missileInterceptPlanned) {
+            val intercepted = state.missileInterceptPlanned ||
+                MissileRules.willIntercept(
+                    round = state.round,
+                    robertHp = state.robertHp,
+                    antiMissilesLeft = state.robertAntiMissiles,
+                    missileInFlight = state.missileInFlight
+                )
+            if (intercepted) {
+                playSound("explosion")
                 _gameState.update {
                     it.copy(
                         missileInFlight = false,
+                        missileFromPlayer = false,
                         missileInterceptPlanned = false,
                         robertAntiMissiles = (it.robertAntiMissiles - 1).coerceAtLeast(0),
                         robertState = "advance",
@@ -1437,11 +1485,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 planRobertStep(500L)
                 return
             }
-            playSound("enemyHit")
+            audioManager.playMixed(listOf("explosion", "enemyHit"))
             _gameState.update {
                 it.copy(
                     robertHp = 0,
                     missileInFlight = false,
+                    missileFromPlayer = false,
                     missileInterceptPlanned = false,
                     robertCoverActive = false,
                     robertGlueWallActive = false,
@@ -1451,11 +1500,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             msg(t("missileHitEnemy"))
             endGame(won = true)
         } else {
-            playSound("playerHit")
+            // Enemy missile hit: play player-hit.mp3 alongside explosion-sound.mp3.
+            audioManager.playMixed(listOf("explosion", "playerHit"))
             _gameState.update {
                 it.copy(
                     playerHp = 0,
                     missileInFlight = false,
+                    missileFromPlayer = false,
+                    missileInterceptPlanned = false,
                     coverActive = false,
                     glueWallActive = false,
                     robertHits = it.robertHits + 1
@@ -1827,7 +1879,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun speakBattleMenu() {
         val item = _gameState.value.menuItem
         when (item) {
-            BattleMenuItem.MEDKIT, BattleMenuItem.COVER, BattleMenuItem.GLUE_WALL -> {
+            BattleMenuItem.MEDKIT,
+            BattleMenuItem.COVER,
+            BattleMenuItem.GLUE_WALL,
+            BattleMenuItem.ANTI_MISSILE -> {
                 val defence = item.defence ?: return
                 val count = _inventory.value.count(defence)
                 speak("${t("menuNow")}: ${t(defence.nameKey)}. $count.")
@@ -1850,7 +1905,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val state = _gameState.value
         val item = state.menuItem
         when (item) {
-            BattleMenuItem.MEDKIT, BattleMenuItem.COVER, BattleMenuItem.GLUE_WALL -> {
+            BattleMenuItem.MEDKIT,
+            BattleMenuItem.COVER,
+            BattleMenuItem.GLUE_WALL,
+            BattleMenuItem.ANTI_MISSILE -> {
                 val defence = item.defence ?: return
                 useDefenceFromMenu(defence)
             }
@@ -1865,6 +1923,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun useDefenceFromMenu(defence: DefenceItem) {
         val inventory = _inventory.value
+        if (defence == DefenceItem.ANTI_MISSILE && !_gameState.value.missileInFlight) {
+            if (inventory.count(defence) <= 0 &&
+                _stats.value.completedRounds < defence.requiredCompletedRounds
+            ) {
+                playSound("ammo")
+                val text = t("antiMissileLocked")
+                toast(text)
+                msg(text)
+            } else {
+                playSound("click")
+                msg(t("noActiveMissile"))
+            }
+            resetMenuSelection()
+            return
+        }
+
         if (inventory.count(defence) > 0) {
             _gameState.update { it.copy(pendingPurchaseId = null) }
             val spoken = useDefence(defence)
@@ -1873,13 +1947,35 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        if (_stats.value.completedRounds < defence.requiredCompletedRounds) {
+            _gameState.update { it.copy(pendingPurchaseId = null) }
+            playSound("ammo")
+            val text = t("antiMissileLocked")
+            toast(text)
+            msg(text)
+            resetMenuSelection()
+            return
+        }
+
         val pending = _gameState.value.pendingPurchaseId
         if (pending == defence.id) {
             // Second tap: buy one at the shop price, then use it immediately.
-            val purchase = Shop.buyDefence(_inventory.value, _stats.value.coins, defence)
+            val purchase = Shop.buyDefence(
+                _inventory.value,
+                _stats.value.coins,
+                defence,
+                _stats.value.completedRounds
+            )
             if (!purchase.success) {
                 _gameState.update { it.copy(pendingPurchaseId = null) }
-                notEnoughCoins()
+                if (purchase.reasonKey == "antiMissileLocked") {
+                    playSound("ammo")
+                    val text = t("antiMissileLocked")
+                    toast(text)
+                    msg(text)
+                } else {
+                    notEnoughCoins()
+                }
                 return
             }
             _inventory.value = purchase.inventory
@@ -1946,7 +2042,32 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 _gameState.update { it.copy(glueWallActive = true, glueWallProgress = 0) }
                 consumeDefence(item)
                 playSound("glueSound")
+                ensureRobertPositioned()
                 return if (automatic) t("autoGlueWallUsed") else t("glooWallDeployed")
+            }
+            DefenceItem.ANTI_MISSILE -> {
+                if (!state.missileInFlight) {
+                    playSound("click")
+                    return t("noActiveMissile")
+                }
+                missileJob?.cancel()
+                missileJob = null
+                missileImpactAtMs = 0L
+                audioManager.stopSound("missile")
+                audioManager.stopSound("enemyWalk")
+                _gameState.update {
+                    it.copy(
+                        missileInFlight = false,
+                        missileFromPlayer = false,
+                        missileInterceptPlanned = false,
+                        robertState = if (it.robertState == "missileFlee") "advance" else it.robertState,
+                        robertLateral = 0f
+                    )
+                }
+                consumeDefence(item)
+                playSound("explosion")
+                planRobertStep(500L)
+                return t("antiMissileDestroyed")
             }
         }
     }
@@ -1990,7 +2111,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 "${t("yourHealth")} ${state.playerHp}. ${t("ammo")} ${state.activeAmmo}. " +
                     "$weaponState. $weapons. " +
                     "${t("medkits")} ${inv.medikits}. ${t("glooWall")} ${inv.glueWalls}. " +
-                    "${t("cover")} ${inv.covers}. " +
+                    "${t("cover")} ${inv.covers}. ${t("antiMissile")} ${inv.antiMissiles}. " +
                     "${if (state.coverActive) t("coverOn") else t("coverOff")}. " +
                     "${t("profileExtensions")} $extensions. ${t("coins")} ${_stats.value.coins}.$chance"
             )

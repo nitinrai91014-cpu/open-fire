@@ -7,8 +7,8 @@ import kotlin.random.Random
  * the current round (and, in round one, with the current level). His
  * maximum health also depends on the current level.
  *
- *  - Round 1, levels 1-2: 1 glue wall and 1 cover (no medkits).
- *    Round 1, levels 3-5: 2 medkits and 1 cover (no glue walls).
+ *  - Round 1, levels 1-2: 2 medkits and 1 cover (no glue walls).
+ *    Round 1, levels 3-5: 2 medkits and 2 covers (no glue walls).
  *    Weapons: assault rifle and shotgun; the sniper rifle is present but
  *    locked until the glue-wall / low-health condition is met.
  *  - Round 2 (all levels): 3 medkits, 1 glue wall and 2 covers. The knife
@@ -105,11 +105,11 @@ object RobertRules {
         }
         return when (safeRound) {
             1 -> if (safeLevel <= 2) {
-                // Levels 1 and 2: one glue wall and one cover, no medkits.
-                RobertProfile(1, maxHp, 0, 1, 1, weapons, true, fleeAfterHits(1))
-            } else {
-                // Levels 3, 4 and 5: two medkits and one cover, no glue walls.
+                // Levels 1 and 2: two medkits and one cover, no glue walls.
                 RobertProfile(1, maxHp, 2, 0, 1, weapons, true, fleeAfterHits(1))
+            } else {
+                // Levels 3, 4 and 5: two medkits and two covers, no glue walls.
+                RobertProfile(1, maxHp, 2, 0, 2, weapons, true, fleeAfterHits(1))
             }
             2 -> RobertProfile(2, maxHp, 3, 1, 2, weapons, true, fleeAfterHits(2))
             3 -> RobertProfile(3, maxHp, 3, 2, 4, weapons, false, fleeAfterHits(3))
@@ -221,16 +221,18 @@ object RobertRules {
 
     /**
      * True when a one-sided exchange must make Robert run as fast as
-     * possible: he has sustained two or three hits in a row but has only
-     * managed to answer with one or two shots, all inside combat range
-     * (proximity at least 40%, so the hits could really hurt him).
+     * possible: he is at a disadvantage, has sustained two or three hits in
+     * a row, and has only managed to answer with one or two shots while
+     * inside combat range (proximity at least 40%, so the hits hurt him).
      */
     fun shouldFleeFromExchange(
         hitsTakenInRow: Int,
         shotsFiredInExchange: Int,
-        proximityPercent: Float
+        proximityPercent: Float,
+        atDisadvantage: Boolean = true
     ): Boolean =
-        hitsTakenInRow >= 2 &&
+        atDisadvantage &&
+            hitsTakenInRow >= 2 &&
             shotsFiredInExchange <= 2 &&
             Combat.zoneFor(proximityPercent) != HitZone.MISS
 

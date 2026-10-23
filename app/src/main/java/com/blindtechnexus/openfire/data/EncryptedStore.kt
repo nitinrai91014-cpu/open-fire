@@ -21,12 +21,16 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * Encrypted, tamper-evident storage for the whole game profile.
  *
- * Data lives in the public app folder `/.openfire/data/` on shared (external)
+ * Data lives in the protected app folder `/.open_fire/data/` on external
  * storage and is always written through AES-256 in GCM mode, so:
  *
  *  - every value is confidential: the saved file is unreadable text garbage;
  *  - every value is authenticated: a single changed byte makes the GCM tag
  *    fail, so a player cannot edit coins, wins, weapons or progress by hand.
+ *
+ * On startup, if the previous `/.openfire/data/` folder exists, all encrypted
+ * profile files are automatically moved into `/.open_fire/data/` and the old
+ * folder is removed.
  *
  * Two key sources are supported, in order of preference:
  *  1. a non-exportable AES-256 key held by the Android Keystore (hardware
@@ -45,13 +49,17 @@ import javax.crypto.spec.SecretKeySpec
  */
 class EncryptedStore(
     context: Context,
-    private val relativeDir: String = DEFAULT_DIR
+    private val relativeDir: String = DEFAULT_DIR,
+    private val legacyRelativeDir: String? = if (relativeDir == DEFAULT_DIR) LEGACY_DIR else null
 ) {
     companion object {
         private const val TAG = "OpenFireStore"
 
-        /** Folder (inside the app's external files) that holds the data. */
-        const val DEFAULT_DIR = ".openfire/data"
+        /** Protected folder (inside the app's external files) that holds the data. */
+        const val DEFAULT_DIR = ".open_fire/data"
+
+        /** Previous folder name, automatically migrated into [DEFAULT_DIR] if present. */
+        const val LEGACY_DIR = ".openfire/data"
 
         private const val MAGIC_ENCRYPTED = "OF2"
         private const val MAGIC_FALLBACK = "OF1"
@@ -80,6 +88,10 @@ class EncryptedStore(
     private val directory: File = resolveDirectory()
     private val memory = mutableMapOf<String, Map<String, String>>()
     private val random = SecureRandom()
+
+    init {
+        migrateLegacyDirectoryIfNeeded()
+    }
 
     // ------------------------------------------------------------------
     // Public API
@@ -158,14 +170,66 @@ class EncryptedStore(
 
     private fun fileFor(name: String): File = File(directory, "$name.dat")
 
-    private fun resolveDirectory(): File {
-        val base = try {
+    private fun resolveBaseDirectory(): File {
+        return try {
             appContext.getExternalFilesDir(null)
         } catch (t: Throwable) {
             Log.w(TAG, "External storage unavailable, using internal storage", t)
             null
         } ?: appContext.filesDir
-        return File(base, relativeDir)
+    }
+
+    private fun resolveDirectory(): File = File(resolveBaseDirectory(), relativeDir)
+
+    /**
+     * Moves any encrypted profile files from the previous data directory
+     * (e.g. `.openfire/data`) into the new destination (`.open_fire/data`),
+     * then cleans up the old directory so only the new protected path is used.
+     */
+    private fun migrateLegacyDirectoryIfNeeded() {
+        val legacyRel = legacyRelativeDir?.takeIf { it.isNotBlank() && it != relativeDir } ?: return
+        val candidateBases = linkedSetOf<File>()
+        try {
+            appContext.getExternalFilesDir(null)?.let { candidateBases.add(it) }
+        } catch (_: Throwable) {
+        }
+        candidateBases.add(appContext.filesDir)
+
+        for (base in candidateBases) {
+            val legacyDir = File(base, legacyRel)
+            if (!legacyDir.exists() || !legacyDir.isDirectory) continue
+            if (legacyDir.absolutePath == directory.absolutePath) continue
+            try {
+                if (!directory.exists()) directory.mkdirs()
+                val children = legacyDir.listFiles().orEmpty()
+                for (child in children) {
+                    if (!child.isFile) continue
+                    if (child.name.endsWith(".dat")) {
+                        val destination = File(directory, child.name)
+                        if (!destination.exists()) {
+                            if (!child.renameTo(destination)) {
+                                child.copyTo(destination, overwrite = false)
+                                child.delete()
+                            }
+                        } else {
+                            child.delete()
+                        }
+                    } else if (child.name.endsWith(".tmp")) {
+                        child.delete()
+                    }
+                }
+                legacyDir.delete()
+                val parent = legacyDir.parentFile
+                if (parent != null &&
+                    parent.absolutePath != base.absolutePath &&
+                    parent.list()?.isEmpty() == true
+                ) {
+                    parent.delete()
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Unable to migrate legacy data directory ${legacyDir.path}", t)
+            }
+        }
     }
 
     private fun encodeValues(values: Map<String, String>): String =

@@ -24,8 +24,9 @@ enum class SoundTheme(val title: String) {
 }
 
 /**
- * The five items of the in-game quick menu, in the order they are cycled by a
- * two-finger swipe up or down: medikit, cover, glue wall, exit and recover.
+ * The six items of the in-game quick menu, in the order they are cycled by a
+ * two-finger swipe up or down: medikit, cover, glue wall, anti-missile system,
+ * exit and recover.
  *
  * The old "play" item was replaced by Recovery, which repairs every damaged
  * weapon for [Combat.GUN_RECOVERY_COST] coins.
@@ -37,6 +38,7 @@ enum class BattleMenuItem(
     MEDKIT("medkit", DefenceItem.MEDKIT),
     COVER("cover", DefenceItem.COVER),
     GLUE_WALL("glooWall", DefenceItem.GLUE_WALL),
+    ANTI_MISSILE("antiMissile", DefenceItem.ANTI_MISSILE),
     EXIT("exitGame", null),
     RECOVER("recoverWeapon", null);
 
@@ -65,7 +67,8 @@ data class GameSettings(
     val musicVolume: Float = 0.5f,
     val sfxVolume: Float = 1.0f,
     val soundTheme: SoundTheme = SoundTheme.TACTICAL,
-    val hapticsEnabled: Boolean = true
+    val hapticsEnabled: Boolean = true,
+    val keepScreenOn: Boolean = false
 )
 
 data class GameStats(

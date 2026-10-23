@@ -11,12 +11,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import com.blindtechnexus.openfire.model.RunPressure
 import com.blindtechnexus.openfire.model.Screen
@@ -50,6 +52,15 @@ private const val SWIPE_THRESHOLD_TWO_FINGERS = 36f
 @Composable
 fun OpenFireApp(viewModel: GameViewModel) {
     val currentScreen by viewModel.currentScreen.collectAsState()
+    val settings by viewModel.settings.collectAsState()
+    val view = LocalView.current
+
+    DisposableEffect(view, settings.keepScreenOn) {
+        view.keepScreenOn = settings.keepScreenOn
+        onDispose {
+            view.keepScreenOn = false
+        }
+    }
 
     BackHandler(enabled = currentScreen != Screen.WELCOME && currentScreen != Screen.MENU) {
         if (currentScreen == Screen.BATTLE) {

@@ -71,12 +71,14 @@ fun BattleScreen(viewModel: GameViewModel) {
         BattleMenuItem.MEDKIT -> inventory.medikits
         BattleMenuItem.COVER -> inventory.covers
         BattleMenuItem.GLUE_WALL -> inventory.glueWalls
+        BattleMenuItem.ANTI_MISSILE -> inventory.antiMissiles
         else -> 0
     }
     val menuLabel = when (menuItem) {
         BattleMenuItem.MEDKIT -> viewModel.t("medkit")
         BattleMenuItem.COVER -> viewModel.t("cover")
         BattleMenuItem.GLUE_WALL -> viewModel.t("glooWall")
+        BattleMenuItem.ANTI_MISSILE -> viewModel.t("antiMissile")
         BattleMenuItem.EXIT -> viewModel.t("exitGame")
         BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
     }
@@ -245,6 +247,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                     text = "${viewModel.t("medkits")}: ${inventory.medikits} | " +
                         "${viewModel.t("glooWall")}: ${inventory.glueWalls} | " +
                         "${viewModel.t("cover")}: ${inventory.covers} | " +
+                        "${viewModel.t("antiMissile")}: ${inventory.antiMissiles} | " +
                         "${viewModel.t("extMissilePowers")}: ${inventory.missilePowers}",
                     fontSize = 14.sp,
                     color = TextAccent,
@@ -257,6 +260,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                             BattleMenuItem.MEDKIT -> viewModel.t("medkit")
                             BattleMenuItem.COVER -> viewModel.t("cover")
                             BattleMenuItem.GLUE_WALL -> viewModel.t("glooWall")
+                            BattleMenuItem.ANTI_MISSILE -> viewModel.t("antiMissile")
                             BattleMenuItem.EXIT -> viewModel.t("exitGame")
                             BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
                         }

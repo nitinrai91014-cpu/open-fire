@@ -74,6 +74,7 @@ fun SettingsScreen(viewModel: GameViewModel) {
     var sfxVolState by remember { mutableFloatStateOf(currentSettings.sfxVolume) }
     var soundThemeState by remember { mutableStateOf(currentSettings.soundTheme) }
     var hapticsState by remember { mutableStateOf(currentSettings.hapticsEnabled) }
+    var keepScreenOnState by remember { mutableStateOf(currentSettings.keepScreenOn) }
 
     Column(
         modifier = Modifier
@@ -355,11 +356,35 @@ fun SettingsScreen(viewModel: GameViewModel) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(text = viewModel.t("haptics"), fontSize = 15.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                    Text(text = "Haptic pulses for gunshots and damage", fontSize = 13.sp, color = TextMuted)
+                    Text(text = viewModel.t("hapticsDesc"), fontSize = 13.sp, color = TextMuted)
                 }
                 Switch(
                     checked = hapticsState,
                     onCheckedChange = { hapticsState = it },
+                    modifier = Modifier.testTag("haptics_switch"),
+                    colors = SwitchDefaults.colors(checkedThumbColor = BtnPrimary, checkedTrackColor = Color(0xFF002B18))
+                )
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = viewModel.t("keepScreenOn"), fontSize = 15.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                    Text(text = viewModel.t("keepScreenOnDesc"), fontSize = 13.sp, color = TextMuted)
+                }
+                Switch(
+                    checked = keepScreenOnState,
+                    onCheckedChange = {
+                        keepScreenOnState = it
+                        viewModel.playSound("click")
+                        viewModel.setKeepScreenOn(it)
+                    },
+                    modifier = Modifier.testTag("keep_screen_on_switch"),
                     colors = SwitchDefaults.colors(checkedThumbColor = BtnPrimary, checkedTrackColor = Color(0xFF002B18))
                 )
             }
@@ -380,7 +405,8 @@ fun SettingsScreen(viewModel: GameViewModel) {
                     musicVolume = musicVolState,
                     sfxVolume = sfxVolState,
                     soundTheme = soundThemeState,
-                    hapticsEnabled = hapticsState
+                    hapticsEnabled = hapticsState,
+                    keepScreenOn = keepScreenOnState
                 )
                 viewModel.updateSettings(updated)
                 viewModel.playSound("click")

@@ -16,8 +16,8 @@ import com.blindtechnexus.openfire.model.Weapon
  * Reads and writes the complete game profile.
  *
  * Everything (settings, statistics, shop inventory and the remembered last
- * weapon) is persisted through [EncryptedStore] inside `/.openfire/data/` on
- * shared storage, protected by AES-256-GCM. SharedPreferences is only read
+ * weapon) is persisted through [EncryptedStore] inside `/.open_fire/data/` on
+ * external storage, protected by AES-256-GCM. SharedPreferences is only read
  * once, to migrate profiles written by version 1.x, and is cleared afterwards.
  */
 class PreferencesManager(context: Context) {
@@ -30,7 +30,7 @@ class PreferencesManager(context: Context) {
         const val FILE_SETTINGS = "settings"
         const val FILE_PROFILE = "profile"
         const val FILE_INVENTORY = "inventory"
-        const val SCHEMA_VERSION = 3
+        const val SCHEMA_VERSION = 4
 
         const val KEY_SCHEMA = "schema"
 
@@ -68,7 +68,8 @@ class PreferencesManager(context: Context) {
             musicVolume = map["musicVolume"]?.toFloatOrNull() ?: 0.5f,
             sfxVolume = map["sfxVolume"]?.toFloatOrNull() ?: 1.0f,
             soundTheme = theme,
-            hapticsEnabled = map["haptics"]?.toBooleanStrictOrNull() ?: true
+            hapticsEnabled = map["haptics"]?.toBooleanStrictOrNull() ?: true,
+            keepScreenOn = map["keepScreenOn"]?.toBooleanStrictOrNull() ?: false
         )
     }
 
@@ -86,7 +87,8 @@ class PreferencesManager(context: Context) {
                 "musicVolume" to s.musicVolume.toString(),
                 "sfxVolume" to s.sfxVolume.toString(),
                 "soundTheme" to s.soundTheme.name,
-                "haptics" to s.hapticsEnabled.toString()
+                "haptics" to s.hapticsEnabled.toString(),
+                "keepScreenOn" to s.keepScreenOn.toString()
             )
         )
     }
@@ -199,6 +201,7 @@ class PreferencesManager(context: Context) {
             medikits = map["medikits"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             glueWalls = map["glueWalls"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             covers = map["covers"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
+            antiMissiles = map["antiMissiles"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             extensions = extensions,
             lastWeaponId = Weapon.fromId(map["lastWeapon"])?.id ?: Weapon.SHORT_GUN.id,
             missilePowers = missilePowers
@@ -212,6 +215,7 @@ class PreferencesManager(context: Context) {
             "medikits" to inventory.medikits.toString(),
             "glueWalls" to inventory.glueWalls.toString(),
             "covers" to inventory.covers.toString(),
+            "antiMissiles" to inventory.antiMissiles.toString(),
             "lastWeapon" to inventory.lastWeaponId,
             "missilePowers" to inventory.missilePowers.toString()
         )

@@ -72,10 +72,17 @@ class ExampleRobolectricTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val prefs = PreferencesManager(context)
 
-        prefs.saveSettings(GameSettings(name = "TestWarrior", lang = "hi"))
+        prefs.saveSettings(
+            GameSettings(
+                name = "TestWarrior",
+                lang = "hi",
+                keepScreenOn = true
+            )
+        )
         val loaded = prefs.loadSettings()
         assertEquals("TestWarrior", loaded.name)
         assertEquals("hi", loaded.lang)
+        assertTrue(loaded.keepScreenOn)
 
         val stats = GameStats(
             games = 5,
@@ -113,6 +120,7 @@ class ExampleRobolectricTest {
             medikits = 7,
             glueWalls = 2,
             covers = 5,
+            antiMissiles = 2,
             extensions = mapOf(
                 Extension.AUTO_RELOAD.id to ExtensionState.ENABLED,
                 Extension.AUTO_COVER.id to ExtensionState.DISABLED
@@ -127,6 +135,7 @@ class ExampleRobolectricTest {
         assertEquals(7, loaded.medikits)
         assertEquals(2, loaded.glueWalls)
         assertEquals(5, loaded.covers)
+        assertEquals(2, loaded.antiMissiles)
         assertTrue(loaded.extensionEnabled(Extension.AUTO_RELOAD))
         assertEquals(ExtensionState.DISABLED, loaded.extensionState(Extension.AUTO_COVER))
         assertEquals(Weapon.SWORD.id, loaded.lastWeaponId)
@@ -153,7 +162,7 @@ class ExampleRobolectricTest {
             )
         )
         prefs.saveInventory(
-            Inventory(medikits = 4, glueWalls = 3, covers = 2).copy(
+            Inventory(medikits = 4, glueWalls = 3, covers = 2, antiMissiles = 1).copy(
                 lastWeaponId = Weapon.SWORD.id
             )
         )
@@ -174,6 +183,7 @@ class ExampleRobolectricTest {
         assertEquals(0, inventory.medikits)
         assertEquals(0, inventory.glueWalls)
         assertEquals(0, inventory.covers)
+        assertEquals(0, inventory.antiMissiles)
         assertFalse(inventory.extensionOwned(Extension.AUTO_RELOAD))
     }
 

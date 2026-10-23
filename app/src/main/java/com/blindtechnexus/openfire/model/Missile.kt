@@ -28,10 +28,13 @@ package com.blindtechnexus.openfire.model
  */
 object MissileRules {
     /** Shop price of the missile launcher itself. */
-    const val MISSILE_PRICE = 2000
+    const val MISSILE_PRICE = 3500
 
     /** Shop price of one consumable missile power. */
-    const val MISSILE_POWER_PRICE = 600
+    const val MISSILE_POWER_PRICE = 1800
+
+    /** Shop price of one anti-missile defence system. */
+    const val ANTI_MISSILE_PRICE = 3000
 
     /**
      * Length of `missile-sound.mp3` (about 14 seconds). A direct hit lands
