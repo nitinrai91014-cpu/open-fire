@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.ExtensionState
+import com.blindtechnexus.openfire.model.FutureWeapon
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameStats
 import com.blindtechnexus.openfire.model.Inventory
@@ -92,6 +93,7 @@ class PreferencesManager(context: Context) {
         val map = store.read(FILE_PROFILE)
         if (map.isEmpty()) return Progression.normalize(GameStats())
         val wins = map["wins"]?.toIntOrNull() ?: 0
+        val round = map["round"]?.toIntOrNull() ?: 1
         val migratedLevelWins = wins % Progression.WINS_PER_LEVEL
         return Progression.normalize(
             GameStats(
@@ -99,9 +101,13 @@ class PreferencesManager(context: Context) {
                 wins = wins,
                 kills = map["kills"]?.toIntOrNull() ?: 0,
                 coins = map["coins"]?.toIntOrNull() ?: 100,
-                round = map["round"]?.toIntOrNull() ?: 1,
+                round = round,
                 level = map["level"]?.toIntOrNull() ?: 1,
-                levelWins = map["levelWins"]?.toIntOrNull() ?: migratedLevelWins
+                levelWins = map["levelWins"]?.toIntOrNull() ?: migratedLevelWins,
+                // Older profiles did not store this counter. Their current
+                // round still proves how many earlier rounds were completed.
+                completedRounds = map["completedRounds"]?.toIntOrNull()
+                    ?: (round - 1).coerceAtLeast(0)
             )
         )
     }
@@ -118,7 +124,8 @@ class PreferencesManager(context: Context) {
                 "coins" to normalized.coins.toString(),
                 "round" to normalized.round.toString(),
                 "level" to normalized.level.toString(),
-                "levelWins" to normalized.levelWins.toString()
+                "levelWins" to normalized.levelWins.toString(),
+                "completedRounds" to normalized.completedRounds.toString()
             )
         )
     }
@@ -158,13 +165,20 @@ class PreferencesManager(context: Context) {
             }
             if (state != ExtensionState.NOT_OWNED) extensions[extension.id] = state
         }
+        val futureWeaponIds = map["futureWeapons"]
+            ?.split(',')
+            ?.mapNotNull { FutureWeapon.fromId(it.trim()) }
+            ?.map { it.id }
+            ?.toSet()
+            ?: emptySet()
         return Inventory(
             weaponIds = weaponIds + Weapon.defaults().map { it.id },
             medikits = map["medikits"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             glueWalls = map["glueWalls"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             covers = map["covers"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             extensions = extensions,
-            lastWeaponId = Weapon.fromId(map["lastWeapon"])?.id ?: Weapon.SHORT_GUN.id
+            lastWeaponId = Weapon.fromId(map["lastWeapon"])?.id ?: Weapon.SHORT_GUN.id,
+            futureWeaponIds = futureWeaponIds
         )
     }
 
@@ -175,7 +189,8 @@ class PreferencesManager(context: Context) {
             "medikits" to inventory.medikits.toString(),
             "glueWalls" to inventory.glueWalls.toString(),
             "covers" to inventory.covers.toString(),
-            "lastWeapon" to inventory.lastWeaponId
+            "lastWeapon" to inventory.lastWeaponId,
+            "futureWeapons" to inventory.futureWeaponIds.joinToString(",")
         )
         for (extension in Extension.entries) {
             values["ext.${extension.id}"] = inventory.extensionState(extension).name

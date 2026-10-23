@@ -29,7 +29,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
+import com.blindtechnexus.openfire.model.FutureWeapon
 import com.blindtechnexus.openfire.model.Inventory
+import com.blindtechnexus.openfire.model.Progression
 import com.blindtechnexus.openfire.model.Screen
 import com.blindtechnexus.openfire.model.Weapon
 import com.blindtechnexus.openfire.ui.components.ButtonType
@@ -119,6 +121,7 @@ fun ShopScreen(viewModel: GameViewModel) {
                 ShopItemRow(
                     title = "${viewModel.t(weapon.nameKey)}, ${weapon.price} ${viewModel.t("coins")}.",
                     detail = "${viewModel.t("weaponPower")}: ${weapon.powerPercent}%. " +
+                        "${viewModel.t("closeRangePower")}: ${weapon.closeRangePowerPercent}%. " +
                         "${viewModel.t("ammo")}: ${weapon.magazine}.",
                     owned = owned,
                     buyLabel = viewModel.t("buy"),
@@ -126,6 +129,15 @@ fun ShopScreen(viewModel: GameViewModel) {
                     onBuy = { viewModel.buyWeapon(weapon.id) },
                     onRemove = { pendingWeapon = weapon },
                     testTagPrefix = "shop_weapon_${weapon.id}"
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+            FutureWeapon.entries.forEach { weapon ->
+                FutureWeaponRow(
+                    viewModel = viewModel,
+                    weapon = weapon,
+                    inventory = inventory,
+                    unlocked = stats.completedRounds >= weapon.requiredCompletedRounds
                 )
                 Spacer(modifier = Modifier.height(10.dp))
             }
@@ -202,7 +214,13 @@ fun ShopScreen(viewModel: GameViewModel) {
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = viewModel.t(extension.descriptionKey),
+                        text = if (extension == Extension.MISSILE_POWERS &&
+                            !Progression.missileUnlocked(stats)
+                        ) {
+                            viewModel.t("missileLocked")
+                        } else {
+                            viewModel.t(extension.descriptionKey)
+                        },
                         fontSize = 14.sp,
                         color = TextMuted,
                         lineHeight = 20.sp
@@ -451,6 +469,55 @@ private fun DefenceRow(
                 modifier = Modifier.weight(1f),
                 testTag = "shop_defence_${item.id}_remove",
                 enabled = inventory.count(item) > 0
+            )
+        }
+    }
+}
+
+@Composable
+private fun FutureWeaponRow(
+    viewModel: GameViewModel,
+    weapon: FutureWeapon,
+    inventory: Inventory,
+    unlocked: Boolean
+) {
+    val owned = inventory.ownsFutureWeapon(weapon)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "${viewModel.t(weapon.nameKey)}, ${weapon.price} ${viewModel.t("coins")}.",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = if (unlocked) viewModel.t(weapon.descriptionKey) else viewModel.t("missileLocked"),
+            fontSize = 14.sp,
+            color = TextMuted,
+            lineHeight = 20.sp
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = viewModel.t("missileRequiresPowers"),
+            fontSize = 14.sp,
+            color = WarnBright,
+            lineHeight = 20.sp
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        if (owned) {
+            Text(
+                text = viewModel.t("owned"),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright
+            )
+        } else {
+            // Keep the locked row clickable so its unlock condition is spoken.
+            GameButton(
+                text = viewModel.t("buy"),
+                onClick = { viewModel.buyFutureWeapon(weapon.id) },
+                type = ButtonType.PRIMARY,
+                testTag = "shop_future_weapon_${weapon.id}_buy"
             )
         }
     }

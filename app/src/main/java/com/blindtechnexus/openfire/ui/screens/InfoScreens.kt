@@ -445,7 +445,11 @@ fun ChangelogScreen(viewModel: GameViewModel) {
                 "Sound design: a knife or a sword that misses plays its own miss sound, and every hit mixes the weapon sound (knife-hit, sword-hit or gun-hit) with the sound of the fighter that was hit (enemy-hit or player-hit).",
                 "Barriers: the glue wall now plays glue-sound when raised, glue-hit when it is hit and glue-wall-crack when it breaks. The cover plays cover, cover-hit and cover-crack. The airplane menu mixes the airplane sound with the airplane engine.",
                 "The battle screen now starts in complete silence: the instructive message is no longer spoken when the game screen opens.",
-                "New weapon power table, as a percentage of health at 90 to 100 percent: knife 15, sword 20, assault gun 18, pistol 22, sniper rifle 25 and short gun 10, which becomes 18 at 90 to 100 percent. Robert uses exactly the same table.",
+                "Five levels now complete one round. Health starts at 200 in round 1 level 1 and rises by 100 at every level without resetting between rounds.",
+                "New base and close-range weapon powers: knife 10/10, shotgun 10/12, assault rifle 13/14, pistol 14/15, sniper rifle 15/16 and sword 15/16. Robert has dedicated assault rifle and shotgun zone tables.",
+                "Gesture-only gameplay: no buttons appear after Play Game. Hold the top or bottom third to run, release to stop, and tap the center third for the quick menu.",
+                "Independent mixed footsteps keep your own running sound centered while Robert approaches or retreats in 3D, with faster movement in every later round.",
+                "The future Missile (1500 coins) and Missile Powers extension (500 coins) unlock after round two is completed; neither adds combat logic yet.",
                 "New prices: knife 300 coins, sword 405 coins, pistol 499 coins and sniper rifle 549 coins.",
                 "A cover now stops only 11 hits and breaks on the 12th.",
                 "The quick menu item Play was replaced by Recover, which repairs every damaged weapon for 100 coins instead of 300.",
@@ -688,21 +692,7 @@ fun ResultScreen(viewModel: GameViewModel) {
                 "${viewModel.t("readerDown")}: ${viewModel.t("mainMenu")}")
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        GameButton(
-            text = viewModel.t("playAgain"),
-            onClick = { viewModel.playAgain() },
-            type = ButtonType.PRIMARY,
-            testTag = "play_again_button",
-            enabled = ready
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        GameButton(
-            text = viewModel.t("mainMenu"),
-            onClick = { viewModel.navigateTo(Screen.MENU) },
-            type = ButtonType.DANGER,
-            testTag = "main_menu_button"
-        )
+        // Result actions are gesture-only: swipe up to play again or swipe
+        // down for the main menu. No in-game buttons are rendered.
     }
 }

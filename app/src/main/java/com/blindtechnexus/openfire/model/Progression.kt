@@ -3,21 +3,25 @@ package com.blindtechnexus.openfire.model
 /**
  * Strict progression ladder:
  *  - 10 wins   = 1 level
- *  - 10 levels = 1 round
+ *  - 5 levels  = 1 round
  *  - 5 rounds  = the whole match
  *
- * The wins collected inside the current level are tracked explicitly
- * ([GameStats.levelWins]) instead of being inferred from the lifetime win
- * count, so clearing stats or migrating old saves can never desynchronise the
- * level ladder from the wins counter.
- *
- * Every round the enemy and the player receive the round health:
- * 300, 400, 500, 600 and 750 health for rounds one to five.
+ * Wins collected inside the current level are tracked explicitly instead of
+ * being inferred from the lifetime win count. Completed rounds are also kept
+ * explicitly: unlike the current round, that counter is not reset when a new
+ * match starts, so permanent unlocks such as the Missile stay unlocked.
  */
 object Progression {
     const val WINS_PER_LEVEL = 10
-    const val LEVELS_PER_ROUND = 10
+    const val LEVELS_PER_ROUND = 5
     const val ROUNDS_PER_MATCH = 5
+
+    /** Health at round 1, level 1, and the increase for every later level. */
+    const val INITIAL_HEALTH = 200
+    const val HEALTH_PER_LEVEL = 100
+
+    /** Number of completed rounds needed to unlock the future Missile item. */
+    const val MISSILE_UNLOCK_COMPLETED_ROUNDS = 2
 
     data class WinResult(
         val stats: GameStats,
@@ -32,6 +36,7 @@ object Progression {
         var level = stats.level.coerceIn(1, LEVELS_PER_ROUND)
         var round = stats.round.coerceIn(1, ROUNDS_PER_MATCH)
         var levelWins = stats.levelWins.coerceIn(0, WINS_PER_LEVEL - 1)
+        val completedBefore = maxOf(stats.completedRounds, round - 1).coerceAtLeast(0)
         var leveledUp = false
         var roundCompleted = false
         var matchWon = false
@@ -42,13 +47,12 @@ object Progression {
             leveledUp = true
             if (level >= LEVELS_PER_ROUND) {
                 level = 1
+                roundCompleted = true
                 if (round >= ROUNDS_PER_MATCH) {
-                    roundCompleted = true
                     matchWon = true
                     round = 1
                 } else {
                     round += 1
-                    roundCompleted = true
                 }
             } else {
                 level += 1
@@ -56,18 +60,37 @@ object Progression {
         }
 
         return WinResult(
-            stats = stats.copy(level = level, round = round, levelWins = levelWins),
+            stats = stats.copy(
+                level = level,
+                round = round,
+                levelWins = levelWins,
+                completedRounds = completedBefore + if (roundCompleted) 1 else 0
+            ),
             leveledUp = leveledUp,
             roundCompleted = roundCompleted,
             matchWon = matchWon
         )
     }
 
-    /** Health both fighters receive in the given round. */
-    fun hpForRound(round: Int): Int = RobertRules.hpForRound(round)
+    /**
+     * Health both fighters receive for a specific round and level.
+     *
+     * The ladder never resets at a round boundary: R1/L1 is 200, R1/L5 is
+     * 600, R2/L1 is 700, and every subsequent level adds another 100.
+     */
+    fun hpFor(round: Int, level: Int): Int {
+        val safeRound = round.coerceIn(1, ROUNDS_PER_MATCH)
+        val safeLevel = level.coerceIn(1, LEVELS_PER_ROUND)
+        val zeroBasedLevel = (safeRound - 1) * LEVELS_PER_ROUND + (safeLevel - 1)
+        return INITIAL_HEALTH + zeroBasedLevel * HEALTH_PER_LEVEL
+    }
 
     /** True when the given round is the last one of a match. */
     fun isFinalRound(round: Int): Boolean = round >= ROUNDS_PER_MATCH
+
+    /** True once round two has been completed at any time in this profile. */
+    fun missileUnlocked(stats: GameStats): Boolean =
+        stats.completedRounds >= MISSILE_UNLOCK_COMPLETED_ROUNDS
 
     /** Keeps loaded stats inside the valid ladder ranges. */
     fun normalize(stats: GameStats): GameStats = stats.copy(
@@ -77,6 +100,7 @@ object Progression {
         coins = stats.coins.coerceAtLeast(0),
         round = stats.round.coerceIn(1, ROUNDS_PER_MATCH),
         level = stats.level.coerceIn(1, LEVELS_PER_ROUND),
-        levelWins = ((stats.levelWins % WINS_PER_LEVEL) + WINS_PER_LEVEL) % WINS_PER_LEVEL
+        levelWins = ((stats.levelWins % WINS_PER_LEVEL) + WINS_PER_LEVEL) % WINS_PER_LEVEL,
+        completedRounds = stats.completedRounds.coerceAtLeast(0)
     )
 }

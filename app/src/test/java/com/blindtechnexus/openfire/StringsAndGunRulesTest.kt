@@ -59,7 +59,7 @@ class StringsAndGunRulesTest {
         assertEquals(400, DefenceItem.GLUE_WALL.price)
         assertEquals(350, DefenceItem.COVER.price)
         assertEquals(
-            setOf(50, 80, 100, 100),
+            setOf(50, 80, 100, 500),
             Extension.entries.map { it.price }.toSet()
         )
     }
@@ -80,20 +80,26 @@ class StringsAndGunRulesTest {
         val en = Strings.getGuide("en").joinToString(" ")
         assertTrue("Guide must document the five rounds", en.contains("five rounds"))
         assertTrue("Guide must document 10 wins per level", en.contains("10 wins"))
-        assertTrue("Guide must document the round health", en.contains("300 health"))
+        assertTrue("Guide must document five levels per round", en.contains("five levels complete one round"))
+        assertTrue("Guide must document level health", en.contains("200 health"))
+        assertTrue("Guide must document the next round's health", en.contains("level 1 has 700"))
         assertTrue("Guide must document the glue wall", en.contains("glue wall"))
         assertTrue("Guide must document the cover", en.contains("Cover costs 350 coins"))
         assertTrue("Guide must document the quick menu", en.contains("quick menu"))
         assertTrue("Guide must document the extensions", en.contains("automatic reload for 50 coins"))
         assertTrue("Guide must document the four second wait", en.contains("four seconds"))
-        assertTrue("Guide must document the new power table", en.contains("knife 8 percent"))
-        assertTrue("Guide must document the short gun boost", en.contains("10 percent instead of 8 percent"))
+        assertTrue("Guide must document the new power table", en.contains("knife 10 and 10"))
+        assertTrue("Guide must document the shotgun boost", en.contains("shotgun 10 and 12"))
+        assertTrue("Guide must document Robert's custom powers", en.contains("shotgun zone powers"))
         assertTrue("Guide must document the new prices", en.contains("knife 300 coins"))
+        assertTrue("Guide must document the Missile", en.contains("Missile costs 1500 coins"))
+        assertTrue("Guide must document Missile Powers", en.contains("Missile Powers for 500 coins"))
         assertTrue("Guide must document the 11 hit cover", en.contains("stops 11 hits"))
         assertTrue("Guide must document the 100 coin recovery", en.contains("100 coins for Recovery"))
         assertTrue("Guide must document the recover menu item", en.contains("exit and recover"))
         assertTrue("Guide must document three screen portions", en.contains("divided into three portions"))
-        assertTrue("Guide must document the enemy firing bands", en.contains("40 to 70 percent band"))
+        assertTrue("Guide must document the enemy firing bands", en.contains("40 to 70 percent"))
+        assertTrue("Guide must document gesture-only gameplay", en.contains("no button controls"))
     }
 
     @Test

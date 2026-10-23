@@ -46,7 +46,9 @@ class AudioManager(private val context: Context) {
             "airplane",
             "airplaneEngine",
             "music",
-            "walk"
+            "walk",
+            "playerWalk",
+            "enemyWalk"
         )
 
         /** Pending play requests older than this are dropped (stale intent). */
@@ -195,7 +197,11 @@ class AudioManager(private val context: Context) {
         "win" to listOf("win.mp3"),
         "lose" to listOf("lose.mp3"),
         "music" to listOf("music.mp3"),
-        "walk" to listOf("walk.mp3")
+        "walk" to listOf("walk.mp3"),
+        // Two independent players mix the same footstep asset: the local
+        // player stays centred while Robert is attenuated by his 3D distance.
+        "playerWalk" to listOf("walk.mp3"),
+        "enemyWalk" to listOf("walk.mp3")
     )
 
     init {
@@ -467,36 +473,64 @@ class AudioManager(private val context: Context) {
     }
 
     /**
-     * Updates the 3D walking sound of the devil.
-     *
-     * Distance is measured in metres inside the 50 m arena. The footsteps are
-     * quiet and centred at the far edge, swell and alternate between the ears
-     * as the devil approaches, and fade away with a lower "Doppler" pitch when
-     * it flees at high speed into the distance.
+     * Updates only Robert's positional walking loop. Distance attenuation is
+     * applied exactly once by [calculate3dVolume]: footsteps become louder as
+     * he approaches and quieter as he retreats.
      */
-    fun updateWalk3dAudio(distance: Float, lateralOffset: Float = 0f, fleeing: Boolean = false) {
-        val prox = (1.0f - (distance / Combat.MAX_RANGE)).coerceIn(0f, 1f)
-        // 75% of the TTS volume, shaped by proximity so far footsteps stay quiet.
-        val baseVol = (walkVolume * (0.12f + prox * prox * 0.88f)).coerceIn(0f, 1.0f)
-        val (left, right) = calculate3dVolume(
-            x = lateralOffset,
-            y = 0f,
-            z = -distance,
-            baseVol = baseVol
+    fun updateEnemyWalk3dAudio(
+        distance: Float,
+        lateralOffset: Float = 0f,
+        fleeing: Boolean = false
+    ) {
+        updateWalkingTrack(
+            key = "enemyWalk",
+            posX = lateralOffset,
+            posZ = -distance.coerceIn(0f, Combat.MAX_RANGE),
+            fleeing = fleeing
         )
+    }
 
+    /**
+     * The local player's own footsteps stay centred and at the normal walking
+     * volume regardless of Robert's distance, as heard while running yourself.
+     */
+    fun updatePlayerWalkAudio() {
+        updateWalkingTrack(key = "playerWalk", posX = 0f, posZ = 0f, fleeing = false)
+    }
+
+    private fun updateWalkingTrack(key: String, posX: Float, posZ: Float, fleeing: Boolean) {
+        val (left, right) = calculate3dVolume(
+            x = posX,
+            y = 0f,
+            z = posZ,
+            baseVol = walkVolume
+        )
         synchronized(playerLock) {
-            val player = managedPlayers["walk"]
+            val player = managedPlayers[key]
             if (player != null && player.isPlaying) {
                 try {
                     player.setVolume(left, right)
                 } catch (_: Exception) {}
                 applyWalkPitch(player, fleeing)
             } else {
-                playManagedTrack("walk", volume = baseVol, posX = lateralOffset, posY = 0f, posZ = -distance, loop = true)
-                managedPlayers["walk"]?.let { applyWalkPitch(it, fleeing) }
+                playManagedTrack(
+                    key,
+                    volume = walkVolume,
+                    posX = posX,
+                    posY = 0f,
+                    posZ = posZ,
+                    loop = true
+                )
+                managedPlayers[key]?.let { applyWalkPitch(it, fleeing) }
             }
         }
+    }
+
+    /** Stops both independent footstep channels (and the legacy channel). */
+    fun stopFootsteps() {
+        stopSound("walk")
+        stopSound("playerWalk")
+        stopSound("enemyWalk")
     }
 
     /** Approaching footsteps rise in pitch; fleeing footsteps fall. */
@@ -556,7 +590,7 @@ class AudioManager(private val context: Context) {
             }
             player.prepare()
             player.start()
-            if (key == "walk") {
+            if (key == "walk" || key == "playerWalk" || key == "enemyWalk") {
                 applyWalkPitch(player, fleeing = false)
             }
             synchronized(playerLock) {
@@ -609,7 +643,7 @@ class AudioManager(private val context: Context) {
         stopSound("parachute")
         stopSound("airplane")
         stopSound("airplaneEngine")
-        stopSound("walk")
+        stopFootsteps()
         stopSound("jump")
         stopSound("land")
     }
@@ -752,7 +786,7 @@ class AudioManager(private val context: Context) {
             "parachute" -> generateWindWave(sampleRate, 0.5f)
             "airplane" -> generateEngineLoopWave(sampleRate, 1.2f, 95f)
             "airplaneEngine" -> generateEngineLoopWave(sampleRate, 1.6f, 72f)
-            "walk" -> generateFootstepWave(sampleRate, 0.14f)
+            "walk", "playerWalk", "enemyWalk" -> generateFootstepWave(sampleRate, 0.14f)
             "medkit" -> generateChimeWave(sampleRate, 0.35f, doubleArrayOf(523.25, 659.25, 783.99))
             "glueSound", "gloowall" -> generateWallClankWave(sampleRate, 0.3f)
             "cover" -> generateCoverWave(sampleRate, 0.5f)
