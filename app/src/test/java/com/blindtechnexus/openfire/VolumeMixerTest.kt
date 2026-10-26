@@ -88,6 +88,29 @@ class VolumeMixerTest {
     }
 
     @Test
+    fun theThreeFingerRunningLevelsAreMixedSmoothly() {
+        // Slow running is quieter, normal is the base, fast is the loudest the
+        // user setting allows. The gain is clamped so a slow run never
+        // disappears and a fast run never exceeds the chosen volume.
+        assertEquals(0.60f, VolumeMixer.runVolumeGain(0.6f), 0.0001f)
+        assertEquals(0.80f, VolumeMixer.runVolumeGain(0.8f), 0.0001f)
+        assertEquals(1.0f, VolumeMixer.runVolumeGain(1.0f), 0.0001f)
+        // Anything below the floor is lifted, anything above the ceiling cut.
+        assertEquals(VolumeMixer.MIN_RUN_GAIN, VolumeMixer.runVolumeGain(0.1f), 0.0001f)
+        assertEquals(1.0f, VolumeMixer.runVolumeGain(3.0f), 0.0001f)
+        assertEquals(1.0f, VolumeMixer.runVolumeGain(Float.NaN), 0.0001f)
+
+        // The playback rate follows the chosen speed level too: slow steps are
+        // stretched out and a sprint is sped up.
+        assertTrue(VolumeMixer.runRate(0.6f) < VolumeMixer.runRate(1.0f))
+        assertTrue(VolumeMixer.runRate(1.0f) < VolumeMixer.runRate(1.6f))
+        assertEquals(1.0f, VolumeMixer.runRate(1.0f), 0.0001f)
+        assertEquals(0.6f, VolumeMixer.runRate(0f), 0.0001f)
+        assertEquals(1.9f, VolumeMixer.runRate(100f), 0.0001f)
+        assertEquals(1.0f, VolumeMixer.runRate(Float.NaN), 0.0001f)
+    }
+
+    @Test
     fun headOnSoundsStayPerfectlyCentredAtFullVolume() {
         // Straight motion (no sideways offset) never pans at all.
         assertEquals(0f, VolumeMixer.panFor(0f, 30f), 0.0001f)

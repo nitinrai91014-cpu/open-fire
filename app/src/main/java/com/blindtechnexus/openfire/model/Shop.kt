@@ -8,26 +8,32 @@ package com.blindtechnexus.openfire.model
  * can still be damaged by three consecutive point-blank hits, exactly like
  * firearms.
  *
- * Every weapon has a base power and an explicit close-range power, measured
- * as a percentage of the victim's maximum health. Base / 90%-100% values are:
- * knife 10/10, shotgun 10/12, assault rifle 13/14, pistol 14/15,
- * sniper rifle 15/16 and sword 15/16. Robert's assault rifle and shotgun use
- * his own per-zone tables in [RobertRules]. The missile is the exception: it
- * does not use the zone tables at all, because a launched missile always
- * tracks its target and destroys it completely (see [MissileRules]).
+ * All damage comes from the single [DamageTable], which is capped at 40
+ * percent of the victim's maximum health for normal weapons and keeps the
+ * full 100 percent capacity for the explosives (bombs and the missile). The
+ * `powerPercent` / `closeRangePowerPercent` values below are the exact
+ * 40%-70% and 90%-100% figures of that same table.
+ *
+ * Three weapon families behave differently in battle:
+ *  - classic firearms and melee weapons fire one shot per swipe up;
+ *  - automatic weapons ([autoFire]: the MP40 and the machine gun) keep firing
+ *    while the up-swipe is held, one bullet per [burstIntervalMs], with their
+ *    sound looped for at most [maxBurstMs];
+ *  - launchers ([missileLauncher] and [bomb]) start a tracked flight instead
+ *    of a shot and are resolved by [MissileRules] and [BombRules].
  *
  * Every weapon hit also plays the sound of the fighter that was hit: the
- * weapon's own hit sound (knife-hit, sword-hit or gun-hit) is always mixed
- * with enemy-hit or player-hit.
+ * weapon's own hit sound (knife-hit, sword-hit, gun-hit or explosion) is
+ * always mixed with enemy-hit or player-hit.
  */
 enum class Weapon(
     val id: String,
     val nameKey: String,
-    /** Base damage in percent of the victim's maximum health. */
+    /** Damage in percent of maximum health inside the 40%-70% (light) band. */
     val powerPercent: Int,
-    /** Damage in percent at 90%-100% proximity (can differ from base power). */
+    /** Damage in percent of maximum health at 90%-100% proximity. */
     val closeRangePowerPercent: Int,
-    /** Rounds in a full magazine. Melee weapons and the missile use 0. */
+    /** Rounds in a full magazine. Melee weapons, bombs and the missile use 0 or 1. */
     val magazine: Int,
     /** Shop price. 0 = never sold, the weapon is received by default. */
     val price: Int,
@@ -42,12 +48,35 @@ enum class Weapon(
      * inventory and is switched to with the usual gun-switch sound, but it
      * has no magazine: every launch consumes one stackable missile power.
      */
-    val missileLauncher: Boolean = false
+    val missileLauncher: Boolean = false,
+    /** True for the three bombs: grenade, atom bomb and timer bomb. */
+    val bomb: Boolean = false,
+    /**
+     * Round in which the weapon becomes available (1 = from the very
+     * beginning). The shop only sells it once the previous round has been
+     * completed, and Robert receives it in his round loadout.
+     */
+    val unlockRound: Int = 1,
+    /**
+     * Round from which this weapon is handed to the player for free at the
+     * start of a battle (0 = never issued, it must be bought).
+     */
+    val issuedFreeFromRound: Int = 0,
+    /**
+     * True for submachine guns: holding the up-swipe keeps firing one bullet
+     * per [burstIntervalMs] for at most [maxBurstMs], and the fire sound is
+     * looped for the whole burst.
+     */
+    val autoFire: Boolean = false,
+    val burstIntervalMs: Long = 0L,
+    val maxBurstMs: Long = 0L,
+    /** True when the timer bomb needs its duration picker before it fires. */
+    val needsTimerSelection: Boolean = false
 ) {
     SHORT_GUN(
         id = "shortGun",
         nameKey = "gunShotgun",
-        powerPercent = 10,
+        powerPercent = 5,
         closeRangePowerPercent = 12,
         magazine = 6,
         price = 0,
@@ -61,7 +90,7 @@ enum class Weapon(
     ASSAULT_GUN(
         id = "assaultGun",
         nameKey = "gunAssault",
-        powerPercent = 13,
+        powerPercent = 7,
         closeRangePowerPercent = 14,
         magazine = 6,
         price = 0,
@@ -75,10 +104,10 @@ enum class Weapon(
     PISTOL(
         id = "pistol",
         nameKey = "gunPistol",
-        powerPercent = 14,
+        powerPercent = 7,
         closeRangePowerPercent = 15,
         magazine = 6,
-        price = 750,
+        price = 550,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "pistol",
@@ -89,10 +118,10 @@ enum class Weapon(
     SNIPER(
         id = "sniper",
         nameKey = "gunSniper",
-        powerPercent = 15,
+        powerPercent = 8,
         closeRangePowerPercent = 16,
         magazine = 6,
-        price = 1200,
+        price = 1000,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "sniperRifle",
@@ -103,10 +132,10 @@ enum class Weapon(
     KNIFE(
         id = "knife",
         nameKey = "gunKnife",
-        powerPercent = 10,
+        powerPercent = 5,
         closeRangePowerPercent = 10,
         magazine = 0,
-        price = 500,
+        price = 300,
         ownedByDefault = false,
         melee = true,
         fireSoundKey = "knifeSwish",
@@ -117,16 +146,135 @@ enum class Weapon(
     SWORD(
         id = "sword",
         nameKey = "gunSword",
-        powerPercent = 15,
+        powerPercent = 8,
         closeRangePowerPercent = 16,
         magazine = 0,
-        price = 950,
+        price = 750,
         ownedByDefault = false,
         melee = true,
         fireSoundKey = "swordGlide",
         switchSoundKey = "swordSwitch",
         hitSoundKey = "swordHit",
         missSoundKey = "swordMiss"
+    ),
+    /**
+     * The MP40 submachine gun: it fires continuously while the up-swipe is
+     * held, one bullet every half second, for a four second burst, and its
+     * sound loops for the whole burst.
+     */
+    MP40(
+        id = "mp40",
+        nameKey = "gunMp40",
+        powerPercent = 4,
+        closeRangePowerPercent = 8,
+        magazine = 20,
+        price = 900,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "mp40",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "gunHit",
+        missSoundKey = "fire",
+        unlockRound = 2,
+        issuedFreeFromRound = 2,
+        autoFire = true,
+        burstIntervalMs = 500L,
+        maxBurstMs = 4_000L
+    ),
+    /**
+     * The AWM long-range rifle. Inside the 20% to 40% proximity band, where
+     * every other weapon misses, it still lands a precision hit worth ten
+     * percent of the victim's maximum health (see [DamageTable]).
+     */
+    AWM(
+        id = "awm",
+        nameKey = "gunAwm",
+        powerPercent = 12,
+        closeRangePowerPercent = 24,
+        magazine = 5,
+        price = 1400,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "awm",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "gunHit",
+        missSoundKey = "fire",
+        unlockRound = 2,
+        issuedFreeFromRound = 2
+    ),
+    /**
+     * The machine gun: the same continuous-fire behaviour as the MP40 with a
+     * slightly stronger health reduction and a slightly faster bullet rate.
+     * It can be unlocked from round four, but it is never handed out as a
+     * reward.
+     */
+    MACHINE_GUN(
+        id = "machineGun",
+        nameKey = "gunMachineGun",
+        powerPercent = 5,
+        closeRangePowerPercent = 11,
+        magazine = 30,
+        price = 1900,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "machineGun",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "gunHit",
+        missSoundKey = "fire",
+        unlockRound = 4,
+        autoFire = true,
+        burstIntervalMs = 400L,
+        maxBurstMs = 5_000L
+    ),
+    GRENADE(
+        id = "grenade",
+        nameKey = "gunGrenade",
+        powerPercent = DamageTable.EXPLOSIVE_PERCENT,
+        closeRangePowerPercent = DamageTable.EXPLOSIVE_PERCENT,
+        magazine = 1,
+        price = 700,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "grenade",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "explosion",
+        missSoundKey = "ammo",
+        bomb = true,
+        unlockRound = 3,
+        issuedFreeFromRound = 3
+    ),
+    ATOM_BOMB(
+        id = "atomBomb",
+        nameKey = "gunAtomBomb",
+        powerPercent = DamageTable.EXPLOSIVE_PERCENT,
+        closeRangePowerPercent = DamageTable.EXPLOSIVE_PERCENT,
+        magazine = 1,
+        price = 2400,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "atomBomb",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "explosion",
+        missSoundKey = "ammo",
+        bomb = true,
+        unlockRound = 3
+    ),
+    TIMER_BOMB(
+        id = "timerBomb",
+        nameKey = "gunTimerBomb",
+        powerPercent = DamageTable.EXPLOSIVE_PERCENT,
+        closeRangePowerPercent = DamageTable.EXPLOSIVE_PERCENT,
+        magazine = 1,
+        price = 2000,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "timerLoop",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "timerBomb",
+        missSoundKey = "ammo",
+        bomb = true,
+        unlockRound = 3,
+        needsTimerSelection = true
     ),
     MISSILE(
         id = "missile",
@@ -145,19 +293,29 @@ enum class Weapon(
         switchSoundKey = "gunReload",
         hitSoundKey = "explosion",
         missSoundKey = "missile",
-        missileLauncher = true
+        missileLauncher = true,
+        unlockRound = Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS + 1
     );
 
     /** Completed rounds required before this weapon can be bought (0 = none). */
     val requiredCompletedRounds: Int
-        get() = if (missileLauncher) Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS else 0
+        get() = (unlockRound - 1).coerceAtLeast(0)
 
     /**
-     * Melee weapons are always "loaded"; firearms need a reload after six
-     * shots. The missile never reloads either: it is fed by missile powers.
+     * Melee weapons are always "loaded"; firearms need a reload after their
+     * magazine is empty. The missile never reloads: it is fed by missile
+     * powers. A bomb carries exactly one charge per battle and never reloads.
      */
     val needsReload: Boolean
-        get() = !melee && !missileLauncher
+        get() = !melee && !missileLauncher && !bomb
+
+    /** True when the weapon is a tracked launcher (missile or bomb). */
+    val launcher: Boolean
+        get() = missileLauncher || bomb
+
+    /** The spoken reason while the weapon is still locked by progression. */
+    val lockedKey: String
+        get() = if (missileLauncher) "missileLocked" else "weaponLocked"
 
     companion object {
         /** The weapons every player owns without buying them. */
@@ -166,38 +324,51 @@ enum class Weapon(
         /** The weapons that appear in the shop. */
         fun forSale(): List<Weapon> = Weapon.entries.filter { it.price > 0 }
 
+        /** Every automatic (hold to keep firing) weapon. */
+        fun automatic(): List<Weapon> = Weapon.entries.filter { it.autoFire }
+
+        /** Every bomb weapon, in the order they unlock. */
+        fun bombs(): List<Weapon> = Weapon.entries.filter { it.bomb }
+
+        /** Weapons handed out for free once [round] is reached. */
+        fun issuedForRound(round: Int): List<Weapon> = Weapon.entries.filter {
+            it.issuedFreeFromRound in 1..round
+        }
+
         fun fromId(id: String?): Weapon? = Weapon.entries.firstOrNull { it.id == id }
     }
 }
 
-/** The four buyable, consumable defences of the game. */
+/** The five buyable, consumable defences of the game. */
 enum class DefenceItem(
     val id: String,
     val nameKey: String,
     val pluralKey: String,
     val price: Int,
     val descriptionKey: String,
-    val requiredCompletedRounds: Int = 0
+    val requiredCompletedRounds: Int = 0,
+    /** Spoken reason while this defence is still locked by progression. */
+    val lockedKey: String = "itemLocked"
 ) {
     MEDKIT(
         id = "medkit",
         nameKey = "medkit",
         pluralKey = "medkitsPlural",
-        price = 500,
+        price = 300,
         descriptionKey = "defenceMedkitInfo"
     ),
     GLUE_WALL(
         id = "glueWall",
         nameKey = "glooWall",
         pluralKey = "glueWallsPlural",
-        price = 850,
+        price = 650,
         descriptionKey = "defenceGlueWallInfo"
     ),
     COVER(
         id = "cover",
         nameKey = "cover",
         pluralKey = "coversPlural",
-        price = 650,
+        price = 450,
         descriptionKey = "defenceCoverInfo"
     ),
     ANTI_MISSILE(
@@ -206,11 +377,30 @@ enum class DefenceItem(
         pluralKey = "antiMissilesPlural",
         price = MissileRules.ANTI_MISSILE_PRICE,
         descriptionKey = "defenceAntiMissileInfo",
-        requiredCompletedRounds = Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS
+        requiredCompletedRounds = Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS,
+        lockedKey = "antiMissileLocked"
+    ),
+    /**
+     * The anti-bomb explosive defence. Deployed while a bomb is in the air it
+     * destroys that bomb with an explosion, exactly like the anti-missile
+     * system destroys a missile. Robert carries one per game from round three
+     * and deploys it automatically the moment he hears a bomb.
+     */
+    ANTI_BOMB(
+        id = "antiBomb",
+        nameKey = "antiBomb",
+        pluralKey = "antiBombsPlural",
+        price = BombRules.ANTI_BOMB_PRICE,
+        descriptionKey = "defenceAntiBombInfo",
+        requiredCompletedRounds = BombRules.FIRST_BOMB_ROUND - 1,
+        lockedKey = "antiBombLocked"
     );
 
     companion object {
         fun fromId(id: String?): DefenceItem? = DefenceItem.entries.firstOrNull { it.id == id }
+
+        /** The two defences that intercept a projectile already in the air. */
+        fun interceptors(): List<DefenceItem> = listOf(ANTI_MISSILE, ANTI_BOMB)
     }
 }
 
@@ -227,10 +417,10 @@ enum class Extension(
     val price: Int,
     val descriptionKey: String
 ) {
-    AUTO_RELOAD("autoReload", "extAutoReload", 150, "extAutoReloadInfo"),
-    AUTO_MEDKIT("autoMedkit", "extAutoMedkit", 240, "extAutoMedkitInfo"),
-    AUTO_COVER("autoCover", "extAutoCover", 300, "extAutoCoverInfo"),
-    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 300, "extAutoGlueWallInfo");
+    AUTO_RELOAD("autoReload", "extAutoReload", 100, "extAutoReloadInfo"),
+    AUTO_MEDKIT("autoMedkit", "extAutoMedkit", 190, "extAutoMedkitInfo"),
+    AUTO_COVER("autoCover", "extAutoCover", 250, "extAutoCoverInfo"),
+    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 250, "extAutoGlueWallInfo");
 
     companion object {
         fun fromId(id: String?): Extension? = Extension.entries.firstOrNull { it.id == id }
@@ -246,7 +436,8 @@ enum class ExtensionState {
 
 /**
  * Everything the player owns and carries: bought weapons, defence counts,
- * extension states and the weapon that was used in the previous game.
+ * extension states, per-weapon enable switches and the weapon that was used
+ * in the previous game.
  */
 data class Inventory(
     val weaponIds: Set<String> = Weapon.defaults().map { it.id }.toSet(),
@@ -254,19 +445,37 @@ data class Inventory(
     val glueWalls: Int = 0,
     val covers: Int = 0,
     val antiMissiles: Int = 0,
+    /** Anti-bomb explosive defences, bought and stacked like every defence. */
+    val antiBombs: Int = 0,
     val extensions: Map<String, ExtensionState> = emptyMap(),
     val lastWeaponId: String = Weapon.SHORT_GUN.id,
     /**
      * Stacked missile powers. Like a defence, every missile launch consumes
      * exactly one, after which another must be bought for the next launch.
      */
-    val missilePowers: Int = 0
+    val missilePowers: Int = 0,
+    /**
+     * Weapons switched off from the shop's Enable / Disable button. A
+     * disabled weapon is never handed out at the start of a battle and can
+     * never be revealed by a left or right swipe until it is enabled again.
+     */
+    val disabledWeapons: Set<String> = emptySet()
 ) {
     fun ownsWeapon(weapon: Weapon): Boolean =
         weapon.ownedByDefault || weaponIds.contains(weapon.id)
 
+    /** True while this owned weapon is switched on in the shop. */
+    fun weaponEnabled(weapon: Weapon): Boolean = !disabledWeapons.contains(weapon.id)
+
     /** All owned battle weapons in switch order, including the missile. */
     fun ownedWeapons(): List<Weapon> = Weapon.entries.filter { ownsWeapon(it) }
+
+    /** Owned weapons that are also enabled: the real battle rotation. */
+    fun battleWeapons(): List<Weapon> = ownedWeapons().filter { weaponEnabled(it) }
+
+    /** Owned and enabled weapons available in the given round. */
+    fun battleWeapons(round: Int): List<Weapon> =
+        battleWeapons().filter { it.unlockRound <= round }
 
     val hasMissilePower: Boolean
         get() = missilePowers > 0
@@ -274,11 +483,19 @@ data class Inventory(
     fun withMissilePowers(value: Int): Inventory =
         copy(missilePowers = value.coerceAtLeast(0))
 
+    fun withWeaponEnabled(weapon: Weapon, enabled: Boolean): Inventory =
+        if (enabled) {
+            copy(disabledWeapons = disabledWeapons - weapon.id)
+        } else {
+            copy(disabledWeapons = disabledWeapons + weapon.id)
+        }
+
     fun count(item: DefenceItem): Int = when (item) {
         DefenceItem.MEDKIT -> medikits
         DefenceItem.GLUE_WALL -> glueWalls
         DefenceItem.COVER -> covers
         DefenceItem.ANTI_MISSILE -> antiMissiles
+        DefenceItem.ANTI_BOMB -> antiBombs
     }
 
     fun withCount(item: DefenceItem, value: Int): Inventory {
@@ -288,6 +505,7 @@ data class Inventory(
             DefenceItem.GLUE_WALL -> copy(glueWalls = safe)
             DefenceItem.COVER -> copy(covers = safe)
             DefenceItem.ANTI_MISSILE -> copy(antiMissiles = safe)
+            DefenceItem.ANTI_BOMB -> copy(antiBombs = safe)
         }
     }
 
@@ -309,8 +527,15 @@ data class Inventory(
         return if (ownsWeapon(remembered)) remembered else null
     }
 
-    /** The weapon the next battle starts with. */
-    fun startingWeapon(): Weapon = rememberedWeapon() ?: Weapon.SHORT_GUN
+    /**
+     * The weapon the next battle starts with. A disabled weapon is skipped,
+     * so disabling one really hides it from the battle rotation.
+     */
+    fun startingWeapon(): Weapon {
+        val remembered = rememberedWeapon()
+        if (remembered != null && weaponEnabled(remembered)) return remembered
+        return battleWeapons().firstOrNull { it != Weapon.MISSILE } ?: Weapon.SHORT_GUN
+    }
 }
 
 /**
@@ -332,7 +557,9 @@ data class ShopResult(
 object Shop {
     /**
      * Buys a weapon. [completedRounds] is the profile's lifetime completed
-     * round count; only the missile checks it (it unlocks after round two).
+     * round count; locked weapons (the MP40 and the AWM from round two, the
+     * bombs from round three, the machine gun from round four and the missile
+     * after round two) check it before anything else.
      * The app always passes the real value; the permissive default only keeps
      * pure price tests of the unrestricted weapons free of progression setup.
      */
@@ -343,7 +570,7 @@ object Shop {
         completedRounds: Int = Int.MAX_VALUE
     ): ShopResult {
         if (completedRounds < weapon.requiredCompletedRounds) {
-            return ShopResult(false, coins, inventory, "missileLocked")
+            return ShopResult(false, coins, inventory, weapon.lockedKey)
         }
         if (inventory.ownsWeapon(weapon)) {
             return ShopResult(false, coins, inventory, "alreadyOwned")
@@ -354,7 +581,29 @@ object Shop {
         return ShopResult(
             success = true,
             coins = coins - weapon.price,
-            inventory = inventory.copy(weaponIds = inventory.weaponIds + weapon.id)
+            inventory = inventory.copy(
+                weaponIds = inventory.weaponIds + weapon.id,
+                disabledWeapons = inventory.disabledWeapons - weapon.id
+            )
+        )
+    }
+
+    /**
+     * Hands a weapon out for free (the round-two MP40 and AWM issue and the
+     * round-three grenade reward). Never charges coins and never re-adds a
+     * weapon the player already owns.
+     */
+    fun grantWeapon(inventory: Inventory, weapon: Weapon): ShopResult {
+        if (inventory.ownsWeapon(weapon)) {
+            return ShopResult(false, 0, inventory, "alreadyOwned")
+        }
+        return ShopResult(
+            success = true,
+            coins = 0,
+            inventory = inventory.copy(
+                weaponIds = inventory.weaponIds + weapon.id,
+                disabledWeapons = inventory.disabledWeapons - weapon.id
+            )
         )
     }
 
@@ -393,6 +642,7 @@ object Shop {
             coins = coins,
             inventory = inventory.copy(
                 weaponIds = inventory.weaponIds - weapon.id,
+                disabledWeapons = inventory.disabledWeapons - weapon.id,
                 lastWeaponId = if (inventory.lastWeaponId == weapon.id) {
                     Weapon.SHORT_GUN.id
                 } else {
@@ -400,6 +650,25 @@ object Shop {
                 }
             )
         )
+    }
+
+    /**
+     * The Enable / Disable switch under every weapon row. It is free, works
+     * like an extension, and a disabled weapon is never revealed by a left or
+     * right swipe in the game screen until it is enabled again.
+     */
+    fun toggleWeaponEnabled(inventory: Inventory, coins: Int, weapon: Weapon): ShopResult {
+        if (!inventory.ownsWeapon(weapon)) {
+            return ShopResult(false, coins, inventory, "notOwned")
+        }
+        val enabled = !inventory.weaponEnabled(weapon)
+        val next = inventory.withWeaponEnabled(weapon, enabled)
+        val fixed = if (!enabled && next.lastWeaponId == weapon.id) {
+            next.copy(lastWeaponId = next.startingWeapon().id)
+        } else {
+            next
+        }
+        return ShopResult(true, coins, fixed)
     }
 
     /** Defences are repeatable: every purchase adds exactly one item. */
@@ -410,7 +679,7 @@ object Shop {
         completedRounds: Int = Int.MAX_VALUE
     ): ShopResult {
         if (completedRounds < item.requiredCompletedRounds) {
-            return ShopResult(false, coins, inventory, "antiMissileLocked")
+            return ShopResult(false, coins, inventory, item.lockedKey)
         }
         if (coins < item.price) {
             return ShopResult(false, coins, inventory, "notEnoughCoins")
@@ -476,4 +745,13 @@ object Shop {
     /** Adds a defence without charging for it (used by rewards and migration). */
     fun grant(inventory: Inventory, item: DefenceItem, amount: Int = 1): Inventory =
         inventory.withCount(item, inventory.count(item) + amount.coerceAtLeast(0))
+
+    /** Applies a whole reward bundle without charging for it. */
+    fun grantBundle(inventory: Inventory, bundle: RewardBundle): Inventory {
+        var next = inventory
+        for ((item, amount) in bundle.items) {
+            next = grant(next, item, amount)
+        }
+        return next
+    }
 }

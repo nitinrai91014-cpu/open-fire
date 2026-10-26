@@ -1,7 +1,10 @@
 package com.blindtechnexus.openfire
 
+import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DefenceItem
+import com.blindtechnexus.openfire.model.MissileRules
+import com.blindtechnexus.openfire.model.BombKind
 import com.blindtechnexus.openfire.model.FireRange
 import com.blindtechnexus.openfire.model.Progression
 import com.blindtechnexus.openfire.model.RobertRules
@@ -12,7 +15,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.random.Random
 
-/** Locks Robert's level health, loadouts, special sniper rule and round speed. */
+/**
+ * Locks Robert's level health, round loadouts (including the MP40, the AWM,
+ * the machine gun and his bombs), the special sniper rule, his defence
+ * thresholds, his continuous fire and his round speed.
+ */
 class RobertTest {
 
     @Test
@@ -40,6 +47,9 @@ class RobertTest {
             assertEquals(2, profile.fleeAfterHits)
             assertEquals(0, profile.missilePowers)
             assertEquals(0, profile.antiMissiles)
+            // No bombs and no anti-bomb explosive before round three.
+            assertEquals(0, profile.bombs)
+            assertEquals(0, profile.antiBombs)
         }
     }
 
@@ -59,35 +69,58 @@ class RobertTest {
     }
 
     @Test
-    fun roundTwoAddsKnifeAndSwordWithTheNewDefences() {
+    fun roundTwoAddsKnifeSwordAndHisMp40() {
         val roundTwo = RobertRules.profile(2, 1)
         assertEquals(3, roundTwo.medikits)
         assertEquals(1, roundTwo.glueWalls)
         assertEquals(2, roundTwo.covers)
         assertTrue(roundTwo.weapons.contains(Weapon.KNIFE))
         assertTrue(roundTwo.weapons.contains(Weapon.SWORD))
+        // The enemy also receives the MP40 in round two.
+        assertTrue(roundTwo.weapons.contains(Weapon.MP40))
+        assertFalse(roundTwo.weapons.contains(Weapon.AWM))
+        assertFalse(roundTwo.weapons.contains(Weapon.MACHINE_GUN))
         assertFalse(roundTwo.weapons.contains(Weapon.PISTOL))
         assertFalse(roundTwo.weapons.contains(Weapon.MISSILE))
         assertTrue(roundTwo.sniperLocked)
         assertEquals(0, roundTwo.missilePowers)
         assertEquals(0, roundTwo.antiMissiles)
+        assertEquals(0, roundTwo.bombs)
+        assertEquals(0, roundTwo.antiBombs)
         // The loadout is the same throughout the round.
         assertEquals(roundTwo.weapons, RobertRules.profile(2, 5).weapons)
         assertEquals(3, RobertRules.profile(2, 5).medikits)
     }
 
     @Test
-    fun roundThreeAddsThePistolThroughoutTheRound() {
+    fun roundThreeAddsThePistolTheAwmAndHisBombs() {
         val roundThree = RobertRules.profile(3, 1)
         assertEquals(3, roundThree.medikits)
         assertEquals(2, roundThree.glueWalls)
         assertEquals(4, roundThree.covers)
         assertTrue(roundThree.weapons.contains(Weapon.PISTOL))
         assertTrue(roundThree.weapons.contains(Weapon.KNIFE))
-        assertEquals(RobertRules.ALL_STANDARD_WEAPONS.toSet(), roundThree.weapons.toSet())
+        // Round three: the enemy gets the AWM too.
+        assertTrue(roundThree.weapons.contains(Weapon.AWM))
+        assertTrue(roundThree.weapons.contains(Weapon.MP40))
+        // The machine gun only exists from round four.
+        assertFalse(roundThree.weapons.contains(Weapon.MACHINE_GUN))
+        assertEquals(
+            RobertRules.ALL_STANDARD_WEAPONS.toSet() - Weapon.MACHINE_GUN,
+            roundThree.weapons.toSet()
+        )
         assertFalse(roundThree.sniperLocked)
         assertEquals(3, roundThree.fleeAfterHits)
+        // Round three has no anti-missile system at all: a launched missile
+        // simply makes him sprint until it kills him.
         assertEquals(0, roundThree.missilePowers)
+        assertEquals(0, roundThree.antiMissiles)
+        assertEquals(0, MissileRules.antiMissilesForRound(3))
+        // One bomb and one anti-bomb explosive per game from round three.
+        assertEquals(1, roundThree.bombs)
+        assertEquals(1, roundThree.antiBombs)
+        assertEquals(1, BombRules.enemyBombsForRound(3))
+        assertEquals(1, BombRules.antiBombsForRound(3))
         assertEquals(4, RobertRules.profile(3, 5).covers)
     }
 
@@ -103,6 +136,10 @@ class RobertTest {
         assertEquals(1, roundFour.missilePowers)
         assertEquals(1, roundFour.antiMissiles)
         assertEquals(4, roundFour.fleeAfterHits)
+        // Two bombs per game, but still exactly one anti-bomb explosive.
+        assertEquals(2, roundFour.bombs)
+        assertEquals(1, roundFour.antiBombs)
+        assertTrue(roundFour.weapons.contains(Weapon.MACHINE_GUN))
     }
 
     @Test
@@ -116,6 +153,10 @@ class RobertTest {
         assertEquals(1, roundFive.missilePowers)
         assertEquals(2, roundFive.antiMissiles)
         assertEquals(5, roundFive.fleeAfterHits)
+        assertEquals(2, roundFive.bombs)
+        // Never twice in the same game: one anti-bomb explosive per game.
+        assertEquals(1, roundFive.antiBombs)
+        assertTrue(roundFive.weapons.contains(Weapon.MACHINE_GUN))
     }
 
     @Test
@@ -148,6 +189,346 @@ class RobertTest {
             FireRange.FAR,
             RobertRules.situationalRange(FireRange.FAR, false, false, 900, 1000, 100, 1000, 1)
         )
+    }
+
+    @Test
+    fun aGlueWallHeCannotBreakKeepsHimAway() {
+        // With a working sniper he closes in to break the wall.
+        assertEquals(
+            FireRange.CLOSE,
+            RobertRules.situationalRange(
+                stored = FireRange.MID,
+                playerWeaponDamaged = false,
+                playerGlueWallActive = true,
+                robertHp = 900,
+                robertMaxHp = 1000,
+                playerHp = 900,
+                playerMaxHp = 1000,
+                deceptionShotsLeft = 0,
+                robertHasSniper = true
+            )
+        )
+        // Without one he refuses to approach and stays at the far edge.
+        assertEquals(
+            FireRange.FAR,
+            RobertRules.situationalRange(
+                stored = FireRange.MID,
+                playerWeaponDamaged = false,
+                playerGlueWallActive = true,
+                robertHp = 900,
+                robertMaxHp = 1000,
+                playerHp = 900,
+                playerMaxHp = 1000,
+                deceptionShotsLeft = 0,
+                robertHasSniper = false
+            )
+        )
+        assertTrue(RobertRules.shouldAvoidGlueWall(playerGlueWallActive = true, robertHasSniper = false))
+        assertFalse(RobertRules.shouldAvoidGlueWall(playerGlueWallActive = true, robertHasSniper = true))
+        assertFalse(RobertRules.shouldAvoidGlueWall(playerGlueWallActive = false, robertHasSniper = false))
+        assertEquals(
+            FireRange.CLOSE,
+            RobertRules.fireRangeFor(FireRange.MID, false, true, robertHasSniper = true)
+        )
+        assertEquals(
+            FireRange.FAR,
+            RobertRules.fireRangeFor(FireRange.MID, false, true, robertHasSniper = false)
+        )
+        // A damaged sniper is no sniper at all.
+        assertTrue(
+            RobertRules.hasUsableSniper(listOf(Weapon.SNIPER, Weapon.MP40), sniperDamaged = false)
+        )
+        assertFalse(
+            RobertRules.hasUsableSniper(listOf(Weapon.SNIPER, Weapon.MP40), sniperDamaged = true)
+        )
+        assertFalse(RobertRules.hasUsableSniper(listOf(Weapon.MP40), sniperDamaged = false))
+    }
+
+    @Test
+    fun defenceThresholdsFollowTheRound() {
+        // Rounds one and two: below 60 percent of health, never below 100.
+        assertEquals(120, RobertRules.defenceThresholdHp(1, 200))
+        assertEquals(360, RobertRules.defenceThresholdHp(1, 600))
+        assertEquals(420, RobertRules.defenceThresholdHp(2, 700))
+        assertEquals(100, RobertRules.defenceThresholdHp(1, 100))
+        assertEquals(100, RobertRules.defenceThresholdHp(2, 50))
+        // Round three: below 200 health.
+        assertEquals(200, RobertRules.defenceThresholdHp(3, 900))
+        assertEquals(200, RobertRules.defenceThresholdHp(3, 150))
+        // Rounds four and five: below 300 health.
+        assertEquals(300, RobertRules.defenceThresholdHp(4, 1300))
+        assertEquals(300, RobertRules.defenceThresholdHp(5, 2600))
+        assertEquals(300, RobertRules.defenceThresholdHp(5, 100))
+
+        // The round aware threshold really drives the defence decision.
+        assertTrue(
+            RobertRules.shouldUseDefence(
+                robertHp = 250,
+                defenceArmed = true,
+                thresholdHp = RobertRules.defenceThresholdHp(4, 1300)
+            )
+        )
+        assertFalse(
+            RobertRules.shouldUseDefence(
+                robertHp = 350,
+                defenceArmed = true,
+                thresholdHp = RobertRules.defenceThresholdHp(4, 1300)
+            )
+        )
+    }
+
+    @Test
+    fun hePicksHisDefenceForTheSituation() {
+        // Close fire: a barrier first, the cover before the glue wall.
+        assertEquals(
+            DefenceItem.COVER,
+            RobertRules.chooseDefence(1, 1, 1, robertHp = 900, robertMaxHp = 1000, proximityPercent = 95f)
+        )
+        assertEquals(
+            DefenceItem.GLUE_WALL,
+            RobertRules.chooseDefence(1, 0, 1, robertHp = 900, robertMaxHp = 1000, proximityPercent = 95f)
+        )
+        // Below half health he heals.
+        assertEquals(
+            DefenceItem.MEDKIT,
+            RobertRules.chooseDefence(1, 1, 1, robertHp = 400, robertMaxHp = 1000, proximityPercent = 50f)
+        )
+        // Otherwise cover, glue wall and medkit in turn.
+        assertEquals(
+            DefenceItem.COVER,
+            RobertRules.chooseDefence(1, 1, 1, robertHp = 800, robertMaxHp = 1000, proximityPercent = 50f)
+        )
+        assertEquals(
+            DefenceItem.GLUE_WALL,
+            RobertRules.chooseDefence(1, 0, 1, robertHp = 800, robertMaxHp = 1000, proximityPercent = 50f)
+        )
+        assertEquals(
+            DefenceItem.MEDKIT,
+            RobertRules.chooseDefence(1, 0, 0, robertHp = 800, robertMaxHp = 1000, proximityPercent = 50f)
+        )
+        assertEquals(
+            null,
+            RobertRules.chooseDefence(0, 0, 0, robertHp = 800, robertMaxHp = 1000, proximityPercent = 50f)
+        )
+    }
+
+    @Test
+    fun continuousPlayerFireIsAnsweredWithContinuousFire() {
+        assertEquals(3, RobertRules.COUNTER_FIRE_BURST_SHOTS)
+        assertFalse(RobertRules.isContinuousPlayerFire(2))
+        assertTrue(RobertRules.isContinuousPlayerFire(3))
+        assertTrue(RobertRules.isContinuousPlayerFire(9))
+
+        // Your continuous fire makes him fire continuously back.
+        assertTrue(
+            RobertRules.shouldFireContinuously(
+                playerBurstShots = 4,
+                playerHealthDropping = false,
+                situation = RobertRules.CombatSituation.EVEN
+            )
+        )
+        // Your health dropping makes him keep firing even without a burst.
+        assertTrue(
+            RobertRules.shouldFireContinuously(
+                playerBurstShots = 0,
+                playerHealthDropping = true,
+                situation = RobertRules.CombatSituation.DISADVANTAGE
+            )
+        )
+        assertFalse(
+            RobertRules.shouldFireContinuously(
+                playerBurstShots = 1,
+                playerHealthDropping = false,
+                situation = RobertRules.CombatSituation.EVEN
+            )
+        )
+
+        // His own health dropping under sustained fire makes him retreat.
+        assertTrue(
+            RobertRules.shouldRetreatFromSustainedFire(
+                playerBurstShots = 4,
+                robertHealthDropping = true,
+                playerHealthDropping = false
+            )
+        )
+        assertFalse(
+            RobertRules.shouldRetreatFromSustainedFire(
+                playerBurstShots = 4,
+                robertHealthDropping = true,
+                playerHealthDropping = true
+            )
+        )
+        assertFalse(
+            RobertRules.shouldRetreatFromSustainedFire(
+                playerBurstShots = 1,
+                robertHealthDropping = true,
+                playerHealthDropping = false
+            )
+        )
+
+        // Continuous fire uses the tight answer window.
+        val random = Random(3)
+        val continuous = (1..60).map {
+            RobertRules.fireIntervalMs(
+                RobertRules.CombatSituation.EVEN,
+                fleeing = false,
+                random = random,
+                continuous = true
+            )
+        }
+        assertTrue(continuous.all { it in RobertRules.continuousFireWindow() })
+        assertTrue(continuous.max() < 700L)
+        // While fleeing he never answers continuously.
+        assertTrue(
+            (1..30).map {
+                RobertRules.fireIntervalMs(
+                    RobertRules.CombatSituation.EVEN,
+                    fleeing = true,
+                    random = random,
+                    continuous = true
+                )
+            }.all { it >= 2_200L }
+        )
+    }
+
+    @Test
+    fun heMovesInAllFourDirectionsAndTurnsBackAtWalls() {
+        val random = Random(11)
+        var strafed = 0
+        val directions = mutableSetOf<Int>()
+        repeat(1000) {
+            if (RobertRules.shouldStrafe(random)) strafed++
+            directions.add(RobertRules.strafeDirection(random))
+        }
+        // About one step in five is a sideways strafe, to both sides.
+        assertTrue("strafe chance", strafed in 120..290)
+        assertEquals(setOf(1, -1), directions)
+        assertEquals(0.20f, RobertRules.STRAFE_CHANCE, 0.0001f)
+        assertEquals(6f, RobertRules.STRAFE_STEP_M, 0.0001f)
+
+        // A wall makes him turn back for a few ticks instead of grinding.
+        assertEquals(3, RobertRules.TURN_BACK_TICKS)
+        assertTrue(RobertRules.TURN_BACK_STEP_M > 0f)
+    }
+
+    @Test
+    fun hisFastSpeedIsExactlyWhatThePlayerFastLevelReaches() {
+        for (round in 1..5) {
+            val fast = RobertRules.enemyFastSpeedMps(round)
+            assertEquals(
+                RobertRules.fleeStep(round) / (RobertRules.FLEE_TICK_MS / 1000f),
+                fast,
+                0.0001f
+            )
+            assertTrue("Round $round must sprint", fast > 10f)
+        }
+        assertTrue(
+            RobertRules.enemyFastSpeedMps(5) > RobertRules.enemyFastSpeedMps(1)
+        )
+    }
+
+    @Test
+    fun bombRulesBalanceTheEscapeRace() {
+        assertEquals(50f, BombRules.BLAST_RADIUS, 0.0001f)
+        assertEquals(50f, BombRules.SAFE_DISTANCE, 0.0001f)
+        assertEquals(listOf(15, 30, 40, 50, 60), BombRules.TIMER_SECONDS)
+        assertEquals(30, BombRules.timerSecondsAt(BombRules.DEFAULT_TIMER_INDEX))
+        assertEquals(60, BombRules.MAX_TIMER_SECONDS)
+        // A clean escape takes longer than an atom bomb flight and about as
+        // long as a grenade flight, which is what makes the race real.
+        val escape = BombRules.escapeSeconds()
+        assertTrue(escape > BombRules.flightMs(BombKind.ATOM) / 1000f)
+        assertTrue(escape < BombRules.flightMs(BombKind.GRENADE) / 1000f)
+        // The timer bomb always lets its target out.
+        assertTrue(escape < BombRules.flightMs(BombKind.TIMER, 15) / 1000f)
+        for (round in 1..5) {
+            assertTrue(BombRules.escapeStep(round) > 0f)
+            assertEquals(
+                BombRules.escapeSpeedMps(round) * (BombRules.BOMB_FLEE_TICK_MS / 1000f),
+                BombRules.escapeStep(round),
+                0.0001f
+            )
+        }
+        // Inside 50 metres the blast kills, outside it does not.
+        assertTrue(BombRules.blastKills(49.9f))
+        assertFalse(BombRules.blastKills(50f))
+        assertTrue(BombRules.timerBombKillsThrower(20f))
+        assertFalse(BombRules.timerBombKillsThrower(60f))
+        assertTrue(BombRules.mustEscape(30f))
+        assertFalse(BombRules.mustEscape(60f))
+        assertEquals(80f, BombRules.escapeDistance(30f), 0.0001f)
+    }
+
+    @Test
+    fun timerDurationsWrapAroundBothEnds() {
+        assertEquals(1, BombRules.DEFAULT_TIMER_INDEX)
+        assertEquals(30, BombRules.timerSecondsAt(1))
+        assertEquals(15, BombRules.timerSecondsAt(0))
+        assertEquals(60, BombRules.timerSecondsAt(4))
+        // Wrapping in both directions.
+        assertEquals(4, BombRules.stepTimerIndex(0, -1))
+        assertEquals(0, BombRules.stepTimerIndex(4, 1))
+        assertEquals(2, BombRules.stepTimerIndex(1, 1))
+        assertEquals(0, BombRules.stepTimerIndex(1, -1))
+        assertEquals(60, BombRules.timerSecondsAt(-1))
+        assertEquals(15, BombRules.timerSecondsAt(5))
+        assertEquals(3, BombRules.wrapTimerIndex(-2))
+    }
+
+    @Test
+    fun robertThrowsABombOnlyWhileClearlyLosing() {
+        fun throws(
+            round: Int = 3,
+            bombs: Int = 1,
+            robertHp: Int = 300,
+            playerHp: Int = 900,
+            shots: Int = 4,
+            bombInFlight: Boolean = false,
+            missileInFlight: Boolean = false
+        ) = BombRules.shouldEnemyThrow(
+            round = round,
+            bombsLeft = bombs,
+            robertHp = robertHp,
+            robertMaxHp = 1000,
+            playerHp = playerHp,
+            playerMaxHp = 1000,
+            robertShots = shots,
+            bombInFlight = bombInFlight,
+            missileInFlight = missileInFlight
+        )
+
+        assertTrue(throws())
+        assertTrue(throws(round = 4, bombs = 2, robertHp = 200, playerHp = 500))
+        // Never before round three, never without a bomb left.
+        assertFalse(throws(round = 2))
+        assertFalse(throws(round = 1))
+        assertFalse(throws(bombs = 0))
+        // A healthy or winning Robert keeps his bombs.
+        assertFalse(throws(robertHp = 900, playerHp = 300))
+        assertFalse(throws(robertHp = 300, playerHp = 300))
+        assertFalse(throws(robertHp = 600, playerHp = 900))
+        // Not before the fight is underway, and never twice at once.
+        assertFalse(throws(shots = 2))
+        assertFalse(throws(bombInFlight = true))
+        assertFalse(throws(missileInFlight = true))
+        assertFalse(throws(robertHp = 0))
+    }
+
+    @Test
+    fun heDeploysHisSingleAntiBombExplosivePerGame() {
+        assertTrue(BombRules.willIntercept(3, antiBombsLeft = 1, bombInFlight = true))
+        assertTrue(BombRules.willIntercept(5, antiBombsLeft = 1, bombInFlight = true))
+        // Once used, never again in the same game.
+        assertFalse(BombRules.willIntercept(4, antiBombsLeft = 0, bombInFlight = true))
+        // No bomb in the air, no explosive spent.
+        assertFalse(BombRules.willIntercept(4, antiBombsLeft = 1, bombInFlight = false))
+        // Bombs do not exist before round three.
+        assertFalse(BombRules.willIntercept(2, antiBombsLeft = 1, bombInFlight = true))
+        assertFalse(BombRules.bombsUnlocked(2))
+        assertTrue(BombRules.bombsUnlocked(3))
+        assertEquals(3, BombRules.FIRST_BOMB_ROUND)
+        assertEquals(0, BombRules.antiBombsForRound(2))
+        assertEquals(1, BombRules.antiBombsForRound(5))
     }
 
     @Test

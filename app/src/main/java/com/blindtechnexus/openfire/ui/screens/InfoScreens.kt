@@ -442,10 +442,57 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "Version 2.1 (Current)",
+                text = "Version 2.2 (Current)",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = WarnBright
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            val v22Notes = listOf(
+                "Running speeds: swipe right with three fingers for one step faster and left for one step slower. The three levels are slow, normal (the default) and fast, and the fast level matches Robert's own fast fleeing speed for the round exactly. Your running sound now follows the level too: louder and quicker when fast, quieter and dragged when slow.",
+                "A real 100 metre battlefield with four boundaries. Running into one stops you completely, plays the wall impact sound and speaks Wall; nobody can leave the perimeter. Robert detects the same walls, turns back towards the open middle and then fights on.",
+                "The center portion of the battle screen is split in two halves: hold the left half to run left and the right half to run right, so all four directions are reachable. Your own and Robert's real positions are shown and spoken in the status.",
+                "Damage table: one single table now drives every hit, in percent of maximum health. Knife 0/5/8/10, shotgun 0/5/8/12, assault rifle 0/7/10/14, pistol 0/7/11/15, sniper rifle 0/8/12/16, sword 0/8/12/16, AWM 10/12/18/24, MP40 0/4/6/8 and machine gun 0/5/8/11. No normal weapon takes more than 40 percent in one hit, so a burst can no longer erase an enemy while you lose two percent.",
+                "The AWM is the long-range rifle: inside the 20 to 40 percent band, where everything else misses, it still lands for 10 percent of maximum health and never less than 10 health.",
+                "New weapons by round: MP40 (900) and AWM (1400) unlock and are issued free in round two, the grenade (700) is issued free in round three while the atom bomb (2400) and timer bomb (2000) are shop weapons, and the machine gun (1900) unlocks in round four and is never a reward. Robert receives the MP40 in round two, the AWM and his bombs in round three, and the machine gun in round four.",
+                "Submachine guns: hold the up-swipe and the MP40 fires one bullet every half second for up to four seconds and the machine gun one bullet every 0.4 seconds for up to five, with the gun sound looped for the whole burst. Lifting the finger stops the bullets and the sound together, at any moment. Robert answers a closing MP40 with his own MP40 automatically.",
+                "Bombs: thrown at a fixed destination and only destructive inside 50 metres. A target with no anti-bomb explosive sprints for the safety line, so the atom bomb usually catches him, the grenade is a photo finish decided by walls, and a timer bomb always lets him out.",
+                "Timer bomb: swipe up speaks Select your timer, swipe right or left walks through 15, 30, 40, 50 and 60 seconds and a tap throws it. The timer sound loops for the whole countdown, then the explosion plays. Stay at least 50 metres away or both fighters are destroyed and you lose. The bomb destination is shown and spoken next to the enemy health.",
+                "Anti-bomb explosive defence (2600 coins, after round two): deploy it while an enemy bomb is in the air and it destroys that bomb, with the explosion still playing. Robert carries one per game from round three and deploys it automatically the moment he hears your bomb, never twice in the same game.",
+                "Every explosion is now heard in full: a missile or bomb impact mixes the hit sound with the explosion and the battle only ends after the explosion has finished. From round four an intercepted missile plays its explosion in the air too, and round three Robert has no anti-missile at all, so he simply sprints until the missile kills him.",
+                "Progression and rewards: five wins complete a level and pay one of five random bundles (two covers; three medikits; one medkit and two covers; one gloo wall and two medikits; one gloo wall and two covers, never more than one gloo wall), while a completed round pays two gloo walls, two medikits and three covers, with level-complete and round-complete sounds.",
+                "Robert fights back properly: your continuous fire makes him fire continuously, his own health dropping makes him retreat, and your health dropping makes him press on. He strafes sideways, uses his barriers and medkits situationally, and his defence threshold is below 60 percent (never under 100 health) in rounds one and two, below 200 health in round three and below 300 health in rounds four and five.",
+                "Gloo wall tactics: with no usable sniper Robert flees and refuses to approach until your gloo wall drops; with a working sniper he closes in and fires continuously, and he raises a cover first when he has one.",
+                "The gloo wall and the cover are mutually exclusive: activating one while the other is up consumes nothing and simply tells you which one is already activated.",
+                "Shop: an Enable / Disable button under every weapon row, below buy and remove. A disabled weapon is never issued at the start of a battle and is skipped by the left and right weapon swipes until you enable it again.",
+                "Balanced prices: every weapon 200 coins cheaper, every defence 200 coins cheaper and every extension 50 coins cheaper. Knife 300, pistol 550, sword 750, MP40 900, sniper rifle 1000, AWM 1400, machine gun 1900, grenade 700, timer bomb 2000, atom bomb 2400, missile 3300, missile power 1600, medikit 300, cover 450, gloo wall 650, anti-missile 2800, anti-bomb 2600 and extensions 100, 190, 250 and 250.",
+                "Menu protection now costs 2 percent of maximum health per hit and expires by itself after six seconds, so browsing the quick menu is safe but can never become invulnerability.",
+                "Sound engine rebuilt for smooth playback on every device: long sounds such as the missile, bombs, timer countdown and the progression stings are streamed and prepared in the background instead of loaded into the small sound pool, refused streams are retried automatically, and every projectile sound stops at once on a screen change.",
+                "The complete user guide was rewritten in English, Hindi and Nepali for the whole new game structure."
+            )
+            v22Notes.forEach { note ->
+                Text(
+                    text = "• $note",
+                    fontSize = 14.sp,
+                    color = Color.White,
+                    lineHeight = 20.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(CardBorder)
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = "Version 2.1",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextAccent
             )
             Spacer(modifier = Modifier.height(8.dp))
             val v21Notes = listOf(
@@ -645,6 +692,14 @@ fun ResultScreen(viewModel: GameViewModel) {
         } else if (result.levelUp) {
             Spacer(modifier = Modifier.height(12.dp))
             TipBox(text = "${viewModel.t("levelUp")} ${viewModel.t("newLevel")}: ${result.level}")
+        }
+
+        // The promotion reward: two gloo walls, two medikits and three covers
+        // for a completed round, or one of the five random bundles for a
+        // completed level (never more than one gloo wall).
+        if (result.hasReward && result.rewardText.isNotBlank()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            TipBox(text = "${viewModel.t("rewardReceived")}: ${result.rewardText}")
         }
 
         Spacer(modifier = Modifier.height(12.dp))

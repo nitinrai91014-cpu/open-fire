@@ -130,15 +130,33 @@ fun ShopScreen(viewModel: GameViewModel) {
                         "${viewModel.t("closeRangePower")}: ${weapon.closeRangePowerPercent}%. " +
                         "${viewModel.t("ammo")}: ${weapon.magazine}."
                 }
+                val weaponOn = inventory.weaponEnabled(weapon)
                 ShopItemRow(
                     title = "${viewModel.t(weapon.nameKey)}, ${weapon.price} ${viewModel.t("coins")}.",
-                    detail = detail,
+                    detail = detail + if (owned) {
+                        " ${viewModel.t("weaponState")}: " +
+                            if (weaponOn) {
+                                viewModel.t("enabledState")
+                            } else {
+                                viewModel.t("disabledState")
+                            } + "."
+                    } else {
+                        ""
+                    },
                     owned = owned,
                     buyLabel = viewModel.t("buy"),
                     removeLabel = viewModel.t("remove"),
                     onBuy = { viewModel.buyWeapon(weapon.id) },
                     onRemove = { pendingWeapon = weapon },
-                    testTagPrefix = "shop_weapon_${weapon.id}"
+                    testTagPrefix = "shop_weapon_${weapon.id}",
+                    // The Enable / Disable switch below buy and remove: a
+                    // disabled weapon is skipped by the game screen swipes.
+                    toggleLabel = if (weaponOn) {
+                        viewModel.t("disableWeapon")
+                    } else {
+                        viewModel.t("enableWeapon")
+                    },
+                    onToggle = { viewModel.toggleWeaponEnabled(weapon.id) }
                 )
                 Spacer(modifier = Modifier.height(10.dp))
             }
@@ -610,7 +628,10 @@ private fun ShopItemRow(
     removeLabel: String,
     onBuy: () -> Unit,
     onRemove: () -> Unit,
-    testTagPrefix: String
+    testTagPrefix: String,
+    /** Optional Enable / Disable switch shown under an owned item. */
+    toggleLabel: String? = null,
+    onToggle: (() -> Unit)? = null
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
@@ -635,6 +656,17 @@ private fun ShopItemRow(
                     type = ButtonType.DANGER,
                     testTag = "${testTagPrefix}_remove"
                 )
+            }
+            if (toggleLabel != null && onToggle != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    GameButton(
+                        text = toggleLabel,
+                        onClick = onToggle,
+                        type = ButtonType.WARN,
+                        testTag = "${testTagPrefix}_toggle"
+                    )
+                }
             }
         } else {
             GameButton(

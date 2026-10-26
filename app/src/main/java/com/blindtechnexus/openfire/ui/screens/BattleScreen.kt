@@ -39,8 +39,13 @@ import kotlin.math.roundToInt
 
 /**
  * Gesture-only battle screen split into three equal portions:
- * top = hold to run forward, center = tap to activate the quick menu,
- * bottom = hold to retreat. All one- and two-finger swipes remain available.
+ * top = hold to run forward, bottom = hold to retreat, and the center portion
+ * is split in two halves (left = run left, right = run right) with a tap
+ * activating the quick menu or confirming a timer bomb duration.
+ *
+ * One-finger swipes fire, reload and switch weapons, two-finger swipes move
+ * the menu and read the status, and three-finger swipes step the running
+ * speed slower or faster.
  */
 @Composable
 fun BattleScreen(viewModel: GameViewModel) {
@@ -72,6 +77,7 @@ fun BattleScreen(viewModel: GameViewModel) {
         BattleMenuItem.COVER -> inventory.covers
         BattleMenuItem.GLUE_WALL -> inventory.glueWalls
         BattleMenuItem.ANTI_MISSILE -> inventory.antiMissiles
+        BattleMenuItem.ANTI_BOMB -> inventory.antiBombs
         else -> 0
     }
     val menuLabel = when (menuItem) {
@@ -79,14 +85,26 @@ fun BattleScreen(viewModel: GameViewModel) {
         BattleMenuItem.COVER -> viewModel.t("cover")
         BattleMenuItem.GLUE_WALL -> viewModel.t("glooWall")
         BattleMenuItem.ANTI_MISSILE -> viewModel.t("antiMissile")
+        BattleMenuItem.ANTI_BOMB -> viewModel.t("antiBomb")
         BattleMenuItem.EXIT -> viewModel.t("exitGame")
         BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
     }
     val ammoStatus = when {
         weapon.missileLauncher ->
             "${viewModel.t("extMissilePowers")}: ${inventory.missilePowers}"
+        weapon.bomb -> "${viewModel.t("bombCharges")}: ${gameState.activeAmmo}"
         weapon.needsReload -> "${viewModel.t("ammo")}: ${gameState.activeAmmo}"
         else -> "${viewModel.t("ammo")}: ${viewModel.t("noAmmoNeeded")}"
+    }
+    // The bomb destination is shown next to the enemy health while a bomb
+    // counts down, together with the distance both fighters still have to it.
+    val bombStatus = if (gameState.bombInFlight) {
+        "${viewModel.t("bombDestination")}: " +
+            "${viewModel.t("devil")} ${gameState.robertDistanceFromBomb.roundToInt()} " +
+            "${viewModel.t("meters")}, ${viewModel.t("you")} " +
+            "${gameState.playerDistanceFromBomb.roundToInt()} ${viewModel.t("meters")}"
+    } else {
+        null
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -140,6 +158,24 @@ fun BattleScreen(viewModel: GameViewModel) {
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     color = zoneColor,
+                    textAlign = TextAlign.Center
+                )
+                if (bombStatus != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = bombStatus,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = WarnBright,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "${viewModel.t("enemyPosition")}: ${gameState.robertX.roundToInt()}, " +
+                        "${gameState.robertY.roundToInt()} ${viewModel.t("meters")}",
+                    fontSize = 12.sp,
+                    color = TextMuted,
                     textAlign = TextAlign.Center
                 )
             }
@@ -196,6 +232,30 @@ fun BattleScreen(viewModel: GameViewModel) {
                     color = TextMuted,
                     textAlign = TextAlign.Center
                 )
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = "${viewModel.t("runSpeed")}: " +
+                        viewModel.t(gameState.runSpeedLevel.nameKey) +
+                        "   |   ${viewModel.t("yourPosition")}: " +
+                        "${gameState.playerX.roundToInt()}, " +
+                        "${gameState.playerY.roundToInt()} ${viewModel.t("meters")}",
+                    fontSize = 12.sp,
+                    color = TextAccent,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = viewModel.t("centerMoveHint"),
+                    fontSize = 12.sp,
+                    color = TextMuted,
+                    textAlign = TextAlign.Center
+                )
+                if (gameState.timerSelectActive) {
+                    Spacer(modifier = Modifier.height(5.dp))
+                    AlertBox(
+                        text = "${viewModel.t("selectTimer")}: ${gameState.timerSeconds} " +
+                            viewModel.t("seconds") + ". " + viewModel.t("timerHowTo")
+                    )
+                }
                 if (gameState.missileInFlight) {
                     Spacer(modifier = Modifier.height(5.dp))
                     AlertBox(
@@ -217,6 +277,14 @@ fun BattleScreen(viewModel: GameViewModel) {
                             viewModel.t("itemMissingTail")
                     )
                 }
+                Spacer(modifier = Modifier.height(5.dp))
+                Text(
+                    text = "◀ ${viewModel.t("moveLeft")}   |   ${viewModel.t("moveRight")} ▶",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF9FD4FF),
+                    textAlign = TextAlign.Center
+                )
                 Spacer(modifier = Modifier.height(7.dp))
                 LogBox(text = gameState.log)
                 Spacer(modifier = Modifier.height(5.dp))
@@ -248,6 +316,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                         "${viewModel.t("glooWall")}: ${inventory.glueWalls} | " +
                         "${viewModel.t("cover")}: ${inventory.covers} | " +
                         "${viewModel.t("antiMissile")}: ${inventory.antiMissiles} | " +
+                        "${viewModel.t("antiBomb")}: ${inventory.antiBombs} | " +
                         "${viewModel.t("extMissilePowers")}: ${inventory.missilePowers}",
                     fontSize = 14.sp,
                     color = TextAccent,
@@ -261,6 +330,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                             BattleMenuItem.COVER -> viewModel.t("cover")
                             BattleMenuItem.GLUE_WALL -> viewModel.t("glooWall")
                             BattleMenuItem.ANTI_MISSILE -> viewModel.t("antiMissile")
+                            BattleMenuItem.ANTI_BOMB -> viewModel.t("antiBomb")
                             BattleMenuItem.EXIT -> viewModel.t("exitGame")
                             BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
                         }

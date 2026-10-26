@@ -7,32 +7,33 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Locks 10 wins per level, five levels per round and five rounds per match. */
+/** Locks five wins per level, five levels per round and five rounds per match. */
 class ProgressionTest {
 
     @Test
-    fun tenWinsPromoteExactlyOneLevel() {
+    fun fiveWinsPromoteExactlyOneLevel() {
+        assertEquals(5, Progression.WINS_PER_LEVEL)
         var stats = GameStats(wins = 0, level = 1, round = 1, levelWins = 0)
-        repeat(9) { index ->
+        repeat(4) { index ->
             val promotion = Progression.applyWin(stats)
             stats = promotion.stats.copy(wins = index + 1)
-            assertFalse("Level must not change before the 10th win", promotion.leveledUp)
+            assertFalse("Level must not change before the fifth win", promotion.leveledUp)
             assertEquals(1, stats.level)
             assertEquals(index + 1, stats.levelWins)
         }
         assertEquals(1, stats.needWinsForNext)
 
-        val tenth = Progression.applyWin(stats.copy(wins = 10))
-        assertEquals(2, tenth.stats.level)
-        assertEquals(0, tenth.stats.levelWins)
-        assertEquals(1, tenth.stats.round)
-        assertTrue(tenth.leveledUp)
-        assertFalse(tenth.roundCompleted)
+        val fifth = Progression.applyWin(stats.copy(wins = 5))
+        assertEquals(2, fifth.stats.level)
+        assertEquals(0, fifth.stats.levelWins)
+        assertEquals(1, fifth.stats.round)
+        assertTrue(fifth.leveledUp)
+        assertFalse(fifth.roundCompleted)
     }
 
     @Test
     fun fiveLevelsCompleteExactlyOneRound() {
-        val stats = GameStats(level = 5, round = 2, levelWins = 9, completedRounds = 1)
+        val stats = GameStats(level = 5, round = 2, levelWins = 4, completedRounds = 1)
         val result = Progression.applyWin(stats)
         assertTrue(result.leveledUp)
         assertTrue(result.roundCompleted)
@@ -46,7 +47,7 @@ class ProgressionTest {
 
     @Test
     fun fifthRoundCompletionWinsMatchWithoutResettingLifetimeUnlocks() {
-        val stats = GameStats(level = 5, round = 5, levelWins = 9, completedRounds = 4)
+        val stats = GameStats(level = 5, round = 5, levelWins = 4, completedRounds = 4)
         val result = Progression.applyWin(stats)
         assertTrue(result.leveledUp)
         assertTrue(result.roundCompleted)
@@ -68,7 +69,7 @@ class ProgressionTest {
         assertEquals(0, cleared.completedRounds)
         assertEquals(1, cleared.level)
         assertEquals(1, cleared.round)
-        assertEquals(10, cleared.needWinsForNext)
+        assertEquals(5, cleared.needWinsForNext)
     }
 
     @Test
@@ -90,7 +91,7 @@ class ProgressionTest {
         assertEquals(0, fixed.coins)
         assertEquals(1, fixed.round)
         assertEquals(5, fixed.level)
-        assertEquals(7, fixed.levelWins)
+        assertEquals(2, fixed.levelWins)
         assertEquals(0, fixed.completedRounds)
     }
 

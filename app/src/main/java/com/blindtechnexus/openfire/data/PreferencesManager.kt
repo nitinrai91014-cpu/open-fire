@@ -30,7 +30,7 @@ class PreferencesManager(context: Context) {
         const val FILE_SETTINGS = "settings"
         const val FILE_PROFILE = "profile"
         const val FILE_INVENTORY = "inventory"
-        const val SCHEMA_VERSION = 4
+        const val SCHEMA_VERSION = 5
 
         const val KEY_SCHEMA = "schema"
 
@@ -196,15 +196,25 @@ class PreferencesManager(context: Context) {
             } ?: false
         val missilePowers = map["missilePowers"]?.toIntOrNull()?.coerceAtLeast(0)
             ?: if (legacyPowerOwned) 1 else 0
+        // Weapons switched off with the shop's Enable / Disable button. An
+        // unknown or removed id is simply dropped.
+        val disabledWeapons = map["disabledWeapons"]
+            ?.split(',')
+            ?.mapNotNull { Weapon.fromId(it.trim()) }
+            ?.map { it.id }
+            ?.toSet()
+            ?: emptySet()
         return Inventory(
             weaponIds = migratedWeaponIds + Weapon.defaults().map { it.id },
             medikits = map["medikits"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             glueWalls = map["glueWalls"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             covers = map["covers"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             antiMissiles = map["antiMissiles"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
+            antiBombs = map["antiBombs"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             extensions = extensions,
             lastWeaponId = Weapon.fromId(map["lastWeapon"])?.id ?: Weapon.SHORT_GUN.id,
-            missilePowers = missilePowers
+            missilePowers = missilePowers,
+            disabledWeapons = disabledWeapons
         )
     }
 
@@ -216,8 +226,10 @@ class PreferencesManager(context: Context) {
             "glueWalls" to inventory.glueWalls.toString(),
             "covers" to inventory.covers.toString(),
             "antiMissiles" to inventory.antiMissiles.toString(),
+            "antiBombs" to inventory.antiBombs.toString(),
             "lastWeapon" to inventory.lastWeaponId,
-            "missilePowers" to inventory.missilePowers.toString()
+            "missilePowers" to inventory.missilePowers.toString(),
+            "disabledWeapons" to inventory.disabledWeapons.joinToString(",")
         )
         for (extension in Extension.entries) {
             values["ext.${extension.id}"] = inventory.extensionState(extension).name

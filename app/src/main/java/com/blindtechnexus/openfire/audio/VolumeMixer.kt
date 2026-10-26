@@ -115,6 +115,29 @@ object VolumeMixer {
         !speedMps.isNaN() && speedMps >= FAST_RUN_SPEED_MPS
 
     /**
+     * Loudness of a running loop for a speed-level gain (slow, normal or fast
+     * running). The gain is clamped so a slow run never disappears completely
+     * and a fast run can never exceed the level the user chose.
+     */
+    fun runVolumeGain(speedGain: Float): Float =
+        if (speedGain.isNaN()) 1f else speedGain.coerceIn(MIN_RUN_GAIN, 1f)
+
+    /** Quietest a running loop may ever become. */
+    const val MIN_RUN_GAIN = 0.45f
+
+    /**
+     * Playback rate for an explicit running-speed multiplier, used when the
+     * speed is chosen with the three-finger gesture instead of being derived
+     * from a distance. One is the natural walking rate.
+     */
+    fun runRate(speedMultiplier: Float): Float =
+        if (speedMultiplier.isNaN() || speedMultiplier <= 0f) {
+            1f
+        } else {
+            (0.6f + speedMultiplier * 0.4f).coerceIn(0.6f, 1.9f)
+        }
+
+    /**
      * How often the live footstep volume is refreshed: every half second
      * while moving, and every quarter second while running fast, so the
      * approach and retreat swells always track the real distance.

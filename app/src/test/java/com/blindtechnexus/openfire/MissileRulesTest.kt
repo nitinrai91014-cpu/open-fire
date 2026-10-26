@@ -1,7 +1,10 @@
 package com.blindtechnexus.openfire
 
+import com.blindtechnexus.openfire.model.BombKind
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.MissileRules
+import com.blindtechnexus.openfire.model.SoundDurations
+import com.blindtechnexus.openfire.model.Weapon
 import com.blindtechnexus.openfire.model.Progression
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -13,12 +16,26 @@ class MissileRulesTest {
 
     @Test
     fun pricesAndUnlockMatchTheRequest() {
-        assertEquals(3500, MissileRules.MISSILE_PRICE)
-        assertEquals(1800, MissileRules.MISSILE_POWER_PRICE)
-        assertEquals(3000, MissileRules.ANTI_MISSILE_PRICE)
+        // Every missile price dropped by 200 coins.
+        assertEquals(3300, MissileRules.MISSILE_PRICE)
+        assertEquals(1600, MissileRules.MISSILE_POWER_PRICE)
+        assertEquals(2800, MissileRules.ANTI_MISSILE_PRICE)
         assertEquals(2, Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS)
+        assertEquals(3300, Weapon.MISSILE.price)
         // The flight sound is about fourteen seconds long.
         assertTrue(MissileRules.SOUND_DURATION_MS in 13_000L..16_000L)
+        assertEquals(SoundDurations.MISSILE_MS, MissileRules.SOUND_DURATION_MS)
+    }
+
+    @Test
+    fun theBattleEndsOnlyAfterTheExplosionFinished() {
+        // The impact mixes the hit sound with explosion-sound.mp3 and the
+        // result is announced only once that sound has really run out.
+        assertEquals(SoundDurations.EXPLOSION_MS, MissileRules.EXPLOSION_MS)
+        assertTrue(MissileRules.EXPLOSION_MS in 5_000L..8_000L)
+        assertEquals("explosion", BombKind.GRENADE.blastSoundKey)
+        assertEquals("explosion", BombKind.ATOM.blastSoundKey)
+        assertEquals("explosion", BombKind.TIMER.blastSoundKey)
     }
 
     @Test
