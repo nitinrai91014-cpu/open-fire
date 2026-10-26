@@ -1195,7 +1195,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     val base = if (strafed.blocked) now else strafed.state
                     val wanted = max(target, base.distance - speed * 0.4f)
                     val placed = base.placeRobertAt(wanted)
-                    blocked = placed.blocked
+                    blocked = placed.blockedByWall
                     if (blocked) base else placed.state
                 }
                 if (blocked) {
