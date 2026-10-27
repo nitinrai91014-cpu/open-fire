@@ -24,10 +24,10 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -42,7 +42,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
 
       - name: Check sound assets and translations
         shell: bash
@@ -106,7 +106,8 @@ jobs:
         run: |
           set -o pipefail
           # Configure init script to build unsigned release APKs cleanly in CI environment
-          cat << 'EOF' > disable-signing.gradle
+          init_script="$RUNNER_TEMP/disable-signing.gradle"
+          cat << 'EOF' > "$init_script"
           allprojects {
               afterEvaluate { project ->
                   if (project.hasProperty('android')) {
@@ -115,7 +116,7 @@ jobs:
               }
           }
           EOF
-          ./gradlew --no-daemon --stacktrace --console=plain -I disable-signing.gradle :app:assembleRelease 2>&1 | tee "$RUNNER_TEMP/gradle-release.log"
+          ./gradlew --no-daemon --stacktrace --console=plain -I "$init_script" :app:assembleRelease 2>&1 | tee "$RUNNER_TEMP/gradle-release.log"
 
       - name: Surface release build failure details
         if: failure()
@@ -145,13 +146,14 @@ jobs:
             echo "::error file=.github/workflows/android.yml,line=90,title=Gradle release build failed::$details"
           fi
 
-      - name: Verify release APKs are present and unsigned
+      - name: Verify release APKs and build standard release ZIP
         shell: bash
         run: |
           set -euo pipefail
 
           output_dir="app/build/outputs/apk/release"
           artifact_dir="release-artifacts"
+          archive_zip="$artifact_dir/open-fire-release-apks.zip"
 
           if [[ ! -d "$output_dir" ]]; then
             echo "::error::Gradle did not create the release APK output directory: $output_dir"
@@ -177,8 +179,17 @@ jobs:
           fi
           apksigner="${apksigners[${#apksigners[@]}-1]}"
 
+          mapfile -t zipaligns < <(find "$sdk_root/build-tools" -type f -name zipalign -print | sort -V)
+          if [[ ${#zipaligns[@]} -eq 0 ]]; then
+            echo "::error::zipalign was not found in the Android SDK build-tools"
+            exit 1
+          fi
+          zipalign="${zipaligns[${#zipaligns[@]}-1]}"
+
           # Prepare flat artifact directory so the archive contains APKs directly without nested subdirectories
+          rm -rf "$artifact_dir"
           mkdir -p "$artifact_dir"
+          prepared_apks=()
           for source_apk in "${apks[@]}"; do
             filename="$(basename "$source_apk")"
             if [[ "$filename" != *-unsigned.apk ]]; then
@@ -199,8 +210,28 @@ jobs:
             destination_name="${filename/app-/open-fire-}"
             destination_apk="$artifact_dir/$destination_name"
             cp "$source_apk" "$destination_apk"
+            prepared_apks+=("$destination_apk")
             echo "Prepared unsigned APK: $destination_apk"
           done
+
+          # Normalize/align APKs (eliminating any GPB bit-3 Data Descriptors or gaps) and build a
+          # standard seekable Info-ZIP archive so extractors never hit 'W: invalid stored block lengths'
+          python3 .github/scripts/prepare_release_archive.py build \
+            --zipalign "$zipalign" \
+            --output "$archive_zip" \
+            "${prepared_apks[@]}"
+
+          for prepared_apk in "${prepared_apks[@]}"; do
+            unzip -tq "$prepared_apk"
+            "$zipalign" -c 4 "$prepared_apk"
+            if "$apksigner" verify "$prepared_apk" >/dev/null 2>&1; then
+              echo "::error::Expected $prepared_apk to remain unsigned after alignment"
+              exit 1
+            fi
+          done
+
+          unzip -tq "$archive_zip"
+          java .github/scripts/VerifyZipStreams.java "$archive_zip" "${prepared_apks[@]}"
 
       - name: Publish release APK summary
         shell: bash
@@ -210,22 +241,49 @@ jobs:
             echo
             echo 'Application ID: `com.blindtechnexus.openfire`'
             echo
-            echo 'All APKs are unsigned; sign them with your distributor key before installation or publishing.'
+            echo 'All APKs are unsigned and 4-byte `zipalign`ed; sign them with your distributor key before installation or publishing.'
             echo
-            echo '| APK File | Size | SHA-256 Checksum |'
+            echo '| File | Size | SHA-256 Checksum |'
             echo '| --- | --- | --- |'
-            for apk in release-artifacts/*.apk; do
-              filename="$(basename "$apk")"
-              size="$(du -h "$apk" | cut -f1)"
-              sha="$(sha256sum "$apk" | cut -d' ' -f1)"
+            for file in release-artifacts/open-fire-release-apks.zip release-artifacts/*.apk; do
+              filename="$(basename "$file")"
+              size="$(du -h "$file" | cut -f1)"
+              sha="$(sha256sum "$file" | cut -d' ' -f1)"
               printf '| `%s` | %s | `%s` |\n' "$filename" "$size" "$sha"
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release APKs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: open-fire-release-apks
-          path: release-artifacts/*.apk
+          name: open-fire-release-apks.zip
+          path: release-artifacts/open-fire-release-apks.zip
+          archive: false
           if-no-files-found: error
           retention-days: 30
+
+      - name: Download uploaded release ZIP for verification
+        uses: actions/download-artifact@v8
+        with:
+          name: open-fire-release-apks.zip
+          path: verified-download
+          skip-decompress: true
+          digest-mismatch: error
+
+      - name: Verify downloaded release ZIP integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t downloaded_files < <(find verified-download -maxdepth 1 -type f | sort)
+          if [[ ${#downloaded_files[@]} -ne 1 ]]; then
+            echo "::error::Expected exactly 1 downloaded artifact file, found ${#downloaded_files[@]}"
+            exit 1
+          fi
+          downloaded_zip="${downloaded_files[0]}"
+          expected_args=()
+          for apk in release-artifacts/*.apk; do
+            expected_args+=(--expected-apk "$apk")
+          done
+          unzip -tq "$downloaded_zip"
+          python3 .github/scripts/prepare_release_archive.py verify "$downloaded_zip" "${expected_args[@]}"
+          java .github/scripts/VerifyZipStreams.java "$downloaded_zip"
