@@ -5,12 +5,14 @@ import androidx.test.core.app.ApplicationProvider
 import com.blindtechnexus.openfire.data.PreferencesManager
 import com.blindtechnexus.openfire.data.Strings
 import com.blindtechnexus.openfire.model.Combat
+import com.blindtechnexus.openfire.model.DamageTable
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.ExtensionState
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.GameStats
+import com.blindtechnexus.openfire.model.HitZone
 import com.blindtechnexus.openfire.model.Inventory
 import com.blindtechnexus.openfire.model.Progression
 import com.blindtechnexus.openfire.model.Weapon
@@ -39,7 +41,7 @@ class ExampleRobolectricTest {
         assertEquals("ओपन फायर", Strings.get("title", "hi"))
         assertEquals("ओपन फायर", Strings.get("title", "ne"))
 
-        assertEquals("Version 2.1", Strings.get("version", "en"))
+        assertEquals("Version 2.2", Strings.get("version", "en"))
         assertEquals("Changelog", Strings.get("changelog", "en"))
         assertEquals("Join Telegram Channel", Strings.get("joinTelegram", "en"))
         assertEquals("Contact on WhatsApp", Strings.get("contactWhatsApp", "en"))
@@ -63,8 +65,14 @@ class ExampleRobolectricTest {
         val pistol = Weapon.entries.find { it.id == "pistol" }
         org.junit.Assert.assertNotNull(pistol)
         assertEquals(6, pistol?.magazine)
-        assertEquals(14, pistol?.powerPercent)
+        // The pistol power comes from the shared damage table: light 7 percent
+        // and heavy 15 percent of the victim's maximum health.
+        assertEquals(7, pistol?.powerPercent)
         assertEquals(15, pistol?.closeRangePowerPercent)
+        assertEquals(0, DamageTable.percentOf(pistol!!, HitZone.MISS))
+        assertEquals(7, DamageTable.percentOf(pistol, HitZone.LIGHT))
+        assertEquals(11, DamageTable.percentOf(pistol, HitZone.STRONG))
+        assertEquals(15, DamageTable.percentOf(pistol, HitZone.HEAVY))
     }
 
     @Test
@@ -103,7 +111,8 @@ class ExampleRobolectricTest {
         assertEquals(240, loadedStats.coins)
         assertEquals(4, loadedStats.levelWins)
         assertEquals(2, loadedStats.completedRounds)
-        assertEquals(6, loadedStats.needWinsForNext)
+        // Five wins complete a level, so four wins leave exactly one to go.
+        assertEquals(1, loadedStats.needWinsForNext)
     }
 
     @Test
@@ -126,7 +135,9 @@ class ExampleRobolectricTest {
                 Extension.AUTO_COVER.id to ExtensionState.DISABLED
             ),
             lastWeaponId = Weapon.SWORD.id,
-            missilePowers = 3
+            missilePowers = 3,
+            antiBombs = 2,
+            disabledWeapons = setOf(Weapon.SWORD.id)
         )
         prefs.saveInventory(inventory)
 
@@ -143,6 +154,16 @@ class ExampleRobolectricTest {
         assertTrue(loaded.ownsWeapon(Weapon.MISSILE))
         assertEquals(3, loaded.missilePowers)
         assertEquals(4, loaded.ownedWeapons().size)
+        // The anti-bomb explosive stack and the shop's Enable / Disable switch
+        // both survive a restart.
+        assertEquals(2, loaded.antiBombs)
+        assertFalse(loaded.weaponEnabled(Weapon.SWORD))
+        assertTrue(loaded.weaponEnabled(Weapon.SHORT_GUN))
+        assertEquals(setOf(Weapon.SWORD.id), loaded.disabledWeapons)
+        // A disabled weapon is skipped by the battle swipes and is never
+        // handed out at the start of a fight.
+        assertFalse(loaded.battleWeapons(1).contains(Weapon.SWORD))
+        assertTrue(loaded.battleWeapons(1).contains(Weapon.SHORT_GUN))
     }
 
     @Test
@@ -162,8 +183,15 @@ class ExampleRobolectricTest {
             )
         )
         prefs.saveInventory(
-            Inventory(medikits = 4, glueWalls = 3, covers = 2, antiMissiles = 1).copy(
-                lastWeaponId = Weapon.SWORD.id
+            Inventory(
+                medikits = 4,
+                glueWalls = 3,
+                covers = 2,
+                antiMissiles = 1,
+                antiBombs = 2
+            ).copy(
+                lastWeaponId = Weapon.SWORD.id,
+                disabledWeapons = setOf(Weapon.PISTOL.id)
             )
         )
         prefs.grantDefence(DefenceItem.MEDKIT, 2)
@@ -184,6 +212,8 @@ class ExampleRobolectricTest {
         assertEquals(0, inventory.glueWalls)
         assertEquals(0, inventory.covers)
         assertEquals(0, inventory.antiMissiles)
+        assertEquals(0, inventory.antiBombs)
+        assertTrue("Wiping the profile re-enables every weapon", inventory.disabledWeapons.isEmpty())
         assertFalse(inventory.extensionOwned(Extension.AUTO_RELOAD))
     }
 

@@ -12,9 +12,15 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import com.blindtechnexus.openfire.model.Combat
+import com.blindtechnexus.openfire.model.RunPressure
+import com.blindtechnexus.openfire.model.SoundDurations
 import com.blindtechnexus.openfire.model.SoundTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
@@ -51,8 +57,24 @@ class AudioManager(private val context: Context) {
             // The missile loop must be stoppable the instant it impacts,
             // and the explosion is a multi-second tail: both stream.
             "missile",
-            "explosion"
+            "explosion",
+            // Bombs: long flight sounds plus the looped timer countdown.
+            "atomBomb",
+            "grenade",
+            "timerLoop",
+            "timerBomb",
+            // Progression stings; the round sting alone is 28 seconds long.
+            "levelComplete",
+            "roundComplete"
         )
+
+        /**
+         * Every key that is streamed instead of decoded into the SoundPool.
+         * SoundPool refuses samples above roughly one megabyte of decoded PCM,
+         * which is exactly why the long tracks live here: putting them in the
+         * pool is what used to starve the native buffers and freeze playback.
+         */
+        val STREAMED_KEYS: Set<String> = LONG_TRACK_KEYS
 
         /** Pending play requests older than this are dropped (stale intent). */
         private const val PENDING_PLAY_TTL_MS = 5_000L
@@ -62,7 +84,44 @@ class AudioManager(private val context: Context) {
 
         /** Max load attempts (asset retry + synthetic fallback) per sound key. */
         private const val MAX_LOAD_ATTEMPTS = 3
+
+        /** Delay before a refused stream is retried once. */
+        private const val STREAM_RETRY_DELAY_MS = 90L
+
+        /** How many concurrent streamed tracks are allowed before one is dropped. */
+        private const val MAX_MANAGED_PLAYERS = 12
+
+        /**
+         * Measured length of the sounds that drive a game timer. Callers use it
+         * to wait for a blast, a sting or a countdown to really finish.
+         */
+        val SOUND_DURATIONS_MS: Map<String, Long> = mapOf(
+            "missile" to SoundDurations.MISSILE_MS,
+            "explosion" to SoundDurations.EXPLOSION_MS,
+            "timerBomb" to SoundDurations.EXPLOSION_MS,
+            "atomBomb" to SoundDurations.ATOM_BOMB_MS,
+            "grenade" to SoundDurations.GRENADE_MS,
+            "timerLoop" to SoundDurations.TIMER_LOOP_MS,
+            "mp40" to SoundDurations.MP40_MS,
+            "machineGun" to SoundDurations.MACHINE_GUN_MS,
+            "awm" to SoundDurations.AWM_MS,
+            "levelComplete" to SoundDurations.LEVEL_COMPLETE_MS,
+            "roundComplete" to SoundDurations.ROUND_COMPLETE_MS,
+            "wall" to SoundDurations.WALL_MS,
+            "walk" to SoundDurations.WALK_MS
+        )
     }
+
+    /**
+     * One supervisor scope for every background audio task. A failing load,
+     * prepare or retry can never cancel the others, and the whole scope is
+     * cancelled on [release] so nothing keeps running after the game closes.
+     */
+    private val audioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** True once [release] ran: every later request is ignored. */
+    @Volatile
+    private var released = false
 
     private val soundPool: SoundPool = SoundPool.Builder()
         .setMaxStreams(32)
@@ -101,6 +160,17 @@ class AudioManager(private val context: Context) {
     // Managed MediaPlayers for long / streaming audio
     private val managedPlayers = ConcurrentHashMap<String, MediaPlayer>()
     private val playerLock = Any()
+
+    /**
+     * Reliability bookkeeping for the streamed tracks. Every start request
+     * owns a generation token, so a slow `prepare()` that finishes after a
+     * newer request (or after a stop) is discarded instead of playing late or
+     * leaking a player. Keys currently being prepared are tracked separately,
+     * which is what stops the same track from being started twice in a row.
+     */
+    private val playerGeneration = ConcurrentHashMap<String, Int>()
+    private val preparingTracks = ConcurrentHashMap.newKeySet<String>()
+    private val trackGains = ConcurrentHashMap<String, Pair<Float, Float>>()
 
     /**
      * User settings. These are the single source of truth and are NEVER
@@ -166,6 +236,13 @@ class AudioManager(private val context: Context) {
         "sniperRifle" to listOf("sniper-rifle.mp3"),
         "fire" to listOf("assault-sound.mp3"),
         "shotgun" to listOf("short-gun.mp3"),
+        // Round two weapons: the MP40 submachine gun and the AWM long-range
+        // rifle, each with its own recorded shot.
+        "mp40" to listOf("mp-40-gun.mp3"),
+        "awm" to listOf("AWM-sound.mp3"),
+        // Round four weapon: the machine gun, looped during a burst exactly
+        // like the MP40.
+        "machineGun" to listOf("machine-gun.mp3"),
         // Melee weapons.
         "knifeHit" to listOf("knife-hit.mp3"),
         "knifeMiss" to listOf("knife-miss.mp3"),
@@ -181,6 +258,10 @@ class AudioManager(private val context: Context) {
         "glueSound" to listOf("glue-sound.mp3"),
         "glueHit" to listOf("glue-hit.mp3"),
         "glueWallCrack" to listOf("glue-wall-crack.mp3"),
+        // Hitting one of the four boundaries of the 100 m zone: the wall
+        // impact sound. There is no separate wall asset in the game, so the
+        // recorded wall crack is the wall sound.
+        "wall" to listOf("glue-wall-crack.mp3"),
         "cover" to listOf("cover.mp3"),
         "coverHit" to listOf("cover-hit.mp3"),
         "coverCrack" to listOf("cover-crack.mp3"),
@@ -210,7 +291,18 @@ class AudioManager(private val context: Context) {
         // flees) and the impact explosion, always mixed with enemy-hit or
         // player-hit for the destroyed fighter.
         "missile" to listOf("missile-sound.mp3"),
-        "explosion" to listOf("explosion-sound.mp3")
+        "explosion" to listOf("explosion-sound.mp3"),
+        // Bombs: each bomb flies for exactly as long as its own sound, and
+        // every blast - a hit, an intercepted bomb or a disposed one - uses
+        // the explosion. The timer bomb counts down with a looped timer sound
+        // and then explodes with the same explosion sound.
+        "atomBomb" to listOf("atom-bom-sound.mp3"),
+        "grenade" to listOf("grenade-sound.mp3"),
+        "timerLoop" to listOf("timer-sound.mp3"),
+        "timerBomb" to listOf("explosion-sound.mp3"),
+        // Progression stings: one per completed level, one per completed round.
+        "levelComplete" to listOf("level-complete.mp3"),
+        "roundComplete" to listOf("round-complete.mp3")
     )
 
     init {
@@ -231,7 +323,7 @@ class AudioManager(private val context: Context) {
     }
 
     private fun preloadShortSounds() {
-        CoroutineScope(Dispatchers.IO).launch {
+        audioScope.launch {
             for ((key, files) in soundAliases) {
                 // Preload only short SFX into SoundPool. Long audio tracks are streamed via MediaPlayer on-demand.
                 if (key in LONG_TRACK_KEYS) continue
@@ -289,7 +381,8 @@ class AudioManager(private val context: Context) {
             return
         }
         val files = soundAliases[key] ?: emptyList()
-        CoroutineScope(Dispatchers.IO).launch {
+        audioScope.launch {
+            if (released) return@launch
             if (attempts <= 1) {
                 loadShortSound(key, files, allowSynthetic = false)
             } else {
@@ -308,7 +401,8 @@ class AudioManager(private val context: Context) {
         val files = soundAliases[key] ?: return
         val attempts = loadAttempts[key] ?: 0
         if (attempts >= MAX_LOAD_ATTEMPTS) return
-        CoroutineScope(Dispatchers.IO).launch {
+        audioScope.launch {
+            if (released) return@launch
             if (!soundMap.containsKey(key)) {
                 loadShortSound(key, files, allowSynthetic = true)
             }
@@ -411,6 +505,7 @@ class AudioManager(private val context: Context) {
         posY: Float = 0f,
         posZ: Float = 0f
     ): Int {
+        if (released) return -1
         if (key in LONG_TRACK_KEYS) {
             playManagedTrack(key, volume, posX, posY, posZ, loop = false)
             return 1
@@ -434,12 +529,50 @@ class AudioManager(private val context: Context) {
         if (streamId != 0) {
             activeSfxStreams.getOrPut(key) { ConcurrentHashMap.newKeySet() }.add(streamId)
         } else {
-            // The pool could not hand out a stream right now — retry on the next load tick.
-            queuePendingPlay(PendingPlay(key, volume, rate, posX, posY, posZ, loop = false, enqueuedAt = System.currentTimeMillis()))
+            // The pool could not hand out a stream right now. Queue the
+            // request and schedule one short retry, so a busy pool never
+            // swallows a gunshot, a click or a hit sound.
+            queuePendingPlay(
+                PendingPlay(
+                    key, volume, rate, posX, posY, posZ,
+                    loop = false,
+                    enqueuedAt = System.currentTimeMillis()
+                )
+            )
+            scheduleRetry(key)
             return -1
         }
         triggerHapticForSound(key)
         return streamId
+    }
+
+    /**
+     * Retries the queued requests for [key] once, a beat later. This is what
+     * keeps sounds alive on low-end devices where the pool is momentarily out
+     * of free streams instead of dropping them silently.
+     */
+    private fun scheduleRetry(key: String) {
+        audioScope.launch {
+            delay(STREAM_RETRY_DELAY_MS)
+            if (released) return@launch
+            if (isReady(key)) flushPendingPlays(key)
+        }
+    }
+
+    /**
+     * Measured length of a streamed sound in milliseconds, or 0 when the key
+     * has no known length. The battle engine uses it to wait for a blast or a
+     * progression sting to really finish before it continues.
+     */
+    fun soundDurationMs(key: String): Long {
+        val known = SOUND_DURATIONS_MS[key]
+        if (known != null && known > 0L) return known
+        val player = managedPlayers[key] ?: return 0L
+        return try {
+            player.duration.toLong().coerceAtLeast(0L)
+        } catch (_: Exception) {
+            0L
+        }
     }
 
     /**
@@ -463,6 +596,7 @@ class AudioManager(private val context: Context) {
         posY: Float = 0f,
         posZ: Float = 0f
     ) {
+        if (released) return
         if (key in LONG_TRACK_KEYS) {
             playManagedTrack(key, volume, posX, posY, posZ, loop = true)
             return
@@ -527,27 +661,40 @@ class AudioManager(private val context: Context) {
     /**
      * The local player's own footsteps stay centred at the speech level
      * regardless of Robert's distance, exactly as heard while running
-     * yourself. Only the playback rate follows the running speed (which
-     * itself follows how strongly the screen is pressed).
+     * yourself. The playback rate follows the real running speed in metres per
+     * second, and [volumeGain] is the running-speed level gain from
+     * [com.blindtechnexus.openfire.model.RunSpeed]: a fast run is louder, a
+     * slow run is clearly quieter, exactly like Robert's distance-scaled steps.
      */
-    fun updatePlayerWalkAudio(speedMps: Float = 6.5f) {
+    fun updatePlayerWalkAudio(
+        speedMps: Float = RunPressure.BASE_SPEED_MPS,
+        volumeGain: Float = 1.0f
+    ) {
+        val base = VolumeMixer.clamp(walkVolume * VolumeMixer.runVolumeGain(volumeGain))
         updateWalkingTrack(
             key = "playerWalk",
-            left = walkVolume,
-            right = walkVolume,
+            left = base,
+            right = base,
             speedMps = speedMps
         )
     }
 
     private fun updateWalkingTrack(key: String, left: Float, right: Float, speedMps: Float) {
-        synchronized(playerLock) {
-            var player = managedPlayers[key]
-            if (player == null || !player.isPlaying) {
+        if (released) return
+        val player = managedPlayers[key]
+        if (player == null || !player.isPlaying) {
+            // The track is prepared on a background thread: ask for it once
+            // with the gains it should start at, then let the next ticks
+            // refine the volume. Nothing here ever blocks the game thread.
+            if (!preparingTracks.contains(key)) {
                 walkLastApplyAt.remove(key)
                 walkCurrentGains.remove(key)
+                trackGains[key] = Pair(left.coerceIn(0f, 1f), right.coerceIn(0f, 1f))
                 playManagedTrack(key, volume = 1.0f, posX = 0f, posY = 0f, posZ = 0f, loop = true)
-                player = managedPlayers[key] ?: return
             }
+            return
+        }
+        synchronized(playerLock) {
             // Refresh the live volume every 0.5 s (0.25 s at a fast run);
             // between refreshes the player simply keeps its current level.
             val now = System.currentTimeMillis()
@@ -592,6 +739,13 @@ class AudioManager(private val context: Context) {
 
     /**
      * Streams longer audio tracks via isolated, managed MediaPlayers.
+     *
+     * The whole create / prepare / start sequence runs on the background audio
+     * scope: a synchronous `MediaPlayer.prepare()` on the game thread is what
+     * used to freeze the app on slower devices while a long track (music, win,
+     * lose, airplane, a bomb flight or the round sting) was loading. Requests
+     * are generation-guarded, so stopping a track while it is still preparing
+     * discards it cleanly instead of starting it late.
      */
     private fun playManagedTrack(
         key: String,
@@ -601,9 +755,8 @@ class AudioManager(private val context: Context) {
         posZ: Float,
         loop: Boolean
     ) {
-        stopManagedTrack(key)
+        if (released) return
 
-        val afd = getAssetFd(key)
         // Music is not spatialised and does not use the SFX slider: the caller
         // passes the already mixed absolute volume (setting * background gain).
         val (left, right) = if (key == "music") {
@@ -612,44 +765,131 @@ class AudioManager(private val context: Context) {
         } else {
             calculate3dVolume(posX, posY, posZ, volume)
         }
+        trackGains[key] = Pair(left, right)
 
-        try {
-            val player = MediaPlayer()
-            if (afd != null) {
-                player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                afd.close()
-            } else {
-                val synth = generateSyntheticSoundFile(key) ?: return
-                player.setDataSource(synth.absolutePath)
-            }
+        val generation = nextGeneration(key)
+        releaseManagedTrack(key)
+        preparingTracks.add(key)
 
-            player.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_GAME)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build()
-            )
-            player.isLooping = loop
-            player.setVolume(left, right)
-            player.setOnCompletionListener {
-                if (!loop) {
-                    stopManagedTrack(key)
+        audioScope.launch {
+            var player: MediaPlayer? = null
+            try {
+                val created = MediaPlayer()
+                player = created
+                val afd = getAssetFd(key)
+                if (afd != null) {
+                    created.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                    try {
+                        afd.close()
+                    } catch (_: Exception) {}
+                } else {
+                    val synth = generateSyntheticSoundFile(key)
+                    if (synth == null) {
+                        safeRelease(created)
+                        player = null
+                        return@launch
+                    }
+                    created.setDataSource(synth.absolutePath)
                 }
+
+                created.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_GAME)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+                created.isLooping = loop
+                val gains = trackGains[key] ?: Pair(left, right)
+                created.setVolume(gains.first.coerceIn(0f, 1f), gains.second.coerceIn(0f, 1f))
+                created.setOnCompletionListener {
+                    if (!loop) stopManagedTrack(key)
+                }
+                created.setOnErrorListener { failed, what, extra ->
+                    Log.w(TAG, "Managed track $key failed ($what/$extra)")
+                    synchronized(playerLock) {
+                        if (managedPlayers[key] === failed) managedPlayers.remove(key)
+                    }
+                    safeRelease(failed)
+                    preparingTracks.remove(key)
+                    true
+                }
+                created.prepare()
+
+                val superseded = synchronized(playerLock) {
+                    if (released || playerGeneration[key] != generation) {
+                        true
+                    } else {
+                        managedPlayers[key] = created
+                        false
+                    }
+                }
+                if (superseded) {
+                    safeRelease(created)
+                    player = null
+                    return@launch
+                }
+                created.start()
+                triggerHapticForSound(key)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed playing managed track $key", e)
+                player?.let { safeRelease(it) }
+                synchronized(playerLock) {
+                    if (managedPlayers[key] === player) managedPlayers.remove(key)
+                }
+            } finally {
+                preparingTracks.remove(key)
+                pruneManagedPlayers()
             }
-            player.prepare()
-            player.start()
-            synchronized(playerLock) {
-                managedPlayers[key] = player
-            }
-            // Footstep volume / rate are owned by updateWalkingTrack, which
-            // applies them immediately after starting a track.
-            triggerHapticForSound(key)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed playing managed track $key", e)
+        }
+    }
+
+    /** Releases a player without ever throwing into the audio pipeline. */
+    private fun safeRelease(player: MediaPlayer) {
+        try {
+            if (player.isPlaying) player.stop()
+        } catch (_: Exception) {}
+        try {
+            player.reset()
+        } catch (_: Exception) {}
+        try {
+            player.release()
+        } catch (_: Exception) {}
+    }
+
+    /** The next generation token of a track; every older result is discarded. */
+    private fun nextGeneration(key: String): Int {
+        val next = (playerGeneration[key] ?: 0) + 1
+        playerGeneration[key] = next
+        return next
+    }
+
+    /** True while a streamed track is playing or still being prepared. */
+    fun isTrackActive(key: String): Boolean {
+        val player = managedPlayers[key]
+        if (player != null) {
+            try {
+                if (player.isPlaying) return true
+            } catch (_: Exception) {}
+        }
+        return preparingTracks.contains(key)
+    }
+
+    /**
+     * Hard guard against a player leak: if too many streamed tracks pile up
+     * (a device that refuses to release them), the oldest non-music track is
+     * dropped so playback always stays responsive.
+     */
+    private fun pruneManagedPlayers() {
+        if (managedPlayers.size <= MAX_MANAGED_PLAYERS) return
+        val victims = managedPlayers.keys.filter { it != "music" }
+        for (key in victims.take(managedPlayers.size - MAX_MANAGED_PLAYERS)) {
+            releaseManagedTrack(key)
         }
     }
 
     /**
+     * Immediately stops playback of a specific sound.
+     */    /**
      * Immediately stops playback of a specific sound.
      */
     fun stopSound(key: String) {
@@ -671,16 +911,18 @@ class AudioManager(private val context: Context) {
         stopSound(key)
     }
 
+    /**
+     * Stops a streamed track and invalidates every in-flight prepare of it, so
+     * a sound that is stopped while still loading can never start afterwards.
+     */
     private fun stopManagedTrack(key: String) {
-        synchronized(playerLock) {
-            val player = managedPlayers.remove(key) ?: return
-            try {
-                if (player.isPlaying) {
-                    player.stop()
-                }
-                player.release()
-            } catch (_: Exception) {}
-        }
+        nextGeneration(key)
+        releaseManagedTrack(key)
+    }
+
+    private fun releaseManagedTrack(key: String) {
+        val player = synchronized(playerLock) { managedPlayers.remove(key) } ?: return
+        safeRelease(player)
     }
 
     /**
@@ -696,8 +938,27 @@ class AudioManager(private val context: Context) {
         stopFootsteps()
         stopSound("missile")
         stopSound("explosion")
+        stopBattleProjectiles()
         stopSound("jump")
         stopSound("land")
+    }
+
+    /**
+     * Stops every projectile sound of a battle: the missile flight, the three
+     * bomb flights, the looped timer countdown and the progression stings.
+     * Called on every screen change, so nothing keeps playing after a game.
+     */
+    fun stopBattleProjectiles() {
+        stopSound("missile")
+        stopSound("explosion")
+        stopSound("atomBomb")
+        stopSound("grenade")
+        stopSound("timerLoop")
+        stopSound("timerBomb")
+        stopSound("mp40")
+        stopSound("machineGun")
+        stopSound("levelComplete")
+        stopSound("roundComplete")
     }
 
     /**
@@ -730,8 +991,8 @@ class AudioManager(private val context: Context) {
      * stored setting, so switching screens can no longer lower the volume.
      */
     fun startMusic() {
-        val current = managedPlayers["music"]
-        if (current != null && current.isPlaying) {
+        if (released) return
+        if (isTrackActive("music")) {
             applyMusicVolume()
             return
         }
@@ -754,10 +1015,15 @@ class AudioManager(private val context: Context) {
     // separate setMusicVolume() function would clash with the generated JVM
     // setter for the musicVolume property.
 
-    /** Re-applies the stored music setting to the live player. */
+    /**
+     * Re-applies the stored music setting to the live player. The gain is also
+     * remembered, so a music track that is still preparing starts at the right
+     * level instead of blasting at full volume for a moment.
+     */
     private fun applyMusicVolume() {
-        val player = managedPlayers["music"] ?: return
         val v = VolumeMixer.music(musicVolume)
+        trackGains["music"] = Pair(v, v)
+        val player = managedPlayers["music"] ?: return
         try {
             player.setVolume(v, v)
         } catch (_: Exception) {}
@@ -772,8 +1038,21 @@ class AudioManager(private val context: Context) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 when (key) {
-                    "assault", "shortGun", "pistol", "sniperRifle", "fire", "shotgun" -> {
+                    "assault", "shortGun", "pistol", "sniperRifle", "fire", "shotgun",
+                    "mp40", "machineGun", "awm" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE))
+                    }
+                    "wall" -> {
+                        vibrator.vibrate(VibrationEffect.createOneShot(90, 230))
+                    }
+                    "timerLoop" -> {
+                        vibrator.vibrate(VibrationEffect.createOneShot(18, 90))
+                    }
+                    "levelComplete" -> {
+                        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 60, 40, 90, 50, 140), -1))
+                    }
+                    "roundComplete" -> {
+                        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 90, 60, 120, 60, 200), -1))
                     }
                     "gunReload", "reload" -> {
                         vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 30, 40, 50), -1))
@@ -796,10 +1075,10 @@ class AudioManager(private val context: Context) {
                     "jump", "parachute", "land" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(25, 100))
                     }
-                    "missile" -> {
+                    "missile", "atomBomb", "grenade" -> {
                         vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 60, 40, 60, 40, 90), -1))
                     }
-                    "explosion" -> {
+                    "explosion", "timerBomb" -> {
                         vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 140, 60, 200, 60, 260), -1))
                     }
                     "win" -> {
@@ -812,8 +1091,9 @@ class AudioManager(private val context: Context) {
             } else {
                 @Suppress("DEPRECATION")
                 when (key) {
-                    "assault", "shortGun", "pistol", "playerHit" -> vibrator.vibrate(60)
-                    "gunHit", "glueSound", "cover", "gunReload" -> vibrator.vibrate(35)
+                    "assault", "shortGun", "pistol", "playerHit",
+                    "mp40", "machineGun", "awm" -> vibrator.vibrate(60)
+                    "gunHit", "glueSound", "cover", "gunReload", "wall" -> vibrator.vibrate(35)
                 }
             }
         } catch (_: Exception) {}
@@ -851,7 +1131,16 @@ class AudioManager(private val context: Context) {
             "ammo" -> generateBeepWave(sampleRate, 0.08f, 900f)
             "spend" -> generateCoinWave(sampleRate, 0.18f)
             "missile" -> generateChirpWave(sampleRate, 1.2f, 300f, 1400f)
-            "explosion" -> generateNoiseThudWave(sampleRate, 0.9f, 70f)
+            "explosion", "timerBomb" -> generateNoiseThudWave(sampleRate, 0.9f, 70f)
+            "mp40" -> generateGunshotWave(sampleRate, 0.14f, 360f, 110f)
+            "machineGun" -> generateGunshotWave(sampleRate, 0.18f, 300f, 95f)
+            "awm" -> generateGunshotWave(sampleRate, 0.40f, 240f, 62f)
+            "atomBomb" -> generateNoiseThudWave(sampleRate, 1.1f, 58f)
+            "grenade" -> generateNoiseThudWave(sampleRate, 0.7f, 95f)
+            "timerLoop" -> generateBeepWave(sampleRate, 0.22f, 1046f)
+            "wall" -> generateNoiseThudWave(sampleRate, 0.32f, 120f)
+            "levelComplete" -> generateFanfareWave(sampleRate, 0.5f, true)
+            "roundComplete" -> generateFanfareWave(sampleRate, 0.8f, true)
             "win" -> generateFanfareWave(sampleRate, 0.7f, true)
             "lose" -> generateFanfareWave(sampleRate, 0.7f, false)
             else -> generateBeepWave(sampleRate, 0.05f, 800f)
@@ -1174,7 +1463,15 @@ class AudioManager(private val context: Context) {
     }
 
     fun release() {
-        stopAllSounds()
-        soundPool.release()
+        released = true
+        try {
+            stopAllSounds()
+        } catch (_: Exception) {}
+        preparingTracks.clear()
+        trackGains.clear()
+        audioScope.cancel()
+        try {
+            soundPool.release()
+        } catch (_: Exception) {}
     }
 }

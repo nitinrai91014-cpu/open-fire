@@ -20,6 +20,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import com.blindtechnexus.openfire.model.MoveDirection
 import com.blindtechnexus.openfire.model.RunPressure
 import com.blindtechnexus.openfire.model.Screen
 import com.blindtechnexus.openfire.ui.screens.AboutScreen
@@ -88,10 +89,26 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             )
 
                             val screenHeight = size.height.toFloat().takeIf { it > 0f } ?: 1000f
+                            val screenWidth = size.width.toFloat().takeIf { it > 0f } ?: 1000f
                             val isBattle = currentScreen == Screen.BATTLE
                             val isTop = isBattle && firstDown.position.y < screenHeight / 3f
                             val isBottom = isBattle && firstDown.position.y >= screenHeight * 2f / 3f
                             val isCenter = isBattle && !isTop && !isBottom
+                            // The center portion is split in two halves: the
+                            // left half runs left, the right half runs right,
+                            // so all four directions of the 100 m zone are
+                            // reachable. A tap in the center still activates
+                            // the quick menu (or confirms a timer bomb).
+                            val isCenterLeft = isCenter && firstDown.position.x < screenWidth / 2f
+                            val isCenterRight = isCenter && !isCenterLeft
+                            val moveDirection: MoveDirection? = when {
+                                isTop -> MoveDirection.FORWARD
+                                isBottom -> MoveDirection.BACKWARD
+                                isCenterLeft -> MoveDirection.LEFT
+                                isCenterRight -> MoveDirection.RIGHT
+                                else -> null
+                            }
+                            val isRunZone = moveDirection != null
 
                             // Every finger is tracked from its own touch-down point,
                             // so a two-finger swipe never reports a bogus direction.
@@ -102,23 +119,26 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             var maxDelta = 0f
                             var longPressActive = false
                             var longPressCancelled = false
+                            // A held up-swipe with a submachine gun keeps
+                            // firing until the finger is lifted again.
+                            var holdFireStarted = false
 
                             // Sample the touch pressure from the very first
                             // sample so the run can start at the pressed
                             // intensity: stronger press, faster run.
-                            if (isTop || isBottom) {
+                            if (isRunZone) {
                                 viewModel.updateMovePressure(firstDown.pressure)
                             }
 
                             // The hold is recognised quickly. Movement still
                             // never starts on touch-down, and a swipe cancels
                             // the pending hold.
-                            val longPressJob = if (isTop || isBottom) {
+                            val longPressJob = if (isRunZone) {
                                 launch {
                                     delay(RunPressure.LONG_PRESS_TIMEOUT_MS)
                                     if (!longPressCancelled && maxFingers == 1 && maxDelta < TAP_SLOP) {
                                         longPressActive = true
-                                        viewModel.startPlayerMove(forward = isTop)
+                                        moveDirection?.let { viewModel.startPlayerMove(it) }
                                     }
                                 }
                             } else {
@@ -153,12 +173,26 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                         }
                                         // Live pressure of the primary finger
                                         // keeps driving the running speed.
-                                        if ((isTop || isBottom) &&
+                                        if (isRunZone &&
                                             change.id == firstDown.id &&
                                             change.pressed
                                         ) {
                                             viewModel.updateMovePressure(change.pressure)
                                         }
+                                    }
+
+                                    // Holding an up-swipe with the MP40 or the
+                                    // machine gun selected starts the
+                                    // continuous burst right away: one bullet
+                                    // per interval with the gun sound on loop.
+                                    if (isBattle && !holdFireStarted && !longPressActive &&
+                                        maxFingers == 1 &&
+                                        bestDy < 0f && abs(bestDy) > abs(bestDx) &&
+                                        abs(bestDy) >= SWIPE_THRESHOLD_ONE_FINGER &&
+                                        viewModel.activeWeaponIsAutomatic()
+                                    ) {
+                                        holdFireStarted = true
+                                        viewModel.startHoldFire()
                                     }
 
                                     if (maxDelta >= TAP_SLOP && !longPressActive) {
@@ -174,12 +208,24 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                 }
                             } finally {
                                 longPressJob?.cancel()
-                                if (isTop || isBottom) {
+                                if (isRunZone) {
                                     // Release, cancellation, a second finger, or a swipe
                                     // always stops the player's own footstep loop.
                                     viewModel.stopPlayerMove()
                                     longPressActive = false
                                 }
+                                if (holdFireStarted) {
+                                    // Lifting the finger stops the bullets and
+                                    // the looped gun sound together.
+                                    viewModel.stopHoldFire()
+                                }
+                            }
+
+                            // The burst already fired every bullet it had, so
+                            // the same swipe must not fire another one.
+                            if (holdFireStarted) {
+                                holdFireStarted = false
+                                return@awaitEachGesture
                             }
 
                             val threshold = if (maxFingers >= 2) {

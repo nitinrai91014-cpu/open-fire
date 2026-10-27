@@ -2,8 +2,8 @@ package com.blindtechnexus.openfire.model
 
 /**
  * Strict progression ladder:
- *  - 10 wins   = 1 level
- *  - 5 levels  = 1 round
+ *  - 5 wins    = 1 level (and one random reward)
+ *  - 5 levels  = 1 round (and the fixed round reward)
  *  - 5 rounds  = the whole match
  *
  * Wins collected inside the current level are tracked explicitly instead of
@@ -12,7 +12,8 @@ package com.blindtechnexus.openfire.model
  * match starts, so permanent unlocks such as the Missile stay unlocked.
  */
 object Progression {
-    const val WINS_PER_LEVEL = 10
+    /** Five wins complete one level and pay one random reward. */
+    const val WINS_PER_LEVEL = 5
     const val LEVELS_PER_ROUND = 5
     const val ROUNDS_PER_MATCH = 5
 

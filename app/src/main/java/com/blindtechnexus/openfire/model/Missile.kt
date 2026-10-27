@@ -18,7 +18,11 @@ package com.blindtechnexus.openfire.model
  *    loops and is cut the moment the missile impacts; if the target has
  *    nowhere left to run, the sound plays once and the missile impacts as
  *    it ends. The explosion (and the hit sound of the destroyed fighter)
- *    always plays at impact;
+ *    always plays at impact, mixed together, and the battle only ends once
+ *    the explosion sound has really finished ([EXPLOSION_MS]);
+ *  - in round three Robert has no anti-missile system at all, so a launched
+ *    missile simply makes him sprint away at his fast speed, running and
+ *    dodging inside the zone until the missile catches him;
  *  - from round four Robert owns an anti-missile system, but he may only
  *    fire it in an end-game situation: his health below
  *    [ANTI_MISSILE_MAX_HP] while a player missile is in the air. Round
@@ -27,20 +31,32 @@ package com.blindtechnexus.openfire.model
  *    spends it only as a desperation weapon while he is clearly losing.
  */
 object MissileRules {
-    /** Shop price of the missile launcher itself. */
-    const val MISSILE_PRICE = 3500
+    /** Shop price of the missile launcher itself (200 coins cheaper). */
+    const val MISSILE_PRICE = 3300
 
-    /** Shop price of one consumable missile power. */
-    const val MISSILE_POWER_PRICE = 1800
+    /** Shop price of one consumable missile power (200 coins cheaper). */
+    const val MISSILE_POWER_PRICE = 1600
 
-    /** Shop price of one anti-missile defence system. */
-    const val ANTI_MISSILE_PRICE = 3000
+    /** Shop price of one anti-missile defence system (200 coins cheaper). */
+    const val ANTI_MISSILE_PRICE = 2800
 
     /**
      * Length of `missile-sound.mp3` (about 14 seconds). A direct hit lands
      * exactly when this sound finishes.
      */
-    const val SOUND_DURATION_MS = 14_800L
+    const val SOUND_DURATION_MS = SoundDurations.MISSILE_MS
+
+    /**
+     * Length of `explosion-sound.mp3`. The battle ends only after the impact
+     * explosion has really finished playing, never on the frame of the hit.
+     */
+    const val EXPLOSION_MS = SoundDurations.EXPLOSION_MS
+
+    /** The flight sound sits slightly under the other effects. */
+    const val SOUND_VOLUME = 0.92f
+
+    /** A chasing missile plays its looped flight sound a touch faster. */
+    const val CHASE_SOUND_RATE = 1.06f
 
     /** Extra chase time for every metre the target can still run away. */
     const val CHASE_MS_PER_METER = 60L
@@ -63,6 +79,21 @@ object MissileRules {
     /** True when the target still has room to run away inside the arena. */
     fun targetWillFlee(distance: Float): Boolean =
         distance < Combat.MAX_RANGE - 1f
+
+    /**
+     * Sprint speed of a target running from a missile, in metres per second.
+     * It is Robert's fast running speed for the round plus the panic bonus,
+     * which is exactly the speed the player's fast three-finger level reaches.
+     */
+    fun fleeSpeedMps(round: Int): Float =
+        RobertRules.enemyFastSpeedMps(round) * FLEE_PANIC_FACTOR
+
+    /** Extra urgency of a missile escape. */
+    const val FLEE_PANIC_FACTOR = 1.15f
+
+    /** Metres covered per flee tick while escaping a missile. */
+    fun fleeStep(round: Int, tickMs: Long): Float =
+        fleeSpeedMps(round) * (tickMs / 1000f)
 
     /**
      * How long a launched missile stays in the air. A target with nowhere
