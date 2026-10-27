@@ -16,8 +16,8 @@ import com.blindtechnexus.openfire.model.Weapon
  * Reads and writes the complete game profile.
  *
  * Everything (settings, statistics, shop inventory and the remembered last
- * weapon) is persisted through [EncryptedStore] inside `/.open_fire/data/` on
- * external storage, protected by AES-256-GCM. SharedPreferences is only read
+ * weapon) is persisted through [EncryptedStore] inside `/.openfire/data/` on
+ * shared storage, protected by AES-256-GCM. SharedPreferences is only read
  * once, to migrate profiles written by version 1.x, and is cleared afterwards.
  */
 class PreferencesManager(context: Context) {
@@ -30,16 +30,9 @@ class PreferencesManager(context: Context) {
         const val FILE_SETTINGS = "settings"
         const val FILE_PROFILE = "profile"
         const val FILE_INVENTORY = "inventory"
-        const val SCHEMA_VERSION = 5
+        const val SCHEMA_VERSION = 2
 
         const val KEY_SCHEMA = "schema"
-
-        // Pre-missile profile keys, read once for migration: the missile was
-        // a shop-only "future weapon" and its power was a permanent
-        // extension. Owners keep the missile and receive one power for it.
-        const val LEGACY_FUTURE_WEAPONS = "futureWeapons"
-        const val LEGACY_MISSILE_POWERS_EXTENSION = "ext.missilePowers"
-        const val LEGACY_MISSILE_ID = "missile"
     }
 
     init {
@@ -68,8 +61,7 @@ class PreferencesManager(context: Context) {
             musicVolume = map["musicVolume"]?.toFloatOrNull() ?: 0.5f,
             sfxVolume = map["sfxVolume"]?.toFloatOrNull() ?: 1.0f,
             soundTheme = theme,
-            hapticsEnabled = map["haptics"]?.toBooleanStrictOrNull() ?: true,
-            keepScreenOn = map["keepScreenOn"]?.toBooleanStrictOrNull() ?: false
+            hapticsEnabled = map["haptics"]?.toBooleanStrictOrNull() ?: true
         )
     }
 
@@ -87,8 +79,7 @@ class PreferencesManager(context: Context) {
                 "musicVolume" to s.musicVolume.toString(),
                 "sfxVolume" to s.sfxVolume.toString(),
                 "soundTheme" to s.soundTheme.name,
-                "haptics" to s.hapticsEnabled.toString(),
-                "keepScreenOn" to s.keepScreenOn.toString()
+                "haptics" to s.hapticsEnabled.toString()
             )
         )
     }
@@ -101,7 +92,6 @@ class PreferencesManager(context: Context) {
         val map = store.read(FILE_PROFILE)
         if (map.isEmpty()) return Progression.normalize(GameStats())
         val wins = map["wins"]?.toIntOrNull() ?: 0
-        val round = map["round"]?.toIntOrNull() ?: 1
         val migratedLevelWins = wins % Progression.WINS_PER_LEVEL
         return Progression.normalize(
             GameStats(
@@ -109,13 +99,9 @@ class PreferencesManager(context: Context) {
                 wins = wins,
                 kills = map["kills"]?.toIntOrNull() ?: 0,
                 coins = map["coins"]?.toIntOrNull() ?: 100,
-                round = round,
+                round = map["round"]?.toIntOrNull() ?: 1,
                 level = map["level"]?.toIntOrNull() ?: 1,
-                levelWins = map["levelWins"]?.toIntOrNull() ?: migratedLevelWins,
-                // Older profiles did not store this counter. Their current
-                // round still proves how many earlier rounds were completed.
-                completedRounds = map["completedRounds"]?.toIntOrNull()
-                    ?: (round - 1).coerceAtLeast(0)
+                levelWins = map["levelWins"]?.toIntOrNull() ?: migratedLevelWins
             )
         )
     }
@@ -132,8 +118,7 @@ class PreferencesManager(context: Context) {
                 "coins" to normalized.coins.toString(),
                 "round" to normalized.round.toString(),
                 "level" to normalized.level.toString(),
-                "levelWins" to normalized.levelWins.toString(),
-                "completedRounds" to normalized.completedRounds.toString()
+                "levelWins" to normalized.levelWins.toString()
             )
         )
     }
@@ -173,50 +158,14 @@ class PreferencesManager(context: Context) {
             }
             if (state != ExtensionState.NOT_OWNED) extensions[extension.id] = state
         }
-        // Migration: a missile bought while it was a shop-only future
-        // weapon becomes the real battle weapon, and a bought (permanent)
-        // Missile Powers extension becomes one consumable missile power.
-        val migratedWeaponIds = if (
-            map[LEGACY_FUTURE_WEAPONS]
-                ?.split(',')
-                ?.map { it.trim() }
-                ?.contains(LEGACY_MISSILE_ID) == true
-        ) {
-            weaponIds + LEGACY_MISSILE_ID
-        } else {
-            weaponIds
-        }
-        val legacyPowerOwned = map[LEGACY_MISSILE_POWERS_EXTENSION]
-            ?.let { raw ->
-                try {
-                    ExtensionState.valueOf(raw) != ExtensionState.NOT_OWNED
-                } catch (_: Exception) {
-                    false
-                }
-            } ?: false
-        val missilePowers = map["missilePowers"]?.toIntOrNull()?.coerceAtLeast(0)
-            ?: if (legacyPowerOwned) 1 else 0
-        val bombPowers = map["bombPowers"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
-        // Weapons switched off with the shop's Enable / Disable button. An
-        // unknown or removed id is simply dropped.
-        val disabledWeapons = map["disabledWeapons"]
-            ?.split(',')
-            ?.mapNotNull { Weapon.fromId(it.trim()) }
-            ?.map { it.id }
-            ?.toSet()
-            ?: emptySet()
         return Inventory(
-            weaponIds = migratedWeaponIds + Weapon.defaults().map { it.id },
+            weaponIds = weaponIds + Weapon.defaults().map { it.id },
             medikits = map["medikits"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             glueWalls = map["glueWalls"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             covers = map["covers"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             antiMissiles = map["antiMissiles"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
-            antiBombs = map["antiBombs"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             extensions = extensions,
-            lastWeaponId = Weapon.fromId(map["lastWeapon"])?.id ?: Weapon.SHORT_GUN.id,
-            missilePowers = missilePowers,
-            bombPowers = bombPowers,
-            disabledWeapons = disabledWeapons
+            lastWeaponId = Weapon.fromId(map["lastWeapon"])?.id ?: Weapon.SHORT_GUN.id
         )
     }
 
@@ -228,11 +177,7 @@ class PreferencesManager(context: Context) {
             "glueWalls" to inventory.glueWalls.toString(),
             "covers" to inventory.covers.toString(),
             "antiMissiles" to inventory.antiMissiles.toString(),
-            "antiBombs" to inventory.antiBombs.toString(),
-            "lastWeapon" to inventory.lastWeaponId,
-            "missilePowers" to inventory.missilePowers.toString(),
-            "bombPowers" to inventory.bombPowers.toString(),
-            "disabledWeapons" to inventory.disabledWeapons.joinToString(",")
+            "lastWeapon" to inventory.lastWeaponId
         )
         for (extension in Extension.entries) {
             values["ext.${extension.id}"] = inventory.extensionState(extension).name

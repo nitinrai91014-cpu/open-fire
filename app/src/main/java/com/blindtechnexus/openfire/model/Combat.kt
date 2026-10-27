@@ -21,20 +21,15 @@ enum class HitZone {
 }
 
 /**
- * The bands Robert fights from.
+ * The three bands the Robert randomly prefers to fight from.
  *
- *  - [FAR]    (0% to 40% proximity): every shot misses. He holds it for only
- *             one or two shots at a time, purely to confuse the real player.
- *  - [MID]    (40% to 70% proximity): half of the weapon power.
- *  - [STRONG] (70% to 90% proximity): 80% of the weapon power. Robert pushes
- *             into this band while he holds a moderate advantage.
- *  - [CLOSE]  (90% to 100% proximity): the full weapon power. Robert pushes
- *             into this band while he holds a big advantage, and whenever
- *             the player's weapon is damaged or a glue wall is up.
+ *  - [FAR]   (0% to 40% proximity): every shot misses. He holds it for only
+ *            one or two shots at a time, purely to confuse the real player.
+ *  - [MID]   (40% to 70% proximity): half of the weapon power.
+ *  - [CLOSE] (90% to 100% proximity): the full weapon power.
  *
- * The randomly stored preference is still [MID] or [CLOSE]; the situational
- * AI in [RobertRules.situationalRange] promotes it to [STRONG] or [CLOSE]
- * while Robert is winning and demotes it to [MID] while he is losing.
+ * The 70% to 90% band is never held on purpose: it is only crossed while the
+ * Robert walks from one band to the other.
  */
 enum class FireRange(
     val id: String,
@@ -43,7 +38,6 @@ enum class FireRange(
 ) {
     FAR("far", Combat.MISS_ZONE_MIN, Combat.MISS_ZONE_MAX),
     MID("mid", Combat.MISS_ZONE_MAX, Combat.LIGHT_ZONE_MAX),
-    STRONG("strong", Combat.LIGHT_ZONE_MAX, Combat.STRONG_ZONE_MAX),
     CLOSE("close", Combat.HEAVY_ZONE_MIN, Combat.FULL_PROXIMITY);
 
     /** The proximity the Robert aims at while he holds this band. */
@@ -65,15 +59,19 @@ enum class FireRange(
  *
  * Zone rules (proximity = how close the target is, in percent):
  *  - 0%  to 40%  -> miss (no damage at all)
- *  - 40% to 70%  -> the light column of the damage table
- *  - 70% to 90%  -> the strong column of the damage table
- *  - 90% to 100% -> the heavy column of the damage table
+ *  - 40% to 70%  -> 50% of the weapon power
+ *  - 70% to 90%  -> 80% of the weapon power
+ *  - 90% to 100% -> 100% of the weapon power
  *
- * The exact percentages per weapon and per zone live in one single place,
- * [DamageTable], and both fighters read their damage from it. Normal weapons
- * are capped at 40% of the victim's maximum health per hit; bombs and the
- * missile keep their full 100% capacity. The AWM is the one long-range
- * exception: inside the 20% to 40% band it still lands a precision hit.
+ * Weapon power table, as a percentage of the victim's maximum health at
+ * 90%-100% proximity. The player and the Robert use exactly the same table:
+ *
+ *  - knife         8%
+ *  - sword         12%
+ *  - assault gun   14%
+ *  - pistol        13%
+ *  - sniper rifle  16%
+ *  - short gun     8%, but 10% at 90%-100% proximity
  *
  * There is no preset where a combatant loses after a fixed number of hits:
  * a combatant is defeated only when their health actually reaches zero.
@@ -85,12 +83,6 @@ enum class FireRange(
 object Combat {
     /** Full combat area width in metres (the arena is a 100 m range). */
     const val MAX_RANGE = 100f
-
-    /**
-     * A movement that lands within this many metres of a wall counts as
-     * "blocked by the wall": the fighter stops and has to turn back.
-     */
-    const val WALL_TOLERANCE_M = 1.5f
 
     const val MISS_ZONE_MIN = 0f
     const val MISS_ZONE_MAX = 40f
@@ -122,8 +114,11 @@ object Combat {
     /** Only a sniper shot at or above this proximity can damage a glue wall. */
     const val GLUE_WALL_BREAK_PROXIMITY = 90f
 
-    /** Close-range shotgun power retained as a named combat constant. */
-    const val SHORT_GUN_CLOSE_POWER_PERCENT = 12
+    /**
+     * The short gun is the one exception of the power table: it hits with
+     * 10% under 90%-100% proximity instead of its base 8%.
+     */
+    const val SHORT_GUN_CLOSE_POWER_PERCENT = 10
 
     /** Converts a distance (50 = far edge, 0 = point-blank) into 0..100% proximity. */
     fun proximityOf(distance: Float): Float =
@@ -143,54 +138,42 @@ object Combat {
     }
 
     /**
-     * The power percentage a weapon really uses at this proximity. This is the
-     * exact value of the single [DamageTable] for that zone, so the number
-     * shown in the shop and the number deducted in battle are always the same.
+     * The power percentage a weapon really uses at this proximity. Every
+     * weapon uses its own table value except the short gun, which is boosted
+     * to [SHORT_GUN_CLOSE_POWER_PERCENT] at point blank.
      */
     fun powerPercentOf(weapon: Weapon, proximityPercent: Float): Int =
-        DamageTable.percentAt(weapon, proximityPercent)
+        if (weapon == Weapon.SHORT_GUN && zoneFor(proximityPercent) == HitZone.HEAVY) {
+            SHORT_GUN_CLOSE_POWER_PERCENT
+        } else {
+            weapon.powerPercent
+        }
 
     /**
      * Damage of a weapon with the given [powerPercent] at the given proximity,
      * applied to a fighter with [maxHp] maximum health.
      *
-     * Misses deal 0, injuries exactly half of the power, strong hits 80% and
-     * point-blank hits the full power (rounded, with a minimum of 1 so a
+     * Misses deal 0, light hits exactly half of the stated power, strong hits 80% and
+     * point-blank hits the full stated power (rounded, with a minimum of 1 so a
      * connected hit is never fully ignored).
+     *
+     * Weapons deduct health according to their stated power (e.g. 14 HP for assault gun)
+     * rather than scaling wildly against large round health values.
      */
-    fun damageFor(powerPercent: Int, proximityPercent: Float, maxHp: Int): Int {
-        if (maxHp <= 0) return 0
+    fun damageFor(powerPercent: Int, proximityPercent: Float, maxHp: Int = 100): Int {
+        if (maxHp <= 0 || powerPercent <= 0) return 0
         val fraction = when (zoneFor(proximityPercent)) {
             HitZone.MISS -> return 0
             HitZone.LIGHT -> LIGHT_DAMAGE_FRACTION
             HitZone.STRONG -> STRONG_DAMAGE_FRACTION
             HitZone.HEAVY -> HEAVY_DAMAGE_FRACTION
         }
-        val fullPower = maxHp * powerPercent / 100.0
-        return (fullPower * fraction).roundToInt().coerceAtLeast(1)
+        return (powerPercent * fraction).roundToInt().coerceAtLeast(1)
     }
 
-    /**
-     * Damage for a power value that already belongs to a specific hit zone.
-     * Unlike [damageFor], this does not apply the 50% / 80% zone multiplier a
-     * second time. Robert's custom assault rifle and shotgun tables use this.
-     */
-    fun damageForDirectPower(powerPercent: Int, proximityPercent: Float, maxHp: Int): Int {
-        if (maxHp <= 0 || zoneFor(proximityPercent) == HitZone.MISS) return 0
-        return (maxHp * powerPercent / 100.0).roundToInt().coerceAtLeast(1)
-    }
-
-    /**
-     * Damage dealt by a specific weapon at the given proximity. Every weapon
-     * of both fighters reads the exact percentage from [DamageTable], so a
-     * hit always deducts precisely the documented share of maximum health.
-     */
-    fun weaponDamage(weapon: Weapon, proximityPercent: Float, victimMaxHp: Int): Int =
-        DamageTable.damage(weapon, proximityPercent, victimMaxHp)
-
-    /** Damage of an incoming hit while the quick menu protection is alive. */
-    fun menuProtectedDamage(victimMaxHp: Int): Int =
-        DamageTable.menuProtectedDamage(victimMaxHp)
+    /** Damage dealt by a specific weapon at the given proximity. */
+    fun weaponDamage(weapon: Weapon, proximityPercent: Float, victimMaxHp: Int = 100): Int =
+        damageFor(powerPercentOf(weapon, proximityPercent), proximityPercent, victimMaxHp)
 
     /** True when this shot can damage a glue wall (sniper rifle, point blank). */
     fun canBreakGlueWall(weapon: Weapon, proximityPercent: Float): Boolean =

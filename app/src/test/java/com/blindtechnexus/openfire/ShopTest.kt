@@ -455,4 +455,21 @@ class ShopTest {
         assertEquals(Weapon.SWORD, owned.rememberedWeapon())
         assertEquals(Weapon.SWORD, owned.startingWeapon())
     }
+
+    @Test
+    fun roundGatedItemsCannotBeBoughtBeforeRoundUnlocks() {
+        val lockedWeapon = Shop.buyWeapon(Inventory(), 1000, Weapon.SWORD, currentRound = 1)
+        assertFalse(lockedWeapon.success)
+        assertEquals("unlockAfterRound3", lockedWeapon.reasonKey)
+
+        val unlockedWeapon = Shop.buyWeapon(Inventory(), 1000, Weapon.SWORD, currentRound = 4)
+        assertTrue(unlockedWeapon.success)
+
+        val lockedDefence = Shop.buyDefence(Inventory(), 1000, DefenceItem.GLUE_WALL, currentRound = 1)
+        assertFalse(lockedDefence.success)
+        assertEquals("unlockAfterRound1", lockedDefence.reasonKey)
+
+        val unlockedDefence = Shop.buyDefence(Inventory(), 1000, DefenceItem.GLUE_WALL, currentRound = 2)
+        assertTrue(unlockedDefence.success)
+    }
 }

@@ -273,9 +273,17 @@ data class GameState(
     val robertDamage: Int = 0,
     val playerShots: Int = 0,
     val playerHits: Int = 0,
+    /** Hits landed on Robert by the player during the current engagement. */
+    val fightPlayerHits: Int = 0,
+    /** Hits landed on the player by Robert during the current engagement. */
+    val fightRobertHits: Int = 0,
     val consecutiveHeavyHits: Int = 0,
     /** Consecutive point-blank hits the player has landed on Robert. */
     val playerHeavyHits: Int = 0,
+    /** Whether Robert used his one missile for the match in Round 4. */
+    val robertMissileUsed: Boolean = false,
+    /** Number of anti-missiles Robert has used in Round 4 (up to 2). */
+    val robertAntiMissilesUsed: Int = 0,
 
     /** One second chance per fight for the player. */
     val playerSecondChanceUsed: Boolean = false,
