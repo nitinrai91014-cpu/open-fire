@@ -24,7 +24,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blindtechnexus.openfire.model.BattleMenuItem
-import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.HitZone
@@ -40,13 +39,9 @@ import kotlin.math.roundToInt
 
 /**
  * Gesture-only battle screen split into three equal portions:
- * top = hold to run forward, bottom = hold to retreat, and the center portion
- * is split in two halves (left = run left, right = run right) with a tap
- * activating the quick menu or confirming a timer bomb duration.
- *
- * One-finger swipes fire, reload and switch weapons, two-finger swipes move
- * the menu and read the status, and three-finger swipes step the running
- * speed slower or faster.
+ * top = hold to run forward, bottom = hold to retreat, center = tap to
+ * activate the selected quick-menu item. One-finger swipes fire, reload and
+ * switch weapons; two-finger swipes select menu items and read status.
  */
 @Composable
 fun BattleScreen(viewModel: GameViewModel) {
@@ -73,39 +68,12 @@ fun BattleScreen(viewModel: GameViewModel) {
     }
 
     val menuItem = gameState.menuItem
-    val menuCount = when (menuItem) {
-        BattleMenuItem.MEDKIT -> inventory.medikits
-        BattleMenuItem.COVER -> inventory.covers
-        BattleMenuItem.GLUE_WALL -> inventory.glueWalls
-        BattleMenuItem.ANTI_MISSILE -> inventory.antiMissiles
-        BattleMenuItem.ANTI_BOMB -> inventory.antiBombs
-        else -> 0
-    }
-    val menuLabel = when (menuItem) {
-        BattleMenuItem.MEDKIT -> viewModel.t("medkit")
-        BattleMenuItem.COVER -> viewModel.t("cover")
-        BattleMenuItem.GLUE_WALL -> viewModel.t("glooWall")
-        BattleMenuItem.ANTI_MISSILE -> viewModel.t("antiMissile")
-        BattleMenuItem.ANTI_BOMB -> viewModel.t("antiBomb")
-        BattleMenuItem.EXIT -> viewModel.t("exitGame")
-        BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
-    }
-    val ammoStatus = when {
-        weapon.missileLauncher ->
-            "${viewModel.t("extMissilePowers")}: ${inventory.missilePowers}"
-        weapon.bomb -> "${viewModel.t("bombCharges")}: ${gameState.activeAmmo}"
-        weapon.needsReload -> "${viewModel.t("ammo")}: ${gameState.activeAmmo}"
-        else -> "${viewModel.t("ammo")}: ${viewModel.t("noAmmoNeeded")}"
-    }
-    // The bomb destination is shown next to the enemy health while a bomb
-    // counts down, together with the distance both fighters still have to it.
-    val bombStatus = if (gameState.bombInFlight) {
-        "${viewModel.t("bombDestination")}: " +
-            "${viewModel.t("devil")} ${gameState.robertDistanceFromBomb.roundToInt()} " +
-            "${viewModel.t("meters")}, ${viewModel.t("you")} " +
-            "${gameState.playerDistanceFromBomb.roundToInt()} ${viewModel.t("meters")}"
+    val menuCount = menuItem.defence?.let { inventory.count(it) } ?: 0
+    val menuLabel = viewModel.t(menuItem.nameKey)
+    val ammoStatus = if (weapon.needsReload) {
+        "${viewModel.t("ammo")}: ${gameState.activeAmmo}"
     } else {
-        null
+        "${viewModel.t("ammo")}: ${viewModel.t("noAmmoNeeded")}"
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -161,53 +129,6 @@ fun BattleScreen(viewModel: GameViewModel) {
                     color = zoneColor,
                     textAlign = TextAlign.Center
                 )
-                if (bombStatus != null) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = bombStatus,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = WarnBright,
-                        textAlign = TextAlign.Center
-                    )
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "${viewModel.t("enemyPosition")}: ${gameState.robertX.roundToInt()}, " +
-                        "${gameState.robertY.roundToInt()} ${viewModel.t("meters")}",
-                    fontSize = 12.sp,
-                    color = TextMuted,
-                    textAlign = TextAlign.Center
-                )
-                // From round three Robert carries bombs: the HUD always shows
-                // exactly how many grenades, atom bombs, timer bombs and
-                // anti-bomb explosives he still owns (unlimited reads as ∞).
-                if (gameState.round >= BombRules.FIRST_BOMB_ROUND) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "${viewModel.t("gunGrenade")} ${enemyCount(gameState.robertGrenades)} | " +
-                            "${viewModel.t("gunAtomBomb")} ${enemyCount(gameState.robertAtomBombs)} | " +
-                            "${viewModel.t("gunTimerBomb")} ${enemyCount(gameState.robertTimerBombs)} | " +
-                            "${viewModel.t("antiBomb")} ${enemyCount(gameState.robertAntiBombs)}",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = WarnBright,
-                        textAlign = TextAlign.Center
-                    )
-                }
-                // The final round has a seven minute limit, so the remaining
-                // time is part of the enemy status as well.
-                if (gameState.timeLimitActive) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "${viewModel.t("timeRemaining")}: " +
-                            formatRemaining(gameState.battleRemainingMs),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = WarnBright,
-                        textAlign = TextAlign.Center
-                    )
-                }
             }
         }
 
@@ -262,44 +183,6 @@ fun BattleScreen(viewModel: GameViewModel) {
                     color = TextMuted,
                     textAlign = TextAlign.Center
                 )
-                Spacer(modifier = Modifier.height(3.dp))
-                Text(
-                    text = "${viewModel.t("runSpeed")}: " +
-                        viewModel.t(gameState.runSpeedLevel.nameKey) +
-                        "   |   ${viewModel.t("yourPosition")}: " +
-                        "${gameState.playerX.roundToInt()}, " +
-                        "${gameState.playerY.roundToInt()} ${viewModel.t("meters")}",
-                    fontSize = 12.sp,
-                    color = TextAccent,
-                    textAlign = TextAlign.Center
-                )
-                Text(
-                    text = viewModel.t("centerMoveHint"),
-                    fontSize = 12.sp,
-                    color = TextMuted,
-                    textAlign = TextAlign.Center
-                )
-                if (gameState.timerSelectActive) {
-                    Spacer(modifier = Modifier.height(5.dp))
-                    AlertBox(
-                        text = "${viewModel.t("selectTimer")}: ${gameState.timerSeconds} " +
-                            viewModel.t("seconds") + ". " + viewModel.t("timerHowTo")
-                    )
-                }
-                if (gameState.missileInFlight) {
-                    Spacer(modifier = Modifier.height(5.dp))
-                    AlertBox(
-                        text = if (gameState.missileFromPlayer) {
-                            viewModel.t("missileLaunched")
-                        } else {
-                            viewModel.t("robertMissileLaunched")
-                        }
-                    )
-                }
-                if (weapon.missileLauncher && inventory.missilePowers <= 0) {
-                    Spacer(modifier = Modifier.height(5.dp))
-                    AlertBox(text = viewModel.t("missileNoPower"))
-                }
                 if (gameState.pendingPurchaseId != null) {
                     Spacer(modifier = Modifier.height(5.dp))
                     AlertBox(
@@ -307,14 +190,6 @@ fun BattleScreen(viewModel: GameViewModel) {
                             viewModel.t("itemMissingTail")
                     )
                 }
-                Spacer(modifier = Modifier.height(5.dp))
-                Text(
-                    text = "◀ ${viewModel.t("moveLeft")}   |   ${viewModel.t("moveRight")} ▶",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF9FD4FF),
-                    textAlign = TextAlign.Center
-                )
                 Spacer(modifier = Modifier.height(7.dp))
                 LogBox(text = gameState.log)
                 Spacer(modifier = Modifier.height(5.dp))
@@ -345,9 +220,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                     text = "${viewModel.t("medkits")}: ${inventory.medikits} | " +
                         "${viewModel.t("glooWall")}: ${inventory.glueWalls} | " +
                         "${viewModel.t("cover")}: ${inventory.covers} | " +
-                        "${viewModel.t("antiMissile")}: ${inventory.antiMissiles} | " +
-                        "${viewModel.t("antiBomb")}: ${inventory.antiBombs} | " +
-                        "${viewModel.t("extMissilePowers")}: ${inventory.missilePowers}",
+                        "${viewModel.t("antiMissile")}: ${inventory.antiMissiles}",
                     fontSize = 14.sp,
                     color = TextAccent,
                     textAlign = TextAlign.Center
@@ -355,15 +228,7 @@ fun BattleScreen(viewModel: GameViewModel) {
                 Spacer(modifier = Modifier.height(5.dp))
                 Text(
                     text = BattleMenuItem.entries.joinToString("  ") { item ->
-                        when (item) {
-                            BattleMenuItem.MEDKIT -> viewModel.t("medkit")
-                            BattleMenuItem.COVER -> viewModel.t("cover")
-                            BattleMenuItem.GLUE_WALL -> viewModel.t("glooWall")
-                            BattleMenuItem.ANTI_MISSILE -> viewModel.t("antiMissile")
-                            BattleMenuItem.ANTI_BOMB -> viewModel.t("antiBomb")
-                            BattleMenuItem.EXIT -> viewModel.t("exitGame")
-                            BattleMenuItem.RECOVER -> viewModel.t("recoverWeapon")
-                        }
+                        viewModel.t(item.nameKey)
                     },
                     fontSize = 12.sp,
                     color = TextMuted,
@@ -408,17 +273,3 @@ fun BattleScreen(viewModel: GameViewModel) {
         }
     }
 }
-
-/** An enemy bomb count, where the unlimited round five stock reads as ∞. */
-private fun enemyCount(count: Int): String = if (count >= UNLIMITED_COUNT) "\u221E" else "$count"
-
-/** Remaining milliseconds of the final round as mm:ss. */
-private fun formatRemaining(remainingMs: Long): String {
-    val totalSeconds = (remainingMs.coerceAtLeast(0L) + 999L) / 1_000L
-    val minutes = totalSeconds / 60L
-    val seconds = totalSeconds % 60L
-    return "$minutes:${seconds.toString().padStart(2, '0')}"
-}
-
-/** Bomb and ammunition stocks at or above this count are unlimited. */
-private const val UNLIMITED_COUNT = 90

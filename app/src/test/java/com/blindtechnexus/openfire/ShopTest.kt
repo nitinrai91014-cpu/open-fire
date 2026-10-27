@@ -1,11 +1,9 @@
 package com.blindtechnexus.openfire
 
-import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.ExtensionState
 import com.blindtechnexus.openfire.model.Inventory
-import com.blindtechnexus.openfire.model.MissileRules
 import com.blindtechnexus.openfire.model.Rewards
 import com.blindtechnexus.openfire.model.Shop
 import com.blindtechnexus.openfire.model.Weapon
@@ -15,57 +13,53 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Locks every shop price, purchase, removal and consumption rule. */
+/** Locks purchases, unlocks, removals and consumption for the current catalog. */
 class ShopTest {
 
     @Test
     fun defaultInventoryOwnsOnlyTheFreeWeapons() {
         val inventory = Inventory()
-        assertTrue(inventory.ownsWeapon(Weapon.SHORT_GUN))
-        assertTrue(inventory.ownsWeapon(Weapon.ASSAULT_GUN))
-        assertFalse(inventory.ownsWeapon(Weapon.PISTOL))
-        assertFalse(inventory.ownsWeapon(Weapon.SNIPER))
-        assertFalse(inventory.ownsWeapon(Weapon.KNIFE))
-        assertFalse(inventory.ownsWeapon(Weapon.SWORD))
-        assertFalse(inventory.ownsWeapon(Weapon.MISSILE))
-        assertEquals(0, inventory.missilePowers)
-        assertFalse(inventory.hasMissilePower)
-        assertEquals(2, inventory.ownedWeapons().size)
+        assertEquals(Weapon.defaults(), inventory.ownedWeapons())
+        assertEquals(setOf(Weapon.SHORT_GUN, Weapon.ASSAULT_GUN), inventory.ownedWeapons().toSet())
+        for (weapon in Weapon.forSale()) {
+            assertFalse(inventory.ownsWeapon(weapon))
+        }
+        for (item in DefenceItem.entries) {
+            assertEquals(0, inventory.count(item))
+        }
     }
 
     @Test
-    fun weaponPricesMatchTheShop() {
-        // Every weapon costs 200 coins less than before.
+    fun weaponPricesMatchTheCurrentShop() {
         assertEquals(300, Weapon.KNIFE.price)
-        assertEquals(550, Weapon.PISTOL.price)
-        assertEquals(750, Weapon.SWORD.price)
-        assertEquals(1000, Weapon.SNIPER.price)
-        assertEquals(900, Weapon.MP40.price)
-        assertEquals(1400, Weapon.AWM.price)
-        assertEquals(1900, Weapon.MACHINE_GUN.price)
-        assertEquals(700, Weapon.GRENADE.price)
-        assertEquals(2400, Weapon.ATOM_BOMB.price)
-        assertEquals(2000, Weapon.TIMER_BOMB.price)
-        for (weapon in Weapon.forSale()) {
-            assertTrue("${weapon.id} must be cheaper", weapon.price > 0)
-        }
+        assertEquals(405, Weapon.SWORD.price)
+        assertEquals(499, Weapon.PISTOL.price)
+        assertEquals(549, Weapon.SNIPER.price)
+        assertEquals(600, Weapon.ATOMIC_BOMB.price)
+        assertEquals(500, Weapon.MISSILE.price)
+        assertTrue(Weapon.forSale().all { it.price > 0 })
+        assertTrue(Weapon.defaults().all { it.price == 0 })
     }
 
     @Test
     fun buyingAWeaponDeductsCoinsAndAddsIt() {
         val result = Shop.buyWeapon(Inventory(), 1000, Weapon.PISTOL)
         assertTrue(result.success)
-        assertEquals(450, result.coins)
+        assertEquals(501, result.coins)
         assertTrue(result.inventory.ownsWeapon(Weapon.PISTOL))
     }
 
     @Test
     fun buyingWithoutEnoughCoinsFailsWithoutChanges() {
-        val result = Shop.buyWeapon(Inventory(), 549, Weapon.PISTOL)
-        assertFalse(result.success)
-        assertEquals(549, result.coins)
-        assertEquals("notEnoughCoins", result.reasonKey)
-        assertFalse(result.inventory.ownsWeapon(Weapon.PISTOL))
+        for (weapon in Weapon.forSale()) {
+            val inventory = Inventory()
+            val coins = weapon.price - 1
+            val result = Shop.buyWeapon(inventory, coins, weapon)
+            assertFalse(weapon.id, result.success)
+            assertEquals(coins, result.coins)
+            assertEquals("notEnoughCoins", result.reasonKey)
+            assertEquals(inventory, result.inventory)
+        }
     }
 
     @Test
@@ -75,18 +69,24 @@ class ShopTest {
         assertFalse(again.success)
         assertEquals("alreadyOwned", again.reasonKey)
         assertEquals(2000, again.coins)
+        assertEquals(owned, again.inventory)
     }
 
     @Test
-    fun boughtWeaponsCanBeRemovedButFreeWeaponsCannot() {
+    fun boughtWeaponsCanBeRemovedButFreeOrUnownedWeaponsCannot() {
         val owned = Shop.buyWeapon(Inventory(), 1000, Weapon.SWORD).inventory
         val removed = Shop.removeWeapon(owned, 1000, Weapon.SWORD)
         assertTrue(removed.success)
+        assertEquals(1000, removed.coins)
         assertFalse(removed.inventory.ownsWeapon(Weapon.SWORD))
 
-        val free = Shop.removeWeapon(Inventory(), 1000, Weapon.SHORT_GUN)
-        assertFalse(free.success)
-        assertEquals("cannotRemoveWeapon", free.reasonKey)
+        for (weapon in listOf(Weapon.SHORT_GUN, Weapon.ASSAULT_GUN, Weapon.PISTOL)) {
+            val inventory = Inventory()
+            val refused = Shop.removeWeapon(inventory, 1000, weapon)
+            assertFalse(refused.success)
+            assertEquals("cannotRemoveWeapon", refused.reasonKey)
+            assertEquals(inventory, refused.inventory)
+        }
     }
 
     @Test
@@ -99,357 +99,9 @@ class ShopTest {
     }
 
     @Test
-    fun defencesAreRepeatableAndDecreaseOnUse() {
-        var inventory = Inventory()
-        var coins = 2000
-        repeat(3) {
-            val bought = Shop.buyDefence(inventory, coins, DefenceItem.MEDKIT)
-            assertTrue(bought.success)
-            inventory = bought.inventory
-            coins = bought.coins
-        }
-        assertEquals(3, inventory.medikits)
-        assertEquals(1100, coins)
-
-        inventory = Shop.consume(inventory, DefenceItem.MEDKIT)
-        assertEquals(2, inventory.medikits)
-        assertTrue(inventory.count(DefenceItem.MEDKIT) >= 0)
-    }
-
-    @Test
-    fun antiMissileDefenceCostsTwentyEightHundredAndUnlocksAfterRoundTwo() {
-        assertEquals(2800, DefenceItem.ANTI_MISSILE.price)
-        assertEquals(2, DefenceItem.ANTI_MISSILE.requiredCompletedRounds)
-
-        val locked = Shop.buyDefence(
-            Inventory(),
-            5000,
-            DefenceItem.ANTI_MISSILE,
-            completedRounds = 1
-        )
-        assertFalse(locked.success)
-        assertEquals("antiMissileLocked", locked.reasonKey)
-        assertEquals(5000, locked.coins)
-        assertEquals(0, locked.inventory.antiMissiles)
-
-        val unlocked = Shop.buyDefence(
-            Inventory(),
-            5000,
-            DefenceItem.ANTI_MISSILE,
-            completedRounds = 2
-        )
-        assertTrue(unlocked.success)
-        assertEquals(2200, unlocked.coins)
-        assertEquals(1, unlocked.inventory.antiMissiles)
-
-        val consumed = Shop.consume(unlocked.inventory, DefenceItem.ANTI_MISSILE)
-        assertEquals(0, consumed.antiMissiles)
-
-        val granted = Shop.grant(Inventory(), DefenceItem.ANTI_MISSILE, 2)
-        assertEquals(2, granted.antiMissiles)
-        assertEquals(0, granted.withCount(DefenceItem.ANTI_MISSILE, 0).antiMissiles)
-    }
-
-    @Test
-    fun antiBombDefenceIsStackableAndUnlocksAfterRoundTwo() {
-        assertEquals(2600, DefenceItem.ANTI_BOMB.price)
-        assertEquals(BombRules.ANTI_BOMB_PRICE, DefenceItem.ANTI_BOMB.price)
-        assertEquals(BombRules.FIRST_BOMB_ROUND - 1, DefenceItem.ANTI_BOMB.requiredCompletedRounds)
-
-        val locked = Shop.buyDefence(
-            Inventory(),
-            6000,
-            DefenceItem.ANTI_BOMB,
-            completedRounds = 1
-        )
-        assertFalse(locked.success)
-        assertEquals("antiBombLocked", locked.reasonKey)
-        assertEquals(0, locked.inventory.antiBombs)
-
-        val bought = Shop.buyDefence(
-            Inventory(),
-            6000,
-            DefenceItem.ANTI_BOMB,
-            completedRounds = 2
-        )
-        assertTrue(bought.success)
-        assertEquals(3400, bought.coins)
-        assertEquals(1, bought.inventory.antiBombs)
-        assertEquals(1, bought.inventory.count(DefenceItem.ANTI_BOMB))
-        assertEquals(0, Shop.consume(bought.inventory, DefenceItem.ANTI_BOMB).antiBombs)
-        // It never goes negative.
-        assertEquals(0, Shop.consume(Inventory(), DefenceItem.ANTI_BOMB).antiBombs)
-    }
-
-    @Test
-    fun aDefenceCanNeverGoNegative() {
-        val inventory = Shop.consume(Inventory(), DefenceItem.COVER)
-        assertEquals(0, inventory.covers)
-        assertEquals(0, Shop.consume(Inventory(), DefenceItem.ANTI_MISSILE).antiMissiles)
-    }
-
-    @Test
-    fun extensionsCanBeBoughtDisabledEnabledAndRemoved() {
-        val bought = Shop.buyExtension(Inventory(), 500, Extension.AUTO_RELOAD)
-        assertTrue(bought.success)
-        assertEquals(400, bought.coins)
-        assertTrue(bought.inventory.extensionEnabled(Extension.AUTO_RELOAD))
-
-        val disabled = Shop.toggleExtension(bought.inventory, 400, Extension.AUTO_RELOAD)
-        assertTrue(disabled.success)
-        assertEquals(
-            ExtensionState.DISABLED,
-            disabled.inventory.extensionState(Extension.AUTO_RELOAD)
-        )
-        assertFalse(disabled.inventory.extensionEnabled(Extension.AUTO_RELOAD))
-        assertEquals(400, disabled.coins)
-
-        val enabled = Shop.toggleExtension(disabled.inventory, 400, Extension.AUTO_RELOAD)
-        assertTrue(enabled.inventory.extensionEnabled(Extension.AUTO_RELOAD))
-
-        val removed = Shop.removeExtension(enabled.inventory, 0, Extension.AUTO_RELOAD)
-        assertTrue(removed.success)
-        assertEquals(
-            ExtensionState.NOT_OWNED,
-            removed.inventory.extensionState(Extension.AUTO_RELOAD)
-        )
-    }
-
-    @Test
-    fun buyingAnExtensionWithoutEnoughCoinsFails() {
-        val result = Shop.buyExtension(Inventory(), 249, Extension.AUTO_COVER)
-        assertFalse(result.success)
-        assertEquals("notEnoughCoins", result.reasonKey)
-        assertEquals(249, result.coins)
-    }
-
-    @Test
-    fun extensionPricesAreFiftyCoinsCheaper() {
-        assertEquals(100, Extension.AUTO_RELOAD.price)
-        assertEquals(190, Extension.AUTO_MEDKIT.price)
-        assertEquals(250, Extension.AUTO_COVER.price)
-        assertEquals(250, Extension.AUTO_GLUE_WALL.price)
-    }
-
-    @Test
-    fun missileAndMissilePowerHaveTheRequestedPrices() {
-        assertEquals(3300, Weapon.MISSILE.price)
-        assertEquals(3300, MissileRules.MISSILE_PRICE)
-        assertEquals(1600, MissileRules.MISSILE_POWER_PRICE)
-        assertEquals(2, Weapon.MISSILE.requiredCompletedRounds)
-        assertTrue(Weapon.MISSILE.missileLauncher)
-        assertEquals(0, Weapon.MISSILE.magazine)
-        assertFalse(Weapon.MISSILE.needsReload)
-        // Switching to the missile uses the shared gun-switch sound.
-        assertEquals("gunReload", Weapon.MISSILE.switchSoundKey)
-        // Missile power is a consumable, never a permanent extension.
-        assertFalse(Extension.entries.any { it.id == "missilePowers" })
-    }
-
-    @Test
-    fun missileIsLockedUntilRoundTwoIsCompleted() {
-        val locked = Shop.buyWeapon(Inventory(), 5000, Weapon.MISSILE, completedRounds = 1)
-        assertFalse(locked.success)
-        assertEquals("missileLocked", locked.reasonKey)
-        assertEquals(5000, locked.coins)
-        assertFalse(locked.inventory.ownsWeapon(Weapon.MISSILE))
-
-        val unlocked = Shop.buyWeapon(Inventory(), 5000, Weapon.MISSILE, completedRounds = 2)
-        assertTrue(unlocked.success)
-        assertEquals(1700, unlocked.coins)
-        assertTrue(unlocked.inventory.ownsWeapon(Weapon.MISSILE))
-        // The missile is a real battle weapon in the switch inventory.
-        assertEquals(3, unlocked.inventory.ownedWeapons().size)
-        assertTrue(unlocked.inventory.ownedWeapons().contains(Weapon.MISSILE))
-
-        val again = Shop.buyWeapon(unlocked.inventory, 5000, Weapon.MISSILE, completedRounds = 2)
-        assertFalse(again.success)
-        assertEquals("alreadyOwned", again.reasonKey)
-    }
-
-    @Test
-    fun missilePowersStackLikeDefencesAndAreConsumedOnePerLaunch() {
-        val locked = Shop.buyMissilePower(Inventory(), 6000, completedRounds = 1)
-        assertFalse(locked.success)
-        assertEquals("missileLocked", locked.reasonKey)
-        assertEquals(6000, locked.coins)
-        assertEquals(0, locked.inventory.missilePowers)
-
-        var inventory = Inventory()
-        var coins = 6000
-        repeat(3) {
-            val bought = Shop.buyMissilePower(inventory, coins, completedRounds = 2)
-            assertTrue(bought.success)
-            inventory = bought.inventory
-            coins = bought.coins
-        }
-        assertEquals(3, inventory.missilePowers)
-        assertTrue(inventory.hasMissilePower)
-        assertEquals(1200, coins)
-
-        // Exactly one power is consumed per use; the rest stay stacked.
-        inventory = Shop.consumeMissilePower(inventory)
-        assertEquals(2, inventory.missilePowers)
-        inventory = Shop.consumeMissilePower(inventory)
-        inventory = Shop.consumeMissilePower(inventory)
-        assertEquals(0, inventory.missilePowers)
-        assertFalse(inventory.hasMissilePower)
-        // The count can never go negative.
-        assertEquals(0, Shop.consumeMissilePower(inventory).missilePowers)
-
-        val broke = Shop.buyMissilePower(Inventory(), 1599, completedRounds = 2)
-        assertFalse(broke.success)
-        assertEquals("notEnoughCoins", broke.reasonKey)
-        assertEquals(1599, broke.coins)
-    }
-
-    @Test
-    fun disabledWeaponsAreSkippedByTheBattleRotation() {
-        val bought = Shop.buyWeapon(Inventory(), 2000, Weapon.PISTOL).inventory
-        assertEquals(3, bought.battleWeapons().size)
-        assertTrue(bought.weaponEnabled(Weapon.PISTOL))
-
-        val result = Shop.toggleWeaponEnabled(bought, 2000, Weapon.PISTOL)
-        assertTrue(result.success)
-        // The switch is free: it never charges coins.
-        assertEquals(2000, result.coins)
-        val disabled = result.inventory
-        assertFalse(disabled.weaponEnabled(Weapon.PISTOL))
-        // Still owned and still shown by the shop, but out of the rotation.
-        assertTrue(disabled.ownsWeapon(Weapon.PISTOL))
-        assertEquals(3, disabled.ownedWeapons().size)
-        assertEquals(2, disabled.battleWeapons().size)
-
-        val enabled = Shop.toggleWeaponEnabled(disabled, 0, Weapon.PISTOL).inventory
-        assertTrue(enabled.weaponEnabled(Weapon.PISTOL))
-        assertEquals(3, enabled.battleWeapons().size)
-
-        val notOwned = Shop.toggleWeaponEnabled(Inventory(), 0, Weapon.SWORD)
-        assertFalse(notOwned.success)
-        assertEquals("notOwned", notOwned.reasonKey)
-    }
-
-    @Test
-    fun disablingTheRememberedWeaponFallsBackToAnEnabledOne() {
-        val bought = Shop.buyWeapon(Inventory(), 2000, Weapon.PISTOL).inventory
-            .copy(lastWeaponId = Weapon.PISTOL.id)
-        val disabled = Shop.toggleWeaponEnabled(bought, 0, Weapon.PISTOL).inventory
-        assertEquals(Weapon.SHORT_GUN, disabled.startingWeapon())
-        // It is still owned, only switched off - and because it was the
-        // remembered weapon the memory moves to an enabled one, so a battle can
-        // never start on a hidden weapon.
-        assertTrue(disabled.ownsWeapon(Weapon.PISTOL))
-        assertEquals(Weapon.SHORT_GUN.id, disabled.lastWeaponId)
-        assertEquals(Weapon.SHORT_GUN, disabled.rememberedWeapon())
-        assertFalse(disabled.battleWeapons().contains(Weapon.PISTOL))
-
-        // Buying an owned weapon never flips the switch: it is refused as
-        // already owned, spends nothing, and the Enable button stays the only
-        // way back into the rotation.
-        val again = Shop.buyWeapon(disabled, 2000, Weapon.PISTOL)
-        assertFalse(again.success)
-        assertEquals("alreadyOwned", again.reasonKey)
-        assertEquals(2000, again.coins)
-        assertFalse(again.inventory.weaponEnabled(Weapon.PISTOL))
-
-        // The Enable switch puts it back into the rotation. The memory stayed
-        // where disabling it moved it, and as soon as the pistol is the
-        // remembered weapon again the next battle really starts with it.
-        val enabled = Shop.toggleWeaponEnabled(disabled, 0, Weapon.PISTOL).inventory
-        assertTrue(enabled.weaponEnabled(Weapon.PISTOL))
-        assertTrue(enabled.battleWeapons().contains(Weapon.PISTOL))
-        assertEquals(Weapon.SHORT_GUN, enabled.startingWeapon())
-        assertEquals(
-            Weapon.PISTOL,
-            enabled.copy(lastWeaponId = Weapon.PISTOL.id).startingWeapon()
-        )
-
-        // A free grant of a not yet owned weapon always arrives enabled, even
-        // when its id was left over in the disabled set.
-        val granted = Shop.grantWeapon(
-            Inventory(disabledWeapons = setOf(Weapon.AWM.id)),
-            Weapon.AWM
-        ).inventory
-        assertTrue(granted.ownsWeapon(Weapon.AWM))
-        assertTrue(granted.weaponEnabled(Weapon.AWM))
-        assertTrue(granted.disabledWeapons.isEmpty())
-    }
-
-    @Test
-    fun battleWeaponsOnlyContainWhatTheRoundUnlocks() {
-        val everything = Inventory(weaponIds = Weapon.entries.map { it.id }.toSet())
-        // Round one: the two free guns plus every round-one shop weapon.
-        assertEquals(
-            setOf("shortGun", "assaultGun", "pistol", "sniper", "knife", "sword"),
-            everything.battleWeapons(1).map { it.id }.toSet()
-        )
-        assertTrue(everything.battleWeapons(2).contains(Weapon.MP40))
-        assertTrue(everything.battleWeapons(2).contains(Weapon.AWM))
-        assertFalse(everything.battleWeapons(2).contains(Weapon.GRENADE))
-        assertFalse(everything.battleWeapons(2).contains(Weapon.MISSILE))
-        assertTrue(everything.battleWeapons(3).contains(Weapon.GRENADE))
-        assertTrue(everything.battleWeapons(3).contains(Weapon.ATOM_BOMB))
-        assertTrue(everything.battleWeapons(3).contains(Weapon.TIMER_BOMB))
-        assertTrue(everything.battleWeapons(3).contains(Weapon.MISSILE))
-        assertFalse(everything.battleWeapons(3).contains(Weapon.MACHINE_GUN))
-        assertTrue(everything.battleWeapons(4).contains(Weapon.MACHINE_GUN))
-        assertTrue(everything.battleWeapons(5).contains(Weapon.MACHINE_GUN))
-    }
-
-    @Test
-    fun freeWeaponsAreIssuedByRoundAndNeverTwice() {
-        assertEquals(emptyList<Weapon>(), Weapon.issuedForRound(1))
-        assertEquals(listOf(Weapon.MP40, Weapon.AWM), Weapon.issuedForRound(2))
-        assertEquals(listOf(Weapon.MP40, Weapon.AWM, Weapon.GRENADE), Weapon.issuedForRound(3))
-        // The machine gun is unlockable in the shop but is never handed out
-        // for free and is never part of any reward.
-        assertEquals(0, Weapon.MACHINE_GUN.issuedFreeFromRound)
-        assertFalse(Weapon.issuedForRound(5).contains(Weapon.MACHINE_GUN))
-        assertTrue(Weapon.MACHINE_GUN.price > 0)
-        assertEquals(4, Weapon.MACHINE_GUN.unlockRound)
-
-        val granted = Shop.grantWeapon(Inventory(), Weapon.MP40)
-        assertTrue(granted.success)
-        assertTrue(granted.inventory.ownsWeapon(Weapon.MP40))
-        val twice = Shop.grantWeapon(granted.inventory, Weapon.MP40)
-        assertFalse(twice.success)
-        assertEquals("alreadyOwned", twice.reasonKey)
-        // Granting a weapon also re-enables it when it was disabled.
-        val disabled = granted.inventory.copy(
-            disabledWeapons = setOf(Weapon.MP40.id)
-        )
-        val removed = Shop.removeWeapon(disabled, 0, Weapon.MP40).inventory
-        assertFalse(removed.ownsWeapon(Weapon.MP40))
-        assertTrue(Shop.grantWeapon(removed, Weapon.MP40).inventory.weaponEnabled(Weapon.MP40))
-    }
-
-    @Test
-    fun rewardBundlesAreGrantedWithoutCharge() {
-        val bundle = Rewards.ROUND_REWARD
-        val granted = Shop.grantBundle(Inventory(), bundle)
-        assertEquals(2, granted.glueWalls)
-        assertEquals(2, granted.medikits)
-        assertEquals(3, granted.covers)
-        assertEquals(0, granted.antiBombs)
-        assertEquals(7, bundle.total)
-
-        for (level in Rewards.LEVEL_REWARDS) {
-            val inv = Shop.grantBundle(Inventory(), level)
-            assertEquals(level.glueWalls, inv.glueWalls)
-            assertEquals(level.medikits, inv.medikits)
-            assertEquals(level.covers, inv.covers)
-            assertTrue(level.total > 0)
-        }
-        // A random level reward never carries more than one gloo wall.
-        assertTrue(Rewards.levelRewardsRespectTheGlueWallLimit())
-        assertEquals(5, Rewards.LEVEL_REWARDS.size)
-        assertEquals(Rewards.ROUND_REWARD, Rewards.forPromotion(false, true, kotlin.random.Random))
-        assertTrue(Rewards.forPromotion(false, false, kotlin.random.Random).isEmpty)
-    }
-
-    @Test
     fun theRememberedWeaponIsOnlyUsedWhenItIsStillOwned() {
         assertNull(Inventory(lastWeaponId = Weapon.SWORD.id).rememberedWeapon())
+        assertNull(Inventory(lastWeaponId = "removedWeapon").rememberedWeapon())
         val owned = Shop.buyWeapon(Inventory(), 1000, Weapon.SWORD).inventory
             .copy(lastWeaponId = Weapon.SWORD.id)
         assertEquals(Weapon.SWORD, owned.rememberedWeapon())
@@ -457,19 +109,158 @@ class ShopTest {
     }
 
     @Test
-    fun roundGatedItemsCannotBeBoughtBeforeRoundUnlocks() {
-        val lockedWeapon = Shop.buyWeapon(Inventory(), 1000, Weapon.SWORD, currentRound = 1)
-        assertFalse(lockedWeapon.success)
-        assertEquals("unlockAfterRound3", lockedWeapon.reasonKey)
+    fun defencesAreRepeatableAndDecreaseOnUse() {
+        for (item in DefenceItem.entries) {
+            var inventory = Inventory()
+            var coins = item.price * 3
+            repeat(3) {
+                val bought = Shop.buyDefence(inventory, coins, item)
+                assertTrue(item.id, bought.success)
+                inventory = bought.inventory
+                coins = bought.coins
+            }
+            assertEquals(3, inventory.count(item))
+            assertEquals(0, coins)
+            assertEquals(2, Shop.consume(inventory, item).count(item))
+        }
+    }
 
-        val unlockedWeapon = Shop.buyWeapon(Inventory(), 1000, Weapon.SWORD, currentRound = 4)
-        assertTrue(unlockedWeapon.success)
+    @Test
+    fun defencePricesAndAntiMissileUnlockMatchTheCurrentShop() {
+        assertEquals(200, DefenceItem.MEDKIT.price)
+        assertEquals(400, DefenceItem.GLUE_WALL.price)
+        assertEquals(350, DefenceItem.COVER.price)
+        assertEquals(350, DefenceItem.ANTI_MISSILE.price)
+        assertEquals(3, DefenceItem.ANTI_MISSILE.unlockAfterRound)
 
-        val lockedDefence = Shop.buyDefence(Inventory(), 1000, DefenceItem.GLUE_WALL, currentRound = 1)
-        assertFalse(lockedDefence.success)
-        assertEquals("unlockAfterRound1", lockedDefence.reasonKey)
+        val locked = Shop.buyDefence(Inventory(), 1000, DefenceItem.ANTI_MISSILE, currentRound = 3)
+        assertFalse(locked.success)
+        assertEquals("unlockAfterRound3", locked.reasonKey)
+        assertEquals(1000, locked.coins)
+        assertEquals(0, locked.inventory.antiMissiles)
 
-        val unlockedDefence = Shop.buyDefence(Inventory(), 1000, DefenceItem.GLUE_WALL, currentRound = 2)
-        assertTrue(unlockedDefence.success)
+        val unlocked = Shop.buyDefence(Inventory(), 1000, DefenceItem.ANTI_MISSILE, currentRound = 4)
+        assertTrue(unlocked.success)
+        assertEquals(650, unlocked.coins)
+        assertEquals(1, unlocked.inventory.antiMissiles)
+    }
+
+    @Test
+    fun aDefenceCanNeverGoNegativeOrBeBoughtWithoutEnoughCoins() {
+        for (item in DefenceItem.entries) {
+            assertEquals(0, Shop.consume(Inventory(), item).count(item))
+            assertEquals(0, Inventory().withCount(item, -5).count(item))
+            val refused = Shop.buyDefence(Inventory(), item.price - 1, item)
+            assertFalse(refused.success)
+            assertEquals("notEnoughCoins", refused.reasonKey)
+            assertEquals(item.price - 1, refused.coins)
+            assertEquals(Inventory(), refused.inventory)
+        }
+    }
+
+    @Test
+    fun extensionsCanBeBoughtDisabledEnabledAndRemoved() {
+        for (extension in Extension.entries) {
+            val bought = Shop.buyExtension(Inventory(), 500, extension)
+            assertTrue(bought.success)
+            val remaining = 500 - extension.price
+            assertEquals(remaining, bought.coins)
+            assertTrue(bought.inventory.extensionEnabled(extension))
+
+            val disabled = Shop.toggleExtension(bought.inventory, remaining, extension)
+            assertTrue(disabled.success)
+            assertEquals(ExtensionState.DISABLED, disabled.inventory.extensionState(extension))
+            assertFalse(disabled.inventory.extensionEnabled(extension))
+            assertEquals(remaining, disabled.coins)
+
+            val enabled = Shop.toggleExtension(disabled.inventory, remaining, extension)
+            assertTrue(enabled.inventory.extensionEnabled(extension))
+            assertEquals(remaining, enabled.coins)
+            val removed = Shop.removeExtension(enabled.inventory, remaining, extension)
+            assertTrue(removed.success)
+            assertEquals(ExtensionState.NOT_OWNED, removed.inventory.extensionState(extension))
+            assertEquals(remaining, removed.coins)
+        }
+    }
+
+    @Test
+    fun extensionTransactionsRejectInsufficientFundsDuplicatesAndUnownedItems() {
+        for (extension in Extension.entries) {
+            val result = Shop.buyExtension(Inventory(), extension.price - 1, extension)
+            assertFalse(result.success)
+            assertEquals("notEnoughCoins", result.reasonKey)
+            assertEquals(Inventory(), result.inventory)
+            assertEquals(extension.price - 1, result.coins)
+
+            val owned = Shop.buyExtension(Inventory(), 500, extension).inventory
+            val duplicate = Shop.buyExtension(owned, 500, extension)
+            assertFalse(duplicate.success)
+            assertEquals("alreadyOwned", duplicate.reasonKey)
+            assertEquals(owned, duplicate.inventory)
+            assertEquals(500, duplicate.coins)
+
+            val unownedToggle = Shop.toggleExtension(Inventory(), 500, extension)
+            val unownedRemoval = Shop.removeExtension(Inventory(), 500, extension)
+            for (refused in listOf(unownedToggle, unownedRemoval)) {
+                assertFalse(refused.success)
+                assertEquals("notOwned", refused.reasonKey)
+                assertEquals(500, refused.coins)
+                assertEquals(Inventory(), refused.inventory)
+            }
+        }
+    }
+
+    @Test
+    fun extensionPricesMatchTheCurrentCatalog() {
+        assertEquals(50, Extension.AUTO_RELOAD.price)
+        assertEquals(80, Extension.AUTO_MEDKIT.price)
+        assertEquals(100, Extension.AUTO_COVER.price)
+        assertEquals(100, Extension.AUTO_GLUE_WALL.price)
+    }
+
+    @Test
+    fun everyRoundGatedItemUnlocksOnlyAfterItsRequiredRound() {
+        for (weapon in Weapon.forSale().filter { it.unlockAfterRound > 0 }) {
+            val locked = Shop.buyWeapon(Inventory(), 2000, weapon, currentRound = weapon.unlockAfterRound)
+            assertFalse(weapon.id, locked.success)
+            assertEquals(Shop.unlockReasonKey(weapon.unlockAfterRound), locked.reasonKey)
+            assertEquals(2000, locked.coins)
+            assertEquals(Inventory(), locked.inventory)
+            val unlocked = Shop.buyWeapon(Inventory(), 2000, weapon, currentRound = weapon.unlockAfterRound + 1)
+            assertTrue(weapon.id, unlocked.success)
+            assertTrue(unlocked.inventory.ownsWeapon(weapon))
+        }
+        for (item in DefenceItem.entries.filter { it.unlockAfterRound > 0 }) {
+            val locked = Shop.buyDefence(Inventory(), 2000, item, currentRound = item.unlockAfterRound)
+            assertFalse(item.id, locked.success)
+            assertEquals(Shop.unlockReasonKey(item.unlockAfterRound), locked.reasonKey)
+            assertEquals(2000, locked.coins)
+            assertEquals(Inventory(), locked.inventory)
+            val unlocked = Shop.buyDefence(Inventory(), 2000, item, currentRound = item.unlockAfterRound + 1)
+            assertTrue(item.id, unlocked.success)
+            assertEquals(1, unlocked.inventory.count(item))
+        }
+    }
+
+    @Test
+    fun rewardBundlesContainOnlySupportedDefencesAndCanBeGrantedWithoutCharge() {
+        for (bundle in Rewards.LEVEL_REWARDS + Rewards.ROUND_REWARD) {
+            val inventory = bundle.parts().fold(Inventory()) { current, (item, amount) ->
+                Shop.grant(current, item, amount)
+            }
+            for (item in DefenceItem.entries) {
+                assertEquals(bundle.count(item), inventory.count(item))
+            }
+        }
+        val round = Rewards.ROUND_REWARD
+        assertEquals(2, round.glueWalls)
+        assertEquals(2, round.medikits)
+        assertEquals(3, round.covers)
+        assertEquals(7, round.total)
+        assertTrue(Rewards.levelRewardsRespectTheGlueWallLimit())
+        assertEquals(5, Rewards.LEVEL_REWARDS.size)
+        assertEquals(Rewards.ROUND_REWARD, Rewards.forPromotion(false, true, kotlin.random.Random))
+        assertTrue(Rewards.forPromotion(false, false, kotlin.random.Random).isEmpty)
+        assertEquals(0, Shop.grant(Inventory(), DefenceItem.MEDKIT, -1).medikits)
     }
 }

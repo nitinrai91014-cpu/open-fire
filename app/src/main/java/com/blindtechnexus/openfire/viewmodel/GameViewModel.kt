@@ -788,20 +788,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun robertFireInterval(): Long {
         val state = _gameState.value
-        // If enemy has cover or active defense while player has none: fire at 1-second intervals.
-        val enemyDefense = state.robertCoverActive || state.robertGlueWallActive
-        val playerDefense = state.coverActive || state.glueWallActive
-        if (enemyDefense && !playerDefense) {
-            return 1000L
-        }
-
-        // While the player's weapon is damaged Robert fires continuously.
-        if (isPlayerWeaponLocked(state)) {
-            return 1000L
-        }
-
-        // Normally, the enemy fires randomly at intervals between 1.5 and 2 seconds.
-        return 1500L + Random.nextLong(0, 501L)
+        return RobertRules.fireInterval(
+            playerWeaponDamaged = isPlayerWeaponLocked(state),
+            enemyHasDefence = state.robertCoverActive || state.robertGlueWallActive,
+            playerHasDefence = state.coverActive || state.glueWallActive,
+            random = Random
+        )
     }
 
     /**

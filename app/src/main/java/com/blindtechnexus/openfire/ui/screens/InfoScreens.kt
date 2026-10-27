@@ -194,18 +194,6 @@ fun ProfileScreen(viewModel: GameViewModel) {
                 fontSize = 15.sp,
                 color = Color.White
             )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "${viewModel.t("extMissilePowers")}: ${inventory.missilePowers}",
-                fontSize = 15.sp,
-                color = Color.White
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "${viewModel.t("extBombPowers")}: ${inventory.bombPowers}",
-                fontSize = 15.sp,
-                color = Color.White
-            )
 
             Spacer(modifier = Modifier.height(14.dp))
             Text(
