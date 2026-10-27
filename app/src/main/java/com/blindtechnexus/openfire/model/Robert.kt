@@ -16,16 +16,16 @@ import kotlin.random.Random
  *    the sword and the MP40 submachine gun join his weapons.
  *  - Round 3 (all levels): 3 medkits, 2 glue walls and 4 covers. The pistol
  *    and the AWM join his weapons, the sniper rifle unlocks, and he receives
- *    one bomb (grenade or atom bomb) plus one anti-bomb explosive per game.
+ *    one bomb plus one anti-bomb explosive per game (1 in R3, 3 in R4, unlimited in R5).
  *  - Round 4 (all levels): 5 medkits, 3 glue walls and 5 covers. Every weapon
- *    is available, including the machine gun, one missile power per game, one
- *    anti-missile interceptor, two bombs and one anti-bomb explosive.
- *  - Round 5 (all levels): 5 medkits, 4 glue walls and 7 covers. As round
- *    four, with two anti-missile interceptors.
+ *    is available, including the machine gun, missile powers, anti-missiles,
+ *    bombs (3) and anti-bombs (3).
+ *  - Round 5 (all levels): 5 medkits, 4 glue walls and 7 covers. Strategic round:
+ *    equal power, bombs and anti-bombs unlimited — relies on strategy, not raw stats.
  *
  * The missile and the bombs never enter his random weapon rotation: they are
  * fired only through [MissileRules.shouldEnemyLaunch] and
- * [BombRules.shouldEnemyThrow] as desperation weapons.
+ * [BombRules.shouldEnemyThrow] as desperation/strategic weapons.
  */
 data class RobertProfile(
     val round: Int,
@@ -84,6 +84,17 @@ object RobertRules {
     /** Window in which player shots are counted as one continuous burst. */
     const val PLAYER_BURST_WINDOW_MS = 2_500L
 
+    /** Health fraction below which Robert panics and deploys defences instantly. */
+    const val PANIC_FRACTION = 0.65f
+    const val PANIC_FRACTION_SEVERE = 0.40f
+
+    /** When health drops below 150 or 200 HP remaining, panic threshold (legacy spec). */
+    const val PANIC_HP_150 = 150
+    const val PANIC_HP_200 = 200
+
+    /** Random firing intervals when player is NOT vulnerable (1s, 1.5s, 2s). */
+    val NORMAL_INTERVALS_MS = listOf(1000L, 1500L, 2000L)
+
     /** Consecutive hits needed before Robert runs far away. */
     fun fleeAfterHits(round: Int): Int = when (round) {
         3 -> 3
@@ -96,8 +107,10 @@ object RobertRules {
      * Round-by-round movement multiplier. Round one is 20% faster than the
      * old movement, and every following round adds another 20% of base speed.
      */
-    fun movementSpeedMultiplier(round: Int): Float =
-        1.2f + (round.coerceIn(1, Progression.ROUNDS_PER_MATCH) - 1) * 0.2f
+    fun movementSpeedMultiplier(round: Int): Float {
+        val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
+        return 1.2f + (safeRound - 1) * 0.2f
+    }
 
     /**
      * Robert's fast running speed in metres per second. The player's fast
@@ -120,9 +133,9 @@ object RobertRules {
         val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
         val safeMax = maxHp.coerceAtLeast(1)
         return when (safeRound) {
-            1, 2 -> maxOf(DEFENCE_THRESHOLD_HP + 40, (safeMax * 0.60f).roundToInt())
-            3 -> maxOf(200, DEFENCE_THRESHOLD_HP)
-            else -> maxOf(300, DEFENCE_THRESHOLD_HP)
+            1, 2 -> maxOf(100, (safeMax * 0.60f).roundToInt())
+            3 -> 200
+            else -> 300
         }
     }
 
@@ -325,24 +338,135 @@ object RobertRules {
             robertHealthDropping &&
             !playerHealthDropping
 
+    fun shouldRetreatWhenPlayerFiresBack(playerBurstShots: Int): Boolean =
+        isContinuousPlayerFire(playerBurstShots)
+
+    /** True when health dropped below panic thresholds (150 or 200 HP or fraction). */
+    fun shouldPanic(robertHp: Int, robertMaxHp: Int, previousHp: Int = robertMaxHp): Boolean {
+        if (robertMaxHp <= 0) return false
+        val fraction = robertHp.toFloat() / robertMaxHp.toFloat()
+        // Even 1% drop below fraction thresholds triggers panic
+        if (fraction < PANIC_FRACTION || fraction < PANIC_FRACTION_SEVERE) return true
+        if (robertHp < PANIC_HP_200 || robertHp < PANIC_HP_150) return true
+        // Any drop below previous (even 1%) when already below 95% triggers panic
+        if (previousHp > robertHp && fraction < 0.95f) return true
+        return false
+    }
+
+    /** True when the player is vulnerable (damaged, trapped, locked, hindered). */
+    fun isPlayerVulnerable(
+        playerWeaponDamaged: Boolean,
+        playerHp: Int,
+        playerMaxHp: Int,
+        playerGlueWallActive: Boolean,
+        playerCoverActive: Boolean,
+        consecutiveHeavyHits: Int = 0
+    ): Boolean {
+        if (playerWeaponDamaged) return true
+        if (playerMaxHp <= 0) return false
+        val fraction = playerHp.toFloat() / playerMaxHp.toFloat()
+        // Low health = vulnerable
+        if (fraction < 0.35f) return true
+        // Trapped / hindered: heavy hits streak or no barriers while close
+        if (consecutiveHeavyHits >= 2) return true
+        // Locked: weapon damaged already handled, but also when both barriers down and health mid?
+        if (!playerGlueWallActive && !playerCoverActive && fraction < 0.6f) return true
+        return false
+    }
+
+    /**
+     * Smart weapon selection based on health bands as requested:
+     * 40–70% health: balanced mid-range weapons
+     * 90–100% health: high power close-range + precision
+     * 20–40% health: long-range or desperate high-damage
+     * Feels unsafe / significant damage: retreat signal included.
+     */
+    fun smartWeaponForSituation(
+        allowed: List<Weapon>,
+        robertHp: Int,
+        robertMaxHp: Int,
+        proximityPercent: Float,
+        playerGlueWallActive: Boolean,
+        hasSniper: Boolean
+    ): Weapon? {
+        if (allowed.isEmpty()) return null
+        // If glue wall up and has sniper, sniper is best regardless of health
+        if (playerGlueWallActive && hasSniper && allowed.contains(Weapon.SNIPER)) return Weapon.SNIPER
+        val fraction = if (robertMaxHp > 0) robertHp.toFloat() / robertMaxHp.toFloat() else 1f
+        return when {
+            fraction >= 0.9f -> {
+                // 90-100% health: best close-range power — pick highest damage at heavy zone
+                allowed.maxByOrNull { DamageTable.percentOf(it, HitZone.HEAVY) } ?: allowed.random()
+            }
+            fraction >= 0.7f -> {
+                // 70-90% moderate: strong zone optimized
+                allowed.maxByOrNull { DamageTable.percentOf(it, HitZone.STRONG) } ?: allowed.random()
+            }
+            fraction >= 0.4f -> {
+                // 40-70% health: light zone / balanced
+                allowed.maxByOrNull { DamageTable.percentOf(it, HitZone.LIGHT) } ?: allowed.random()
+            }
+            fraction >= 0.2f -> {
+                // 20-40% health: desperate — long-range AWM if available, otherwise highest heavy
+                when {
+                    allowed.contains(Weapon.AWM) -> Weapon.AWM
+                    allowed.contains(Weapon.SNIPER) -> Weapon.SNIPER
+                    else -> allowed.maxByOrNull { DamageTable.percentOf(it, HitZone.HEAVY) } ?: allowed.first()
+                }
+            }
+            else -> {
+                // Below 20%: panic — any barrier breaker or max damage
+                if (allowed.contains(Weapon.AWM)) Weapon.AWM else allowed.maxByOrNull { DamageTable.percentOf(it, HitZone.HEAVY) } ?: allowed.first()
+            }
+        }
+    }
+
+    /** True when Robert feels unsafe (low health or heavy damage streak) and should retreat. */
+    fun shouldRetreatUnsafe(
+        robertHp: Int,
+        robertMaxHp: Int,
+        consecutiveHits: Int,
+        proximityPercent: Float
+    ): Boolean {
+        if (robertMaxHp <= 0) return false
+        val fraction = robertHp.toFloat() / robertMaxHp.toFloat()
+        if (fraction < 0.3f) return true
+        if (consecutiveHits >= 2 && Combat.zoneFor(proximityPercent) == HitZone.HEAVY) return true
+        if (fraction < 0.5f && proximityPercent >= 70f) return true
+        return false
+    }
+
     /** True when the player is firing continuously (a real burst). */
     fun isContinuousPlayerFire(playerBurstShots: Int): Boolean =
         playerBurstShots >= COUNTER_FIRE_BURST_SHOTS
 
     /**
-     * True when Robert answers with continuous fire: the player is firing
-     * continuously, or the player's health is dropping, or Robert already
-     * holds the advantage / presses a damaged weapon.
+     * True when Robert answers with continuous fire: ONLY when player is vulnerable.
+     * Otherwise he uses varied intervals of 1s, 1.5s, 2s randomly.
      */
     fun shouldFireContinuously(
         playerBurstShots: Int,
         playerHealthDropping: Boolean,
-        situation: CombatSituation
-    ): Boolean =
-        playerHealthDropping ||
+        situation: CombatSituation,
+        playerVulnerable: Boolean = true
+    ): Boolean {
+        // Continuous fire ONLY when player is vulnerable
+        if (!playerVulnerable) return false
+        return playerHealthDropping ||
             isContinuousPlayerFire(playerBurstShots) ||
             situation == CombatSituation.PRESSURE ||
             situation == CombatSituation.ADVANTAGE
+    }
+
+    /** Legacy overload for tests. */
+    fun shouldFireContinuously(
+        playerBurstShots: Int,
+        playerHealthDropping: Boolean,
+        situation: CombatSituation
+    ): Boolean = shouldFireContinuously(playerBurstShots, playerHealthDropping, situation, playerVulnerable = true)
+
+    /** Random normal fire interval (1s, 1.5s, 2s) as per spec. */
+    fun normalFireInterval(random: Random): Long = NORMAL_INTERVALS_MS.random(random)
 
     /** True when this tick should be a sideways strafe instead of a straight walk. */
     fun shouldStrafe(random: Random): Boolean = random.nextFloat() < STRAFE_CHANCE
@@ -366,6 +490,7 @@ object RobertRules {
      *    a cover when he has one, otherwise a glue wall;
      *  - below half health he heals with a medkit;
      *  - otherwise he falls back to cover, glue wall and medkit in turn.
+     *  Panic mode (health just dropped) uses immediate best defence.
      */
     fun chooseDefence(
         medikits: Int,
@@ -385,6 +510,25 @@ object RobertRules {
         if (glueWalls > 0) return DefenceItem.GLUE_WALL
         if (medikits > 0) return DefenceItem.MEDKIT
         return null
+    }
+
+    /** Panic defence: automatically deploy best available for situation. */
+    fun panicDefence(
+        medikits: Int,
+        covers: Int,
+        glueWalls: Int,
+        antiBombs: Int,
+        antiMissiles: Int,
+        robertHp: Int,
+        robertMaxHp: Int,
+        proximityPercent: Float,
+        bombInFlight: Boolean = false,
+        missileInFlight: Boolean = false
+    ): DefenceItem? {
+        // Prioritize interceptors if projectile incoming
+        if (bombInFlight && antiBombs > 0) return DefenceItem.ANTI_BOMB
+        if (missileInFlight && antiMissiles > 0) return DefenceItem.ANTI_MISSILE
+        return chooseDefence(medikits, covers, glueWalls, robertHp, robertMaxHp, proximityPercent)
     }
 
     // ------------------------------------------------------------------
@@ -445,6 +589,7 @@ object RobertRules {
      * advantage pushes him into the 90%-100% band, a moderate advantage into
      * the 70%-90% band, and a disadvantage pulls him back to 40%-70%.
      * An active 0%-40% deception trip is always allowed to finish.
+     * In round 5 (strategy round), positioning is tactical not brute.
      */
     fun situationalRange(
         stored: FireRange,
@@ -461,8 +606,10 @@ object RobertRules {
         if (playerGlueWallActive) return if (robertHasSniper) FireRange.CLOSE else FireRange.FAR
         if (stored == FireRange.FAR && deceptionShotsLeft > 0) return FireRange.FAR
         val gap = advantageGap(robertHp, robertMaxHp, playerHp, playerMaxHp)
+        // Round 5 strategic: even when advantaged, prefer STRONG over CLOSE for tactical control
+        val isStrategyRound = robertMaxHp >= Progression.hpFor(5, 1) // approx detection
         return when {
-            gap >= BIG_ADVANTAGE_GAP -> FireRange.CLOSE
+            gap >= BIG_ADVANTAGE_GAP -> if (isStrategyRound) FireRange.STRONG else FireRange.CLOSE
             gap > MODERATE_ADVANTAGE_GAP -> FireRange.STRONG
             gap < -MODERATE_ADVANTAGE_GAP -> FireRange.MID
             else -> stored
@@ -498,5 +645,24 @@ object RobertRules {
         } else {
             window.first + (random.nextFloat() * (window.last - window.first)).toLong()
         }
+    }
+
+    /** Enhanced interval that respects vulnerability spec: random 1s/1.5s/2s when not vulnerable. */
+    fun firingIntervalWithVulnerability(
+        situation: CombatSituation,
+        fleeing: Boolean,
+        playerVulnerable: Boolean,
+        playerBurstShots: Int,
+        playerHealthDropping: Boolean,
+        random: Random
+    ): Long {
+        if (fleeing) return fireIntervalMs(situation, fleeing, random, false)
+        val continuous = shouldFireContinuously(playerBurstShots, playerHealthDropping, situation, playerVulnerable)
+        if (continuous) return fireIntervalMs(situation, fleeing, random, true)
+        if (!playerVulnerable) {
+            // Spec: shoot randomly at intervals of 2s, 1s, 1.5s when not vulnerable
+            return normalFireInterval(random)
+        }
+        return fireIntervalMs(situation, fleeing, random, false)
     }
 }

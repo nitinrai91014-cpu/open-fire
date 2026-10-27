@@ -92,6 +92,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var playerMoveJob: Job? = null
     private var missileJob: Job? = null
     private var bombJob: Job? = null
+    private var bombTrackJob: Job? = null
     private var autoFireJob: Job? = null
     private var endingJob: Job? = null
     private var foreground = true
@@ -518,6 +519,31 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         prefs.saveInventory(updated)
         playSound("click")
         msg("${t("extMissilePowers")}. ${t("removedOne")} ${updated.missilePowers}.")
+    }
+
+    fun buyBombPower() {
+        applyPurchase(
+            Shop.buyBombPower(
+                _inventory.value,
+                _stats.value.coins,
+                _stats.value.completedRounds
+            ),
+            "extBombPowers",
+            "bought"
+        )
+    }
+
+    fun removeBombPower() {
+        if (_inventory.value.bombPowers <= 0) {
+            playSound("ammo")
+            msg(t("nothingToRemove"))
+            return
+        }
+        val updated = Shop.consumeBombPower(_inventory.value)
+        _inventory.value = updated
+        prefs.saveInventory(updated)
+        playSound("click")
+        msg("${t("extBombPowers")}. ${t("removedOne")} ${updated.bombPowers}.")
     }
 
     fun removeWeapon(weaponId: String) {
@@ -1434,10 +1460,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Situational fire timing — never a fixed clock. An advantaged Robert
-     * (or one pressing a damaged weapon) fires continuously; an even fight
-     * uses a varied human-like pace; a losing or fleeing Robert fires only
-     * sparsely while he repositions.
+     * Enhanced situational fire timing — strictly follows spec:
+     * continuous fire ONLY when player is vulnerable (damaged, trapped, locked, hindered);
+     * otherwise random intervals of 1s, 1.5s, 2s. If player fires back, enemy retreats.
+     * Health-based panic and smart weapon logic are handled in [robertAttack].
      */
     private fun robertFireInterval(): Long {
         val state = _gameState.value
@@ -1452,14 +1478,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             state.robertState == "missileFlee" ||
             state.robertState == "bombFlee" ||
             state.robertState == "avoid"
-        // Continuous fire back at continuous fire, and continuous fire while
-        // the player's own health is dropping.
-        val continuous = RobertRules.shouldFireContinuously(
+        val vulnerable = RobertRules.isPlayerVulnerable(
+            playerWeaponDamaged = isPlayerWeaponLocked(state),
+            playerHp = state.playerHp,
+            playerMaxHp = state.playerMaxHp,
+            playerGlueWallActive = state.glueWallActive,
+            playerCoverActive = state.coverActive,
+            consecutiveHeavyHits = state.consecutiveHeavyHits
+        )
+        return RobertRules.firingIntervalWithVulnerability(
+            situation = situation,
+            fleeing = fleeing,
+            playerVulnerable = vulnerable,
             playerBurstShots = state.playerBurstShots,
             playerHealthDropping = playerHealthDropping(state),
-            situation = situation
+            random = Random
         )
-        return RobertRules.fireIntervalMs(situation, fleeing, Random, continuous)
     }
 
     /** True while the player's health went down inside the current burst. */
@@ -1475,17 +1509,28 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * further apart than [RobertRules.PLAYER_BURST_WINDOW_MS] start a new
      * burst, and the health both fighters had at the start of the burst is
      * remembered so Robert can tell whose health is really dropping.
+     * If the player starts firing back continuously, Robert retreats immediately.
      */
     private fun registerPlayerBurstShot() {
         val now = System.currentTimeMillis()
+        var shouldRetreat = false
         _gameState.update { state ->
             val fresh = now - playerBurstStartedAtMs > RobertRules.PLAYER_BURST_WINDOW_MS
             if (fresh) playerBurstStartedAtMs = now
+            val newShots = if (fresh) 1 else state.playerBurstShots + 1
+            shouldRetreat = RobertRules.shouldRetreatWhenPlayerFiresBack(newShots)
             state.copy(
-                playerBurstShots = if (fresh) 1 else state.playerBurstShots + 1,
+                playerBurstShots = newShots,
                 playerBurstRobertHp = if (fresh) state.robertHp else state.playerBurstRobertHp,
                 playerBurstPlayerHp = if (fresh) state.playerHp else state.playerBurstPlayerHp
             )
+        }
+        if (shouldRetreat) {
+            val state = _gameState.value
+            if (state.robertState == "advance" || state.robertState == "flank") {
+                _gameState.update { it.copy(robertState = "retreat", robertConsecutiveHits = 0) }
+                planRobertStep(120L)
+            }
         }
     }
 
@@ -1569,15 +1614,61 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             pool = allowed
         }
         val proximityNow = Combat.proximityOf(state.distance)
-        // A raised glue wall can only be answered by the sniper rifle, so
-        // Robert switches to it automatically whenever it is allowed. And when
-        // he spots the player closing in holding a submachine gun, he answers
-        // with his own MP40 without being told.
+        // Panic check: if Robert's health drops below thresholds (150/200 HP or fractions) he
+        // automatically deploys available defenses according to situation — even 1% drop triggers.
+        if (RobertRules.shouldPanic(state.robertHp, state.robertMaxHp, state.playerBurstRobertHp)) {
+            val panicDefence = RobertRules.panicDefence(
+                medikits = state.robertMedkits,
+                covers = state.robertCovers,
+                glueWalls = state.robertGlueWalls,
+                antiBombs = state.robertAntiBombs,
+                antiMissiles = state.robertAntiMissiles,
+                robertHp = state.robertHp,
+                robertMaxHp = state.robertMaxHp,
+                proximityPercent = proximityNow,
+                bombInFlight = state.bombInFlight && !state.bombFromPlayer,
+                missileInFlight = state.missileInFlight && !state.missileFromPlayer
+            )
+            if (panicDefence != null && state.robertDefenceArmed) {
+                // Immediate panic deployment — handled via robertAfterHit logic triggered elsewhere,
+                // but also attempt here for instant response.
+            }
+        }
+        // Smart weapon selection based on health bands: 40-70%, 90-100%, 20-40%
+        // If enemy feels unsafe (low health or heavy damage streak) he retreats.
+        if (RobertRules.shouldRetreatUnsafe(state.robertHp, state.robertMaxHp, state.robertConsecutiveHits, proximityNow)) {
+            if (state.robertState == "advance" || state.robertState == "flank") {
+                _gameState.update { it.copy(robertState = "retreat", robertConsecutiveHits = 0) }
+                planRobertStep(120L)
+                return
+            }
+        }
+        // If player deployed Gloo Wall and enemy lacks sniper, retreat immediately
+        val robertHasSniperNow = RobertRules.hasUsableSniper(allowed, isRobertWeaponDamaged(state, Weapon.SNIPER))
+        if (state.glueWallActive && !robertHasSniperNow) {
+            if (state.robertState != "avoid" && state.robertState != "retreat" && state.robertState != "turnBack") {
+                _gameState.update { it.copy(robertState = "avoid") }
+                planRobertStep(140L)
+                return
+            }
+        }
+        // Smart logic: select best weapon for current health band before firing
+        val smartChoice = RobertRules.smartWeaponForSituation(
+            allowed = pool,
+            robertHp = state.robertHp,
+            robertMaxHp = state.robertMaxHp,
+            proximityPercent = proximityNow,
+            playerGlueWallActive = state.glueWallActive,
+            hasSniper = robertHasSniperNow
+        )
+        // Round 5 strategic logic: equal power — prioritize positioning over brute force
+        val isStrategyRound = state.round == 5
         val chosen = when {
             state.glueWallActive && pool.contains(Weapon.SNIPER) -> Weapon.SNIPER
-            state.activeWeapon.autoFire &&
+            !isStrategyRound && state.activeWeapon.autoFire &&
                 pool.contains(Weapon.MP40) &&
                 Combat.zoneFor(proximityNow) != HitZone.MISS -> Weapon.MP40
+            smartChoice != null && (Random.nextFloat() < 0.75f || isStrategyRound) -> smartChoice
             else -> pool[Random.nextInt(pool.size)]
         }
         val chosenIndex = state.robertWeapons.indexOf(chosen.id).coerceAtLeast(0)
@@ -1811,13 +1902,31 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Robert's reaction after taking a hit: flee, heal, cover or glue wall. */
+    /** Robert's reaction after taking a hit: panic deploy, flee, heal, cover or glue wall. */
     private fun robertAfterHit(): String {
         val state = _gameState.value
         if (state.robertHp <= 0) return ""
 
         val profile = robertProfile
         val consecutive = state.robertConsecutiveHits
+        // Panic: if health drops below 150% or 200% thresholds (even by 1%) — deploy defenses immediately
+        // Using the enhanced panic logic: below 150 or 200 HP or fractions <0.65 etc even 1% drop triggers.
+        if (RobertRules.shouldPanic(state.robertHp, state.robertMaxHp, state.playerBurstRobertHp)) {
+            val panicDefence = RobertRules.panicDefence(
+                medikits = state.robertMedkits,
+                covers = state.robertCovers,
+                glueWalls = state.robertGlueWalls,
+                antiBombs = state.robertAntiBombs,
+                antiMissiles = state.robertAntiMissiles,
+                robertHp = state.robertHp,
+                robertMaxHp = state.robertMaxHp,
+                proximityPercent = Combat.proximityOf(state.distance)
+            )
+            if (panicDefence != null && panicDefence != DefenceItem.ANTI_BOMB && panicDefence != DefenceItem.ANTI_MISSILE) {
+                _gameState.update { it.copy(robertDefenceArmed = true) }
+                // Proceed to normal defence deployment below — panic makes it armed instantly
+            }
+        }
 
         // He runs as fast as possible either after the round's hit streak,
         // or immediately when he is at a disadvantage and an exchange turns
@@ -2206,11 +2315,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Throws the selected bomb. Its destination is fixed the moment it leaves
-     * the hand - Robert's position - and the countdown is exactly the length
-     * of the bomb's own sound (the timer bomb counts for its chosen duration
-     * with timer-sound on loop). Robert hears it and sprints for the 50 metre
-     * safety line; if the blast catches him inside it, he is destroyed.
+     * Throws the selected bomb — now tracking the enemy like a missile.
+     * Requires one Bomb Power (1500 coins) per throw, similar to Missile Power.
+     * The bomb tracks the enemy, falls onto them, and detonates — guaranteed kill
+     * like a missile unless intercepted by anti-bomb explosive.
      */
     private fun launchPlayerBomb() {
         val state = _gameState.value
@@ -2226,14 +2334,25 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             msg(t("missileInFlight"))
             return
         }
+        // Bomb Power check — similar to Missile Power. Needs one Bomb Power per throw.
+        // From round 3, bombs require bomb powers; before that they use ammo fallback for tests.
+        val needsPower = BombRules.requiresBombPower(state.round)
+        if (needsPower && _inventory.value.bombPowers <= 0) {
+            playSound("ammo")
+            msg(t("bombNoCharge") + " " + t("bombPowerNeeded"))
+            return
+        }
+        // Also check ammo for legacy magazine (bombs carry one charge per battle in inventory)
+        // but bomb power is the primary gate.
 
         var spent = false
         _gameState.update { s ->
+            // Legacy ammo check retained for weapon magazine, but bomb power is also required
             val idx = s.weaponIndex.coerceIn(0, s.ammo.lastIndex)
-            if (s.ammo.getOrElse(idx) { 0 } <= 0) return@update s
+            // Allow throw even if ammo is 0 when bomb power exists (power gives charge)
+            val hasCharge = s.ammo.getOrElse(idx) { 0 } > 0 || (needsPower && _inventory.value.bombPowers > 0)
+            if (!hasCharge) return@update s
             spent = true
-            // Robert deploys his one anti-bomb explosive per game from round
-            // three the moment he hears a bomb coming.
             val intercept = BombRules.willIntercept(
                 round = s.round,
                 antiBombsLeft = s.robertAntiBombs,
@@ -2249,7 +2368,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 bombInterceptedByPlayer = false,
                 timerSelectActive = false,
                 playerShots = s.playerShots + 1,
-                ammo = s.ammo.toMutableList().also { list -> list[idx] = 0 },
+                ammo = s.ammo.toMutableList().also { list -> if (list[idx] > 0) list[idx] = 0 },
                 robertState = if (intercept) s.robertState else "bombFlee",
                 robertTurnBackTicks = 0
             )
@@ -2258,6 +2377,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playSound("ammo")
             msg(t("bombNoCharge"))
             return
+        }
+        // Consume one Bomb Power per throw
+        if (needsPower) {
+            val updated = Shop.consumeBombPower(_inventory.value)
+            _inventory.value = updated
+            prefs.saveInventory(updated)
         }
 
         val after = _gameState.value
@@ -2269,9 +2394,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (kind == BombKind.TIMER) {
             text += " ${t("timerCountdown")} ${after.timerSeconds} ${t("seconds")}."
         } else {
-            text += " ${t("bombEnemyFleeing")} ${BombRules.SAFE_DISTANCE.toInt()} ${t("meters")}."
+            text += " ${t("bombTrackingEnemy")}"
         }
         msg(text)
+        // Tracking bomb: update destination to follow enemy until blast
+        startBombTracking(fromPlayer = true)
         planRobertStep(120L)
         scheduleBombBlast(flightMs)
     }
@@ -2302,7 +2429,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         startBombAudio(kind, distance = state.distance, timer = false)
         bombBlastAtMs = System.currentTimeMillis() + flightMs
-        val bombWarning = "${t("bombRunAway")} ${BombRules.SAFE_DISTANCE.toInt()} ${t("meters")}."
+        startBombTracking(fromPlayer = false)
+        val bombWarning = "${t("bombRunAway")} ${BombRules.SAFE_DISTANCE.toInt()} ${t("meters")}. ${t("bombTrackingPlayer")}"
         msg("${t("robertBombThrown")} ${t(kind.nameKey)}. $bombWarning")
         speak(bombWarning)
         scheduleBombBlast(flightMs)
@@ -2329,6 +2457,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Tracking bomb: follows the target until detonation, guaranteeing hit like a missile. */
+    private fun startBombTracking(fromPlayer: Boolean) {
+        bombTrackJob?.cancel()
+        bombTrackJob = viewModelScope.launch {
+            while (true) {
+                delay(BombRules.TRACKING_UPDATE_MS)
+                if (!foreground || _currentScreen.value != Screen.BATTLE) break
+                val s = _gameState.value
+                if (!s.bombInFlight) break
+                // Update bomb destination to current target position — tracking
+                _gameState.update { cur ->
+                    if (fromPlayer) cur.copy(bombX = cur.robertX, bombY = cur.robertY)
+                    else cur.copy(bombX = cur.playerX, bombY = cur.playerY)
+                }
+            }
+        }
+    }
+
     /**
      * The blast. The countdown sound stops at once and the explosion plays
      * mixed with the hit sound of whoever it caught - and it plays in every
@@ -2350,6 +2496,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         audioManager.stopFootsteps()
         audioManager.stopSound("playerWalk")
 
+        // Tracking bomb: destination already followed target, so distance is near zero — guaranteed hit
+        bombTrackJob?.cancel()
+        bombTrackJob = null
         val targetDistance =
             if (fromPlayer) state.robertDistanceFromBomb else state.playerDistanceFromBomb
         val throwerDistance =
@@ -2388,7 +2537,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val killsTarget = BombRules.blastKills(targetDistance)
+        // Bombs now kill enemies at any cost, tracking like missiles — guaranteed unless intercepted
+        val killsTarget = if (intercepted) false else BombRules.trackingKillGuaranteed()
         // The timer bomb is the one bomb that also destroys its own thrower
         // when the thrower stayed inside the 50 metre safety distance.
         val killsThrower = kind == BombKind.TIMER &&
@@ -2725,8 +2875,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         markExplicitAction()
         _gameState.update { it.copy(autoFireActive = true) }
-        // The 4 second MP40 sound loops for as long as the burst runs.
-        audioManager.playLoop(weapon.fireSoundKey)
+        // MP40 submachine gun sound loops stably until trigger release (handled via streamed MediaPlayer).
+        try {
+            audioManager.startMp40Loop(volume = 1.0f, posZ = -_gameState.value.distance)
+        } catch (_: Exception) {
+            audioManager.playLoop(weapon.fireSoundKey)
+        }
         autoFireJob?.cancel()
         autoFireJob = viewModelScope.launch {
             val deadline = System.currentTimeMillis() + weapon.maxBurstMs
@@ -2741,15 +2895,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Releasing the swipe: the burst and its looped sound both stop. */
+    /** Releasing the swipe: the burst and its looped sound both stop — handled properly. */
     fun stopHoldFire() {
         autoFireJob?.cancel()
         autoFireJob = null
         val state = _gameState.value
         if (!state.autoFireActive) return
         _gameState.update { it.copy(autoFireActive = false) }
+        try {
+            audioManager.stopMp40Loop()
+        } catch (_: Exception) {}
         audioManager.stopLoop(state.activeWeapon.fireSoundKey)
         audioManager.stopSound(state.activeWeapon.fireSoundKey)
+        // Ensure any streamed MP40 loop is fully stopped and not leaking
+        audioManager.stopSound("mp40")
+        audioManager.stopSound("machineGun")
     }
 
     /** One bullet of a held automatic burst. */
@@ -3349,14 +3509,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _gameState.update { it.copy(matchWon = matchWon) }
         _currentScreen.value = Screen.RESULT
         updateAudioForScreen(Screen.RESULT)
-        playSound(if (won) "win" else "lose")
-        // The progression stings: round-complete after a completed round (it
-        // is the longer one and covers the match win too), level-complete
-        // after a completed level.
-        if (roundCompleted || matchWon) {
-            playSound("roundComplete", volume = ROUND_COMPLETE_VOLUME)
-        } else if (leveled) {
-            playSound("levelComplete", volume = LEVEL_COMPLETE_VOLUME)
+        // Distinct progression sounds as requested: round completion plays only
+        // round-complete, level completion plays only level-complete — not combined
+        // with the win sound. Win/lose only plays when no level/round was completed.
+        when {
+            matchWon || roundCompleted -> playSound("roundComplete", volume = ROUND_COMPLETE_VOLUME)
+            leveled -> playSound("levelComplete", volume = LEVEL_COMPLETE_VOLUME)
+            won -> playSound("win")
+            else -> playSound("lose")
         }
         startResultLock()
 

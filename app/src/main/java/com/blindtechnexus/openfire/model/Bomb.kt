@@ -1,5 +1,7 @@
 package com.blindtechnexus.openfire.model
 
+import kotlin.math.roundToInt
+
 /**
  * The real, measured length of every sound that drives a game timer.
  *
@@ -85,6 +87,10 @@ enum class BombKind(
     val blastSoundKey: String
         get() = "explosion"
 
+    /** Whether this bomb tracks its target like a missile (all bombs now do). */
+    val tracking: Boolean
+        get() = true
+
     companion object {
         fun fromId(id: String?): BombKind? = entries.firstOrNull { it.id == id }
 
@@ -96,35 +102,38 @@ enum class BombKind(
 /**
  * Pure bomb rules shared by the battle engine, the shop and Robert.
  *
- * A bomb behaves like a missile with one decisive difference: it is not a
- * guaranteed kill. It lands on a fixed destination inside the 100 m zone and
- * only destroys a fighter that is still inside [BLAST_RADIUS] metres of that
- * destination when it explodes.
+ * Bombs now track the enemy like the missile and kill at any cost — when a
+ * bomb is released it tracks the enemy, falls onto them, and detonates. A
+ * target is always destroyed unless an anti-bomb explosive intercepts it.
  *
  *  - the grenade and the atom bomb unlock in round three and fly for exactly
- *    as long as their own sound (grenade-sound, atom-bom-sound);
+ *    as long as their own sound (grenade-sound, atom-bom-sound); tracking ensures
+ *    the bomb follows the moving target and explodes on top of them;
  *  - the timer bomb unlocks in round three too. Swiping up asks
- *    "Select your timer": swiping left or right walks through 15, 30, 40, 50
+ *    \"Select your timer\": swiping left or right walks through 15, 30, 40, 50
  *    and 60 seconds and a tap locks the choice in. The timer sound then loops
  *    for the whole countdown, stops, and the explosion plays;
- *  - a fighter caught inside [BLAST_RADIUS] metres of the destination loses
- *    its complete health; a fighter outside it is untouched and the blast
- *    never harms the thrower;
+ *  - every bomb now kills its enemy target at any cost, exactly like the missile.
+ *    A target without an anti-bomb explosive cannot escape by running — the bomb
+ *    tracks them. The 50m race is kept for the timer bomb thrower safety but
+ *    the enemy is always hit;
  *  - the timer bomb is the exception: its thrower must stay at least
  *    [SAFE_DISTANCE] metres away from the destination, or both fighters are
  *    destroyed together and the thrower loses;
- *  - a target without an anti-bomb explosive sprints away from the
- *    destination at full speed, trying to cross the 50 m line before the
- *    blast. If the bomb explodes first, the target dies;
- *  - from round three Robert carries exactly one anti-bomb explosive per
- *    game and deploys it automatically the moment he hears a bomb. A second
- *    bomb in the same game is never intercepted again;
+ *  - from round three Robert carries anti-bomb explosives per the new limits:
+ *    once in round 3, three times in round 4, and unlimited in round 5;
+ *  - bomb power: each Bomb Power upgrade costs 1500 coins and allows each bomb
+ *    to be used once (1 Bomb Power = 1 use of any bomb type). Similar to Missile
+ *    Power, it stacks and must be bought again once used;
  *  - an intercepted, disposed or destroyed bomb always plays the explosion
  *    sound, exactly like an intercepted missile does.
  */
 object BombRules {
     /** Shop price of one anti-bomb explosive defence. */
     const val ANTI_BOMB_PRICE = 2600
+
+    /** Shop price of one Bomb Power (allows one bomb use). */
+    const val BOMB_POWER_PRICE = 1500
 
     /** First round that carries bombs and anti-bomb explosives. */
     const val FIRST_BOMB_ROUND = 3
@@ -146,17 +155,8 @@ object BombRules {
 
     /**
      * Sprint speed of a fighter running out of a blast radius, in metres per
-     * second. It is deliberately a fixed pace and not the round multiplier:
-     * the 50 metre safety distance then always takes about
-     * [SAFE_DISTANCE] / [BOMB_ESCAPE_SPEED_MPS] = 8.3 seconds to cover, which
-     * is what makes a bomb a real race instead of a guaranteed kill -
-     *
-     *  - the atom bomb (7.1 s of flight) explodes first: it destroys a target
-     *    that has no anti-bomb explosive and nowhere further to run;
-     *  - the grenade (9.1 s) is a photo finish: one wall, one turn-back and
-     *    the target is caught, but a clean run gets him out;
-     *  - the timer bomb (15 s or more) always lets its target escape. Its
-     *    danger is for the thrower, who must leave the 50 metres himself.
+     * second. Kept for legacy race calculations but bombs now track their target
+     * so the escape is no longer guaranteed.
      */
     const val BOMB_ESCAPE_SPEED_MPS = 6f
 
@@ -166,15 +166,24 @@ object BombRules {
     /** Metres covered per bomb escape tick. */
     const val BOMB_FLEE_STEP_M = 0.9f
 
-    /** Anti-bomb explosives Robert carries: one per game from round three. */
-    fun antiBombsForRound(round: Int): Int =
-        if (round.coerceIn(1, Progression.ROUNDS_PER_MATCH) >= FIRST_BOMB_ROUND) 1 else 0
+    /** How often a tracking bomb updates its destination (ms). */
+    const val TRACKING_UPDATE_MS = 80L
 
-    /** Bombs Robert may throw per game: none, then one, then two. */
+    /** Anti-bomb explosives Robert carries per round: 1 in R3, 3 in R4, unlimited in R5. */
+    fun antiBombsForRound(round: Int): Int =
+        when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
+            3 -> 1
+            4 -> 3
+            5 -> 99 // unlimited — as many as he chooses
+            else -> 0
+        }
+
+    /** Bombs Robert may throw per game: 1 in R3, 3 in R4, unlimited in R5. */
     fun enemyBombsForRound(round: Int): Int =
         when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
             3 -> 1
-            4, 5 -> 2
+            4 -> 3
+            5 -> 99 // unlimited — strategic use, not stat-based
             else -> 0
         }
 
@@ -211,9 +220,15 @@ object BombRules {
     /** Steps the picker one duration left or right. */
     fun stepTimerIndex(index: Int, direction: Int): Int = wrapTimerIndex(index + direction)
 
-    /** True when a fighter this close to the destination is destroyed. */
+    /** True when a fighter this close to the destination is destroyed — now tracking ensures hit. */
     fun blastKills(distanceFromBomb: Float): Boolean =
         distanceFromBomb < BLAST_RADIUS
+
+    /**
+     * Bombs now track their target like missiles: they always kill the enemy at any cost.
+     * This returns true unless intercepted, guaranteeing the blast destroys the target.
+     */
+    fun trackingKillGuaranteed(): Boolean = true
 
     /**
      * True when the timer bomb also destroys its own thrower: the thrower did
@@ -231,9 +246,8 @@ object BombRules {
         (distanceFromBomb + SAFE_DISTANCE).coerceIn(0f, Arena.SIZE)
 
     /**
-     * True when Robert fires his one anti-bomb explosive. Round three or
-     * later, a bomb really in the air, and the once-per-game charge still
-     * unused: he deploys it the moment he hears the bomb sound.
+     * True when Robert fires his anti-bomb explosive. From round three he has
+     * limited charges per the round table (1 in R3, 3 in R4, unlimited R5).
      */
     fun willIntercept(
         round: Int,
@@ -246,8 +260,8 @@ object BombRules {
 
     /**
      * True when Robert throws one of his bombs. Like his missile it is a
-     * desperation weapon: the fight must be underway, his health badly down
-     * and the player still healthier than he is.
+     * desperation weapon but in round 5 it becomes strategic: he throws
+     * even at moderate health to force movement and control space.
      */
     fun shouldEnemyThrow(
         round: Int,
@@ -264,12 +278,18 @@ object BombRules {
         if (!bombsUnlocked(round)) return false
         if (robertMaxHp <= 0 || playerMaxHp <= 0 || robertHp <= 0 || playerHp <= 0) return false
         if (robertShots < ENEMY_THROW_MIN_SHOTS) return false
+        // Round 5 strategic logic: throw bombs more liberally to control battle
+        if (round == 5) {
+            val robertFraction = robertHp.toFloat() / robertMaxHp.toFloat()
+            // In round 5, strategic play — throw when at disadvantage or even, not just desperation
+            return robertFraction <= 0.65f
+        }
         val robertFraction = robertHp.toFloat() / robertMaxHp.toFloat()
         val playerFraction = playerHp.toFloat() / playerMaxHp.toFloat()
         return robertFraction <= ENEMY_THROW_MAX_HP_FRACTION && playerFraction > robertFraction
     }
 
-    /** Robert's health fraction at (or below) which he throws a bomb. */
+    /** Robert's health fraction at (or below) which he throws a bomb (non-strategy rounds). */
     const val ENEMY_THROW_MAX_HP_FRACTION = 0.35f
 
     /** Shots Robert must have fired before he considers a bomb. */
@@ -289,4 +309,11 @@ object BombRules {
 
     /** Seconds a clean escape out of the blast radius takes. */
     fun escapeSeconds(): Float = SAFE_DISTANCE / BOMB_ESCAPE_SPEED_MPS
+
+    /** Whether the player can throw a bomb with their current bomb powers. */
+    fun canThrowWithBombPower(bombPowers: Int, bombInFlight: Boolean, missileInFlight: Boolean): Boolean =
+        bombPowers > 0 && !bombInFlight && !missileInFlight
+
+    /** Whether the bomb kind requires bomb power (all bombs do from round 3). */
+    fun requiresBombPower(round: Int): Boolean = bombsUnlocked(round)
 }

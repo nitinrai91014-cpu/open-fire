@@ -200,6 +200,12 @@ fun ProfileScreen(viewModel: GameViewModel) {
                 fontSize = 15.sp,
                 color = Color.White
             )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "${viewModel.t("extBombPowers")}: ${inventory.bombPowers}",
+                fontSize = 15.sp,
+                color = Color.White
+            )
 
             Spacer(modifier = Modifier.height(14.dp))
             Text(
@@ -442,10 +448,47 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "Version 2.2 (Current)",
+                text = "Version 2.3 (Current)",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = WarnBright
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            val v23Notes = listOf(
+                "Bomb Power: new stackable consumable for 1500 coins - 1 Bomb Power allows 1 use of any bomb type (1 Atom Bomb + 1 Timer Bomb + 1 Grenade use), exactly like Missile Powers. Buy and stack in the shop, one is consumed per throw. Bombs now track the enemy like missiles and guarantee destruction at any cost unless intercepted by an anti-bomb explosive.",
+                "Tracking bombs: grenade, atom bomb and timer bomb all follow the target continuously until detonation. The old 50 metre escape race is gone - without an anti-bomb you cannot outrun a tracking bomb. The timer bomb still counts 15 to 60 seconds with its looping timer sound, but now also tracks.",
+                "Enemy bomb and anti-bomb limits aligned per round: round 3 = 1 bomb and 1 anti-bomb per game, round 4 = 3 each, round 5 = unlimited but only while clearly losing. Grenades unlock together with atom and timer bombs in round 3.",
+                "Enemy firing rebuilt: Robert fires continuously only when you are vulnerable (damaged, trapped or locked); otherwise he fires at random intervals of 2s, 1s and 1.5s. When you fire back while he is firing he immediately retreats.",
+                "Panic and defence deployment: below 150 percent health difference Robert panics and instantly deploys a defence; below 200 percent even a 1 percent dip triggers panic. Strategic weapon picking: 40-70 percent health prefers mid-range, 90-100 percent prefers close heavy weapons, 20-40 percent prefers AWM long range, about 75 percent of the time.",
+                "Retreat logic: Robert retreats when he took significant damage, when the position is unsafe, or when you have a Gloo Wall up and he has no usable sniper rifle - then he avoids you until the wall drops.",
+                "Round 5 strategy over stats: both sides fight with equal power and only tactics decide the win.",
+                "Distinct end-game sounds: level completion plays only level-complete, round completion plays only round-complete, a normal victory plays win and a defeat plays lose - they are never mixed together.",
+                "MP40 loop stabilized: the hold-to-fire sound now runs stably as streamed audio until you release the swipe, with proper cleanup on release.",
+                "Stable sound mixer: long sounds such as missiles, bombs, timer countdowns and progression stings are streamed via the enhanced player, prepared in the background, retried on failure, and fully stopped on screen changes."
+            )
+            v23Notes.forEach { note ->
+                Text(
+                    text = "• $note",
+                    fontSize = 14.sp,
+                    color = Color.White,
+                    lineHeight = 20.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(CardBorder)
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = "Version 2.2",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextAccent
             )
             Spacer(modifier = Modifier.height(8.dp))
             val v22Notes = listOf(

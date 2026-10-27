@@ -339,7 +339,7 @@ class StringsAndGunRulesTest {
             assertTrue(Strings.get("itemMissingTail", lang).isNotBlank())
             assertTrue(Strings.get("robertFled", lang).isNotBlank())
             assertTrue(Strings.get("matchWon", lang).isNotBlank())
-            assertTrue(Strings.get("version", lang).contains("2.2") || Strings.get("version", lang).contains("२.२"))
+            assertTrue(Strings.get("version", lang).contains("2.3") || Strings.get("version", lang).contains("२.३"))
         }
     }
 

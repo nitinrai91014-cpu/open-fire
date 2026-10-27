@@ -136,9 +136,9 @@ class RobertTest {
         assertEquals(1, roundFour.missilePowers)
         assertEquals(1, roundFour.antiMissiles)
         assertEquals(4, roundFour.fleeAfterHits)
-        // Two bombs per game, but still exactly one anti-bomb explosive.
-        assertEquals(2, roundFour.bombs)
-        assertEquals(1, roundFour.antiBombs)
+        // Three bombs and three anti-bomb explosives per game from round four (spec: 1/3/unlimited).
+        assertEquals(3, roundFour.bombs)
+        assertEquals(3, roundFour.antiBombs)
         assertTrue(roundFour.weapons.contains(Weapon.MACHINE_GUN))
     }
 
@@ -153,9 +153,9 @@ class RobertTest {
         assertEquals(1, roundFive.missilePowers)
         assertEquals(2, roundFive.antiMissiles)
         assertEquals(5, roundFive.fleeAfterHits)
-        assertEquals(2, roundFive.bombs)
-        // Never twice in the same game: one anti-bomb explosive per game.
-        assertEquals(1, roundFive.antiBombs)
+        // Unlimited bombs and anti-bombs in round five (represented as 99) — strategy over stats.
+        assertEquals(99, roundFive.bombs)
+        assertEquals(99, roundFive.antiBombs)
         assertTrue(roundFive.weapons.contains(Weapon.MACHINE_GUN))
     }
 
@@ -518,7 +518,7 @@ class RobertTest {
     fun heDeploysHisSingleAntiBombExplosivePerGame() {
         assertTrue(BombRules.willIntercept(3, antiBombsLeft = 1, bombInFlight = true))
         assertTrue(BombRules.willIntercept(5, antiBombsLeft = 1, bombInFlight = true))
-        // Once used, never again in the same game.
+        // Once used, never again in the same game (except unlimited in round five represented as 99).
         assertFalse(BombRules.willIntercept(4, antiBombsLeft = 0, bombInFlight = true))
         // No bomb in the air, no explosive spent.
         assertFalse(BombRules.willIntercept(4, antiBombsLeft = 1, bombInFlight = false))
@@ -528,7 +528,9 @@ class RobertTest {
         assertTrue(BombRules.bombsUnlocked(3))
         assertEquals(3, BombRules.FIRST_BOMB_ROUND)
         assertEquals(0, BombRules.antiBombsForRound(2))
-        assertEquals(1, BombRules.antiBombsForRound(5))
+        assertEquals(99, BombRules.antiBombsForRound(5))
+        assertEquals(3, BombRules.antiBombsForRound(4))
+        assertEquals(1, BombRules.antiBombsForRound(3))
     }
 
     @Test
