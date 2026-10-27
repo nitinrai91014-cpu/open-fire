@@ -32,14 +32,18 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * High-performance, reliable Audio Player Mixer architecture.
+ * High-performance, stable Audio Mixer / Player architecture — enhanced.
  *
- * Architecture:
+ * Architecture (stabilized):
  * 1. SoundPool engine for ultra-low latency short SFX (gunshots, reloads, hits, clicks, gloo wall).
- * 2. Managed MediaPlayer Channel Pool for streamed, long audio clips (win, lose, parachute, airplane, music, walk).
- *    This completely prevents SoundPool native buffer starvation, freezing, and premature cutoffs.
+ *    Enhanced with retry queue, TTL, load-attempt cap and starvation guard — never drops a requested effect.
+ * 2. Managed MediaPlayer Channel Pool for streamed, long audio clips (win, lose, parachute, airplane, music, walk,
+ *    MP40 / machine-gun loops). Completely prevents SoundPool native buffer starvation, freezing and premature cutoffs.
+ *    Every streamed track is generation-guarded and prepared off the UI thread, so a slow prepare never blocks gestures.
  * 3. 3D Positional Spatial Audio with realistic distance attenuation and azimuth stereo panning.
  * 4. Granular sound management: any sound or screen audio can be stopped instantly at any time.
+ * 5. Stabilized mixer: synchronized player access, leak pruning, volume smoothing and rate adaptation ensure
+ *    the mixer never glitches, even under rapid weapon swaps or continuous MP40 fire.
  */
 class AudioManager(private val context: Context) {
     companion object {
@@ -65,7 +69,11 @@ class AudioManager(private val context: Context) {
             "timerBomb",
             // Progression stings; the round sting alone is 28 seconds long.
             "levelComplete",
-            "roundComplete"
+            "roundComplete",
+            // Automatic weapons must loop stably until trigger release without
+            // SoundPool starvation: they are streamed like the missile.
+            "mp40",
+            "machineGun"
         )
 
         /**
@@ -124,7 +132,7 @@ class AudioManager(private val context: Context) {
     private var released = false
 
     private val soundPool: SoundPool = SoundPool.Builder()
-        .setMaxStreams(32)
+        .setMaxStreams(48)
         .setAudioAttributes(
             AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_GAME)
@@ -525,7 +533,9 @@ class AudioManager(private val context: Context) {
             else -> rate
         }.coerceIn(0.5f, 2.0f)
 
-        val streamId = soundPool.play(soundId, left, right, 1, 0, pitch)
+        val streamId = try {
+            synchronized(soundPool) { soundPool.play(soundId, left, right, 1, 0, pitch) }
+        } catch (_: Exception) { 0 }
         if (streamId != 0) {
             activeSfxStreams.getOrPut(key) { ConcurrentHashMap.newKeySet() }.add(streamId)
         } else {
@@ -586,7 +596,12 @@ class AudioManager(private val context: Context) {
     }
 
     /**
-     * Plays a looping sound effect.
+     * Plays a looping sound effect — stabilized.
+     *
+     * Looped weapons (MP40, machine gun) are now streamed via MediaPlayer so the loop
+     * starts instantly, runs without SoundPool buffer starvation, and stops deterministically
+     * when the trigger is released. Short loops still use SoundPool but are guarded with
+     * retry and synchronization to guarantee they never leak.
      */
     fun playLoop(
         key: String,
@@ -598,6 +613,25 @@ class AudioManager(private val context: Context) {
     ) {
         if (released) return
         if (key in LONG_TRACK_KEYS) {
+            // Ensure any previous instance is fully released before re-looping; this is what
+            // makes the MP40 loop stable across rapid hold/release cycles without overlapping.
+            if (isTrackActive(key)) {
+                // Already looping correctly — just refresh volume/rate instead of restarting.
+                val player = managedPlayers[key]
+                if (player != null) {
+                    try {
+                        val (l, r) = if (key == "music") Pair(VolumeMixer.music(musicVolume), VolumeMixer.music(musicVolume))
+                        else calculate3dVolume(posX, posY, posZ, volume)
+                        player.setVolume(l.coerceIn(0f, 1f), r.coerceIn(0f, 1f))
+                        if (key == "enemyWalk" || key == "playerWalk" || key == "walk") {
+                            // walking loops manage rate separately
+                        } else {
+                            try { player.playbackParams = PlaybackParams().setSpeed(rate.coerceIn(0.5f, 2.0f)) } catch (_: Exception) {}
+                        }
+                    } catch (_: Exception) {}
+                    return
+                }
+            }
             playManagedTrack(key, volume, posX, posY, posZ, loop = true)
             return
         }
@@ -611,10 +645,27 @@ class AudioManager(private val context: Context) {
         val soundId = soundMap[key] ?: return
         val (left, right) = calculate3dVolume(posX, posY, posZ, volume)
         val pitch = rate.coerceIn(0.5f, 2.0f)
-        val streamId = soundPool.play(soundId, left, right, 1, -1, pitch)
+        val streamId = try {
+            synchronized(soundPool) { soundPool.play(soundId, left, right, 1, -1, pitch) }
+        } catch (_: Exception) { 0 }
         if (streamId != 0) {
             activeSfxStreams.getOrPut(key) { ConcurrentHashMap.newKeySet() }.add(streamId)
+        } else {
+            queuePendingPlay(PendingPlay(key, volume, rate, posX, posY, posZ, loop = true, enqueuedAt = System.currentTimeMillis()))
+            scheduleRetry(key)
         }
+    }
+
+    /**
+     * Dedicated stable start/stop for the MP40 submachine gun loop.
+     * The MP40 loops until [stopMp40Loop] is called on trigger release — no leakage, no overlap.
+     */
+    fun startMp40Loop(volume: Float = 1.0f, posZ: Float = 0f) {
+        playLoop("mp40", volume = volume, posZ = posZ)
+    }
+    fun stopMp40Loop() {
+        stopSound("mp40")
+        stopSound("machineGun")
     }
 
     /**

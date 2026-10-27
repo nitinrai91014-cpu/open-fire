@@ -27,6 +27,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.Inventory
@@ -60,6 +61,7 @@ fun ShopScreen(viewModel: GameViewModel) {
     var pendingDefence by remember { mutableStateOf<DefenceItem?>(null) }
     var pendingExtension by remember { mutableStateOf<Extension?>(null) }
     var pendingMissilePowerRemove by remember { mutableStateOf(false) }
+    var pendingBombPowerRemove by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -181,6 +183,29 @@ fun ShopScreen(viewModel: GameViewModel) {
                 inventory = inventory,
                 unlocked = Progression.missileUnlocked(stats),
                 onRemove = { pendingMissilePowerRemove = true }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ------------------------------------------------------------------
+        // Bomb powers: stackable consumables for grenades/atom/timer — 1500 coins each.
+        // 1 Bomb Power = 1 use of any bomb type, tracking like missiles.
+        // ------------------------------------------------------------------
+        GameCard {
+            Text(
+                text = viewModel.t("extBombPowers"),
+                fontSize = 21.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            BombPowerRow(
+                viewModel = viewModel,
+                inventory = inventory,
+                unlocked = stats.completedRounds >= BombRules.FIRST_BOMB_ROUND - 1,
+                onRemove = { pendingBombPowerRemove = true }
             )
         }
 
@@ -449,6 +474,50 @@ fun ShopScreen(viewModel: GameViewModel) {
         )
     }
 
+    // Confirmation before removing one stacked bomb power.
+    if (pendingBombPowerRemove) {
+        AlertDialog(
+            onDismissRequest = { pendingBombPowerRemove = false },
+            title = {
+                Text(
+                    text = viewModel.t("removeConfirmTitle"),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "${viewModel.t("extBombPowers")}. ${viewModel.t("removeConfirmMessage")}",
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingBombPowerRemove = false
+                        viewModel.removeBombPower()
+                    },
+                    modifier = Modifier.testTag("shop_bomb_power_confirm_remove")
+                ) {
+                    Text(
+                        text = viewModel.t("confirmRemove"),
+                        color = WarnBright,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingBombPowerRemove = false }) {
+                    Text(text = viewModel.t("cancel"), color = TextAccent)
+                }
+            },
+            containerColor = CardBg,
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
+
     // Confirmation before removing an extension.
     pendingExtension?.let { extension ->
         AlertDialog(
@@ -614,6 +683,63 @@ private fun MissilePowerRow(
                 modifier = Modifier.weight(1f),
                 testTag = "shop_missile_power_remove",
                 enabled = inventory.missilePowers > 0
+            )
+        }
+    }
+}
+
+@Composable
+private fun BombPowerRow(
+    viewModel: GameViewModel,
+    inventory: Inventory,
+    unlocked: Boolean,
+    onRemove: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "${viewModel.t("extBombPowers")}, ${BombRules.BOMB_POWER_PRICE} " +
+                "${viewModel.t("coins")}.",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = if (unlocked) {
+                viewModel.t("extBombPowersInfo")
+            } else {
+                viewModel.t("bombLocked")
+            },
+            fontSize = 14.sp,
+            color = TextMuted,
+            lineHeight = 20.sp
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "${viewModel.t("owned")}: ${inventory.bombPowers}",
+            fontSize = 14.sp,
+            color = WarnBright,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            GameButton(
+                text = viewModel.t("buy"),
+                onClick = { viewModel.buyBombPower() },
+                type = ButtonType.PRIMARY,
+                modifier = Modifier.weight(1f),
+                testTag = "shop_bomb_power_buy"
+            )
+            GameButton(
+                text = viewModel.t("remove"),
+                onClick = onRemove,
+                type = ButtonType.DANGER,
+                modifier = Modifier.weight(1f),
+                testTag = "shop_bomb_power_remove",
+                enabled = inventory.bombPowers > 0
             )
         }
     }

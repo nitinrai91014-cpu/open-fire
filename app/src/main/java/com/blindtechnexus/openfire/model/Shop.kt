@@ -455,6 +455,12 @@ data class Inventory(
      */
     val missilePowers: Int = 0,
     /**
+     * Stacked bomb powers. Each Bomb Power costs 1500 coins and allows each bomb
+     * to be used once (1 Bomb Power = 1 use of any bomb type: grenade, atom bomb,
+     * or timer bomb). Like missile powers, they stack and are consumed per throw.
+     */
+    val bombPowers: Int = 0,
+    /**
      * Weapons switched off from the shop's Enable / Disable button. A
      * disabled weapon is never handed out at the start of a battle and can
      * never be revealed by a left or right swipe until it is enabled again.
@@ -482,6 +488,12 @@ data class Inventory(
 
     fun withMissilePowers(value: Int): Inventory =
         copy(missilePowers = value.coerceAtLeast(0))
+
+    val hasBombPower: Boolean
+        get() = bombPowers > 0
+
+    fun withBombPowers(value: Int): Inventory =
+        copy(bombPowers = value.coerceAtLeast(0))
 
     fun withWeaponEnabled(weapon: Weapon, enabled: Boolean): Inventory =
         if (enabled) {
@@ -632,6 +644,33 @@ object Shop {
     /** Removes exactly one missile power (a launch, or a shop removal). */
     fun consumeMissilePower(inventory: Inventory): Inventory =
         inventory.withMissilePowers(inventory.missilePowers - 1)
+
+    /**
+     * Buys exactly one bomb power. Each bomb power costs 1500 coins and allows
+     * any bomb (grenade, atom bomb, timer bomb) to be used once.
+     * Similar to missile power, it stacks.
+     */
+    fun buyBombPower(
+        inventory: Inventory,
+        coins: Int,
+        completedRounds: Int
+    ): ShopResult {
+        if (completedRounds < BombRules.FIRST_BOMB_ROUND - 1) {
+            return ShopResult(false, coins, inventory, "bombPowerLocked")
+        }
+        if (coins < BombRules.BOMB_POWER_PRICE) {
+            return ShopResult(false, coins, inventory, "notEnoughCoins")
+        }
+        return ShopResult(
+            success = true,
+            coins = coins - BombRules.BOMB_POWER_PRICE,
+            inventory = inventory.withBombPowers(inventory.bombPowers + 1)
+        )
+    }
+
+    /** Removes exactly one bomb power (a throw, or shop removal). */
+    fun consumeBombPower(inventory: Inventory): Inventory =
+        inventory.withBombPowers(inventory.bombPowers - 1)
 
     fun removeWeapon(inventory: Inventory, coins: Int, weapon: Weapon): ShopResult {
         if (weapon.ownedByDefault || !inventory.ownsWeapon(weapon)) {

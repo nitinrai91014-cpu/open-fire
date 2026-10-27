@@ -196,6 +196,7 @@ class PreferencesManager(context: Context) {
             } ?: false
         val missilePowers = map["missilePowers"]?.toIntOrNull()?.coerceAtLeast(0)
             ?: if (legacyPowerOwned) 1 else 0
+        val bombPowers = map["bombPowers"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
         // Weapons switched off with the shop's Enable / Disable button. An
         // unknown or removed id is simply dropped.
         val disabledWeapons = map["disabledWeapons"]
@@ -214,6 +215,7 @@ class PreferencesManager(context: Context) {
             extensions = extensions,
             lastWeaponId = Weapon.fromId(map["lastWeapon"])?.id ?: Weapon.SHORT_GUN.id,
             missilePowers = missilePowers,
+            bombPowers = bombPowers,
             disabledWeapons = disabledWeapons
         )
     }
@@ -229,6 +231,7 @@ class PreferencesManager(context: Context) {
             "antiBombs" to inventory.antiBombs.toString(),
             "lastWeapon" to inventory.lastWeaponId,
             "missilePowers" to inventory.missilePowers.toString(),
+            "bombPowers" to inventory.bombPowers.toString(),
             "disabledWeapons" to inventory.disabledWeapons.joinToString(",")
         )
         for (extension in Extension.entries) {
