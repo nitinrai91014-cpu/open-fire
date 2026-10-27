@@ -106,12 +106,9 @@ object RobertRules {
     /**
      * Round-by-round movement multiplier. Round one is 20% faster than the
      * old movement, and every following round adds another 20% of base speed.
-     * Round 5 uses strategic multiplier — not faster, but smarter positioning.
      */
     fun movementSpeedMultiplier(round: Int): Float {
         val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
-        // Round 5 is strategic: speed is capped, emphasis on positioning not raw speed
-        if (safeRound == 5) return 1.8f // slightly less than linear 2.0 to emphasize strategy
         return 1.2f + (safeRound - 1) * 0.2f
     }
 
@@ -130,17 +127,15 @@ object RobertRules {
      * The health Robert must fall under before he starts spending his
      * defences. Rounds one and two trigger below 60% of maximum health or
      * below 100 health (whichever is higher); round three triggers below 200;
-     * rounds four and five trigger below 300. In round 5 strategic mode the
-     * threshold is higher to encourage timely defence.
+     * rounds four and five trigger below 300.
      */
     fun defenceThresholdHp(round: Int, maxHp: Int): Int {
         val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
         val safeMax = maxHp.coerceAtLeast(1)
         return when (safeRound) {
-            1, 2 -> maxOf(DEFENCE_THRESHOLD_HP + 40, (safeMax * 0.60f).roundToInt())
-            3 -> maxOf(200, DEFENCE_THRESHOLD_HP)
-            5 -> maxOf(350, (safeMax * 0.55f).roundToInt()) // strategic: earlier defence
-            else -> maxOf(300, DEFENCE_THRESHOLD_HP)
+            1, 2 -> maxOf(100, (safeMax * 0.60f).roundToInt())
+            3 -> 200
+            else -> 300
         }
     }
 
@@ -333,7 +328,6 @@ object RobertRules {
      * True when Robert must retreat because the player is firing continuously
      * and really taking his health down. While the player's own health is
      * dropping instead, Robert never runs: he keeps firing back.
-     * Enhanced: also retreats when player fires back (any continuous burst).
      */
     fun shouldRetreatFromSustainedFire(
         playerBurstShots: Int,
@@ -341,8 +335,8 @@ object RobertRules {
         playerHealthDropping: Boolean
     ): Boolean =
         isContinuousPlayerFire(playerBurstShots) &&
-            (robertHealthDropping || !playerHealthDropping && playerBurstShots >= COUNTER_FIRE_BURST_SHOTS) &&
-            !playerHealthDropping || (robertHealthDropping && !playerHealthDropping)
+            robertHealthDropping &&
+            !playerHealthDropping
 
     fun shouldRetreatWhenPlayerFiresBack(playerBurstShots: Int): Boolean =
         isContinuousPlayerFire(playerBurstShots)
