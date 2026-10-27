@@ -573,25 +573,30 @@ class RobertTest {
 
         // Every situation stays inside the human 2 s to 3 s rhythm.
         val advantage = samples(RobertRules.CombatSituation.ADVANTAGE, false)
-        assertTrue(advantage.all { it in 2_000L..2_500L })
-        assertTrue("advantage fire must vary", advantage.distinct().size > 10)
+        assertTrue("advantage=$advantage", advantage.all { it in 2_000L..2_500L })
+        assertTrue("advantage variation $advantage", advantage.distinct().size > 10)
 
         val pressure = samples(RobertRules.CombatSituation.PRESSURE, false)
-        assertTrue(pressure.all { it in 2_000L..2_500L })
+        assertTrue("pressure=$pressure", pressure.all { it in 2_000L..2_500L })
 
         val even = samples(RobertRules.CombatSituation.EVEN, false)
-        assertTrue(even.all { it in 2_000L..3_000L })
-        assertTrue("even fire must vary", even.distinct().size > 10)
+        assertTrue("even=$even", even.all { it in 2_000L..3_000L })
+        assertTrue("even variation $even", even.distinct().size > 10)
 
         val disadvantage = samples(RobertRules.CombatSituation.DISADVANTAGE, false)
-        assertTrue(disadvantage.all { it in 2_500L..3_000L })
+        assertTrue("disadvantage=$disadvantage", disadvantage.all { it in 2_500L..3_000L })
 
         // Advantage fires faster than a losing Robert, and nothing goes
         // outside the human rhythm.
-        assertTrue(advantage.max() <= disadvantage.min())
-        assertTrue(even.max() <= disadvantage.max())
+        assertTrue(
+            "advantage max ${advantage.max()} vs disadvantage min ${disadvantage.min()}",
+            advantage.max() <= disadvantage.min()
+        )
+        assertTrue("even max ${even.max()}", even.max() <= 3_000L)
+        assertTrue("even min ${even.min()}", even.min() >= 2_000L)
         // While fleeing he barely fires at all.
-        assertTrue(samples(RobertRules.CombatSituation.ADVANTAGE, true).all { it >= 2_500L })
+        val fleeing = samples(RobertRules.CombatSituation.ADVANTAGE, true)
+        assertTrue("fleeing=$fleeing", fleeing.all { it >= 2_500L })
     }
 
     @Test
