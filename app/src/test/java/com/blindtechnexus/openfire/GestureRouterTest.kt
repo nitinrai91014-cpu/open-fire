@@ -75,6 +75,16 @@ class GestureRouterTest {
         // The requirement: running fast covers ground at exactly the enemy's
         // own fast (fleeing) speed for the round.
         assertEquals(enemyFast, fast, 0.01f)
+        // ... in every round, so the safety cap never cuts a sprint short.
+        for (round in 1..5) {
+            val enemy = RobertRules.enemyFastSpeedMps(round)
+            assertEquals(
+                "Round $round fast level must match Robert's fast speed",
+                enemy,
+                RunSpeed.FAST.speedMps(RunPressure.DEFAULT_SPEED_FACTOR, enemy),
+                0.01f
+            )
+        }
         // Slow is half of the base walking speed, normal follows the press.
         assertEquals(
             RunPressure.BASE_SPEED_MPS * RunSpeed.SLOW_FACTOR,

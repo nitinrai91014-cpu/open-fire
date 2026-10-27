@@ -245,8 +245,14 @@ enum class RunSpeed(val id: String, val nameKey: String) {
         /** Used when Robert's speed is unknown (round not resolved yet). */
         const val DEFAULT_FAST_FACTOR = 3.0f
 
-        /** Safety cap so a sprint can never become unplayable. */
-        const val MAX_FAST_FACTOR = 8.0f
+        /**
+         * Safety cap so a sprint can never become unplayable. It sits above the
+         * fastest speed Robert ever flees at (round five: 75 metres a second
+         * over the 6.5 metre base walking speed, a factor of about 11.6), so
+         * the fast level always reaches his exact speed for every round instead
+         * of being cut short by the cap.
+         */
+        const val MAX_FAST_FACTOR = 12.0f
 
         /** Running-sound volume per level. */
         const val SLOW_VOLUME_GAIN = 0.60f

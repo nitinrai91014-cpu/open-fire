@@ -335,9 +335,34 @@ class ShopTest {
             .copy(lastWeaponId = Weapon.PISTOL.id)
         val disabled = Shop.toggleWeaponEnabled(bought, 0, Weapon.PISTOL).inventory
         assertEquals(Weapon.SHORT_GUN, disabled.startingWeapon())
-        // Removing a weapon also clears its disabled flag.
-        val boughtAgain = Shop.buyWeapon(disabled, 2000, Weapon.PISTOL).inventory
-        assertTrue(boughtAgain.weaponEnabled(Weapon.PISTOL))
+        // It is still owned and still remembered, only switched off.
+        assertEquals(Weapon.PISTOL, disabled.rememberedWeapon())
+        assertTrue(disabled.ownsWeapon(Weapon.PISTOL))
+
+        // Buying an owned weapon never flips the switch: it is refused as
+        // already owned, spends nothing, and the Enable button stays the only
+        // way back into the rotation.
+        val again = Shop.buyWeapon(disabled, 2000, Weapon.PISTOL)
+        assertFalse(again.success)
+        assertEquals("alreadyOwned", again.reasonKey)
+        assertEquals(2000, again.coins)
+        assertFalse(again.inventory.weaponEnabled(Weapon.PISTOL))
+
+        // The Enable switch turns it back on and it is the starting weapon
+        // again, because it is the one the player last used.
+        val enabled = Shop.toggleWeaponEnabled(disabled, 0, Weapon.PISTOL).inventory
+        assertTrue(enabled.weaponEnabled(Weapon.PISTOL))
+        assertEquals(Weapon.PISTOL, enabled.startingWeapon())
+
+        // A free grant of a not yet owned weapon always arrives enabled, even
+        // when its id was left over in the disabled set.
+        val granted = Shop.grantWeapon(
+            Inventory(disabledWeapons = setOf(Weapon.AWM.id)),
+            Weapon.AWM
+        ).inventory
+        assertTrue(granted.ownsWeapon(Weapon.AWM))
+        assertTrue(granted.weaponEnabled(Weapon.AWM))
+        assertTrue(granted.disabledWeapons.isEmpty())
     }
 
     @Test
