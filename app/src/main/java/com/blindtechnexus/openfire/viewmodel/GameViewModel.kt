@@ -240,6 +240,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         updateSettings(_settings.value.copy(ttsVolume = volume.coerceIn(0f, 1f)))
     }
 
+    fun setKeepScreenOn(enabled: Boolean) {
+        updateSettings(_settings.value.copy(keepScreenOn = enabled))
+    }
+
     fun setLanguage(lang: String) {
         updateSettings(_settings.value.copy(lang = lang))
         ttsManager.refreshVoices()
@@ -318,7 +322,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
             Screen.RESULT -> {
                 audioManager.stopMusic()
-                audioManager.stopSound("walk")
+                audioManager.stopFootsteps()
             }
         }
     }
@@ -608,12 +612,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun updateWalkAudio(distance: Float, fleeing: Boolean = false) {
         if (_currentScreen.value != Screen.BATTLE) {
-            audioManager.stopSound("walk")
+            audioManager.stopFootsteps()
             return
         }
         stepCount++
         val lateral = if (stepCount % 2 == 0) -12f else 12f
-        audioManager.updateWalk3dAudio(
+        audioManager.updateEnemyWalk3dAudio(
             distance = distance,
             lateralOffset = lateral,
             fleeing = fleeing
@@ -1457,7 +1461,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // Quick menu and defences
     // ---------------------------------------------------------------------
 
-    /** Cycles the quick menu: medikit, cover, glue wall, exit, recover. */
+    /** Cycles the quick menu: medikit, cover, glue wall, anti-missile, exit, recover. */
     fun cycleMenu(direction: Int) {
         if (_currentScreen.value != Screen.BATTLE) return
         markExplicitAction()
@@ -1473,7 +1477,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun speakBattleMenu() {
         val item = _gameState.value.menuItem
         when (item) {
-            BattleMenuItem.MEDKIT, BattleMenuItem.COVER, BattleMenuItem.GLUE_WALL -> {
+            BattleMenuItem.MEDKIT, BattleMenuItem.COVER,
+            BattleMenuItem.GLUE_WALL, BattleMenuItem.ANTI_MISSILE -> {
                 val defence = item.defence ?: return
                 val count = _inventory.value.count(defence)
                 speak("${t("menuNow")}: ${t(defence.nameKey)}. $count.")
@@ -1496,7 +1501,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val state = _gameState.value
         val item = state.menuItem
         when (item) {
-            BattleMenuItem.MEDKIT, BattleMenuItem.COVER, BattleMenuItem.GLUE_WALL -> {
+            BattleMenuItem.MEDKIT, BattleMenuItem.COVER,
+            BattleMenuItem.GLUE_WALL, BattleMenuItem.ANTI_MISSILE -> {
                 val defence = item.defence ?: return
                 useDefenceFromMenu(defence)
             }
@@ -1656,7 +1662,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun exitBattle() {
         stopTimers()
-        audioManager.stopSound("walk")
+        audioManager.stopFootsteps()
         audioManager.stopScreenAudio()
         ttsManager.stop()
         playSound("click")
@@ -1676,7 +1682,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun endGame(won: Boolean) {
         stopTimers()
-        audioManager.stopSound("walk")
+        audioManager.stopFootsteps()
 
         val state = _gameState.value
         val base = if (won) 150 else 30
@@ -1786,7 +1792,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearStats() {
         stopTimers()
-        audioManager.stopSound("walk")
+        audioManager.stopFootsteps()
         ttsManager.stop()
 
         val cleared = GameStats.cleared()
