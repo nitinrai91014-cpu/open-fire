@@ -29,6 +29,15 @@ data class RewardBundle(
     val total: Int
         get() = items.values.filter { it > 0 }.sum()
 
+    /** Merges two rewards, adding the amounts of the same defence together. */
+    operator fun plus(other: RewardBundle): RewardBundle {
+        val merged = items.toMutableMap()
+        for ((item, amount) in other.items) {
+            merged[item] = (merged[item] ?: 0) + amount
+        }
+        return RewardBundle(merged)
+    }
+
     /**
      * The bundle as a spoken list, for example "two covers" or
      * "one glue wall and three medikits". The words come from the plural

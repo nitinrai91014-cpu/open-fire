@@ -126,6 +126,7 @@ class ProgressionTest {
         assertTrue(Progression.missileUnlocked(GameStats(completedRounds = 2)))
         assertFalse(Progression.antiMissileUnlocked(GameStats(completedRounds = 0)))
         assertFalse(Progression.antiMissileUnlocked(GameStats(completedRounds = 1)))
-        assertTrue(Progression.antiMissileUnlocked(GameStats(completedRounds = 2)))
+        assertFalse(Progression.antiMissileUnlocked(GameStats(completedRounds = 2)))
+        assertTrue(Progression.antiMissileUnlocked(GameStats(completedRounds = 3)))
     }
 }

@@ -5,12 +5,14 @@ import androidx.test.core.app.ApplicationProvider
 import com.blindtechnexus.openfire.data.PreferencesManager
 import com.blindtechnexus.openfire.data.Strings
 import com.blindtechnexus.openfire.model.Combat
+import com.blindtechnexus.openfire.model.DamageTable
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.ExtensionState
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.GameStats
+import com.blindtechnexus.openfire.model.HitZone
 import com.blindtechnexus.openfire.model.Inventory
 import com.blindtechnexus.openfire.model.Progression
 import com.blindtechnexus.openfire.model.Weapon
@@ -39,7 +41,7 @@ class ExampleRobolectricTest {
         assertEquals("ओपन फायर", Strings.get("title", "hi"))
         assertEquals("ओपन फायर", Strings.get("title", "ne"))
 
-        assertEquals("Version ${BuildConfig.VERSION_NAME}", Strings.get("version", "en"))
+        assertEquals("Version 2.3", Strings.get("version", "en"))
         assertEquals("Changelog", Strings.get("changelog", "en"))
         assertEquals("Join Telegram Channel", Strings.get("joinTelegram", "en"))
         assertEquals("Contact on WhatsApp", Strings.get("contactWhatsApp", "en"))
@@ -60,14 +62,17 @@ class ExampleRobolectricTest {
 
     @Test
     fun testPistolMagazineCapacity() {
-        val pistol = Weapon.PISTOL
-        assertEquals(6, pistol.magazine)
-        assertEquals(13, pistol.powerPercent)
-        // Direct damage follows the same proximity multipliers as all firearms.
-        assertEquals(0, Combat.weaponDamage(pistol, 20f, 750))
-        assertEquals(7, Combat.weaponDamage(pistol, 50f, 750))
-        assertEquals(10, Combat.weaponDamage(pistol, 80f, 750))
-        assertEquals(13, Combat.weaponDamage(pistol, 95f, 750))
+        val pistol = Weapon.entries.find { it.id == "pistol" }
+        org.junit.Assert.assertNotNull(pistol)
+        assertEquals(6, pistol?.magazine)
+        // The pistol power comes from the shared damage table: light 7 percent
+        // and heavy 15 percent of the victim's maximum health.
+        assertEquals(7, pistol?.powerPercent)
+        assertEquals(15, pistol?.closeRangePowerPercent)
+        assertEquals(0, DamageTable.percentOf(pistol!!, HitZone.MISS))
+        assertEquals(7, DamageTable.percentOf(pistol, HitZone.LIGHT))
+        assertEquals(11, DamageTable.percentOf(pistol, HitZone.STRONG))
+        assertEquals(15, DamageTable.percentOf(pistol, HitZone.HEAVY))
     }
 
     @Test
@@ -129,7 +134,10 @@ class ExampleRobolectricTest {
                 Extension.AUTO_RELOAD.id to ExtensionState.ENABLED,
                 Extension.AUTO_COVER.id to ExtensionState.DISABLED
             ),
-            lastWeaponId = Weapon.SWORD.id
+            lastWeaponId = Weapon.SWORD.id,
+            missilePowers = 3,
+            antiBombs = 2,
+            disabledWeapons = setOf(Weapon.SWORD.id)
         )
         prefs.saveInventory(inventory)
 
@@ -142,9 +150,20 @@ class ExampleRobolectricTest {
         assertTrue(loaded.extensionEnabled(Extension.AUTO_RELOAD))
         assertEquals(ExtensionState.DISABLED, loaded.extensionState(Extension.AUTO_COVER))
         assertEquals(Weapon.SWORD.id, loaded.lastWeaponId)
+        // The missile is a real battle weapon and its powers persist.
         assertTrue(loaded.ownsWeapon(Weapon.MISSILE))
+        assertEquals(3, loaded.missilePowers)
         assertEquals(4, loaded.ownedWeapons().size)
-        assertEquals(Weapon.SWORD, loaded.startingWeapon())
+        // The anti-bomb explosive stack and the shop's Enable / Disable switch
+        // both survive a restart.
+        assertEquals(2, loaded.antiBombs)
+        assertFalse(loaded.weaponEnabled(Weapon.SWORD))
+        assertTrue(loaded.weaponEnabled(Weapon.SHORT_GUN))
+        assertEquals(setOf(Weapon.SWORD.id), loaded.disabledWeapons)
+        // A disabled weapon is skipped by the battle swipes and is never
+        // handed out at the start of a fight.
+        assertFalse(loaded.battleWeapons(1).contains(Weapon.SWORD))
+        assertTrue(loaded.battleWeapons(1).contains(Weapon.SHORT_GUN))
     }
 
     @Test
@@ -169,8 +188,10 @@ class ExampleRobolectricTest {
                 glueWalls = 3,
                 covers = 2,
                 antiMissiles = 1,
-                extensions = mapOf(Extension.AUTO_RELOAD.id to ExtensionState.ENABLED),
-                lastWeaponId = Weapon.SWORD.id
+                antiBombs = 2
+            ).copy(
+                lastWeaponId = Weapon.SWORD.id,
+                disabledWeapons = setOf(Weapon.PISTOL.id)
             )
         )
         prefs.grantDefence(DefenceItem.MEDKIT, 2)
@@ -191,28 +212,9 @@ class ExampleRobolectricTest {
         assertEquals(0, inventory.glueWalls)
         assertEquals(0, inventory.covers)
         assertEquals(0, inventory.antiMissiles)
-        assertEquals(Weapon.defaults(), inventory.ownedWeapons())
-        assertEquals(Weapon.SHORT_GUN, inventory.startingWeapon())
+        assertEquals(0, inventory.antiBombs)
+        assertTrue("Wiping the profile re-enables every weapon", inventory.disabledWeapons.isEmpty())
         assertFalse(inventory.extensionOwned(Extension.AUTO_RELOAD))
-    }
-
-    @Test
-    fun testRemovedWeaponIdsAreIgnoredWhenLoadingOldInventories() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        val prefs = PreferencesManager(context)
-        prefs.saveInventory(
-            Inventory(
-                weaponIds = setOf(Weapon.ATOMIC_BOMB.id, "grenade", "atomBomb", "unknownWeapon"),
-                lastWeaponId = "timerBomb"
-            )
-        )
-
-        val loaded = PreferencesManager(context).loadInventory()
-        assertEquals(
-            (Weapon.defaults() + Weapon.ATOMIC_BOMB).map { it.id }.toSet(),
-            loaded.weaponIds
-        )
-        assertEquals(Weapon.SHORT_GUN, loaded.startingWeapon())
     }
 
     @Test

@@ -101,10 +101,8 @@ class AudioManager(private val context: Context) {
          */
         val WEAPON_SOUND_KEYS: Set<String> = setOf(
             "assault",
-            "fire",
             "pistol",
             "shortGun",
-            "shotgun",
             "sniperRifle",
             "awm",
             "mp40",
@@ -280,14 +278,13 @@ class AudioManager(private val context: Context) {
     private val soundAliases = mapOf(
         "click" to listOf("click.mp3"),
         "gunReload" to listOf("gun-reload.mp3"),
-        "reload" to listOf("gun-reload.mp3"),
-        // Firearms.
+        // Firearms. Every alias is used by a real weapon: the decorative
+        // "fire", "shotgun" and "reload" duplicates were removed so no stray
+        // gunshot can be triggered by an unused key.
         "assault" to listOf("assault-sound.mp3"),
         "pistol" to listOf("pistol-sound.mp3"),
         "shortGun" to listOf("short-gun.mp3"),
         "sniperRifle" to listOf("sniper-rifle.mp3"),
-        "fire" to listOf("assault-sound.mp3"),
-        "shotgun" to listOf("short-gun.mp3"),
         // Round two weapons: the MP40 submachine gun and the AWM long-range
         // rifle, each with its own recorded shot.
         "mp40" to listOf("mp-40-gun.mp3"),
@@ -317,7 +314,6 @@ class AudioManager(private val context: Context) {
         "cover" to listOf("cover.mp3"),
         "coverHit" to listOf("cover-hit.mp3"),
         "coverCrack" to listOf("cover-crack.mp3"),
-        "gloowall" to listOf("glue-sound.mp3"),
         "medkit" to listOf("medkit.mp3"),
         // Impacts: the weapon sound plus the fighter that was hit.
         "gunHit" to listOf("gun-hit.mp3"),
@@ -558,6 +554,11 @@ class AudioManager(private val context: Context) {
         posZ: Float = 0f
     ): Int {
         if (released) return -1
+        // One weapon channel: starting any gunshot cuts every other weapon
+        // sound (and any earlier tail of the same gun) before this one is
+        // allowed to start. Queued weapon requests are dropped as well, so a
+        // slowly loading AWM can never leak into Robert's answering shot.
+        enforceWeaponExclusivity(key)
         if (key in LONG_TRACK_KEYS) {
             playManagedTrack(key, volume, posX, posY, posZ, loop = false)
             return 1
@@ -656,6 +657,12 @@ class AudioManager(private val context: Context) {
         posZ: Float = 0f
     ) {
         if (released) return
+        // A fresh weapon loop takes the exclusive weapon channel. An already
+        // running loop only refreshes its volume, so a held burst never
+        // restarts itself or leaks a second copy of the same gun.
+        if (key in WEAPON_SOUND_KEYS && !isTrackActive(key)) {
+            enforceWeaponExclusivity(key)
+        }
         if (key in LONG_TRACK_KEYS) {
             // Ensure any previous instance is fully released before re-looping; this is what
             // makes the MP40 loop stable across rapid hold/release cycles without overlapping.
@@ -714,7 +721,8 @@ class AudioManager(private val context: Context) {
         posY: Float = 0f,
         posZ: Float = 0f
     ) {
-        exclusiveWeaponStart(key)
+        // playSound owns the exclusive channel, so a shot played through this
+        // helper behaves exactly like one played directly.
         playSound(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
     }
 
@@ -726,7 +734,6 @@ class AudioManager(private val context: Context) {
         posY: Float = 0f,
         posZ: Float = 0f
     ) {
-        exclusiveWeaponStart(key)
         playLoop(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
     }
 
@@ -737,14 +744,38 @@ class AudioManager(private val context: Context) {
         }
     }
 
-    /** Stops the other weapon sounds, ducks the footsteps, then starts [key]. */
-    private fun exclusiveWeaponStart(key: String) {
-        if (released) return
+    /**
+     * Makes weapon playback genuinely exclusive and leak free.
+     *
+     * Every active streamed track, SoundPool stream *and queued request* of
+     * every weapon key is stopped - including the key that is about to start,
+     * so a second shot of the same gun cuts its own previous tail. Walk loops
+     * are then ducked immediately (and stay ducked for [WALK_DUCK_MS]), so a
+     * running fighter can never bleed into a gunshot. Footsteps themselves
+     * are never in this set, so walking never stops a weapon sound.
+     */
+    private fun enforceWeaponExclusivity(key: String) {
+        if (released || key !in WEAPON_SOUND_KEYS) return
         for (weaponKey in WEAPON_SOUND_KEYS) {
-            if (weaponKey != key) stopSound(weaponKey)
+            stopSound(weaponKey)
         }
-        // A weapon sound always wins over footsteps.
         walkDuckUntilMs = System.currentTimeMillis() + WALK_DUCK_MS
+        duckActiveFootsteps()
+    }
+
+    /** Lowers live footstep tracks the instant a weapon sound starts. */
+    private fun duckActiveFootsteps() {
+        for (key in listOf("walk", "playerWalk", "enemyWalk")) {
+            val player = managedPlayers[key] ?: continue
+            val gains = walkCurrentGains[key] ?: continue
+            try {
+                player.setVolume(
+                    (gains.first * WALK_DUCK_FACTOR).coerceIn(0f, 1f),
+                    (gains.second * WALK_DUCK_FACTOR).coerceIn(0f, 1f)
+                )
+            } catch (_: Exception) {
+            }
+        }
     }
 
     /** Current footstep ducking multiplier. */
@@ -808,7 +839,8 @@ class AudioManager(private val context: Context) {
      * The local player's own footsteps stay centred at the speech level
      * regardless of Robert's distance, exactly as heard while running
      * yourself. The playback rate follows the real running speed in metres per
-     * second, and [volumeGain] scales the running sound: a fast run is louder, a
+     * second, and [volumeGain] is the running-speed level gain from
+     * [com.blindtechnexus.openfire.model.RunSpeed]: a fast run is louder, a
      * slow run is clearly quieter, exactly like Robert's distance-scaled steps.
      */
     fun updatePlayerWalkAudio(
@@ -1189,7 +1221,7 @@ class AudioManager(private val context: Context) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 when (key) {
-                    "assault", "shortGun", "pistol", "sniperRifle", "fire", "shotgun",
+                    "assault", "shortGun", "pistol", "sniperRifle",
                     "mp40", "machineGun", "awm" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE))
                     }
@@ -1205,7 +1237,7 @@ class AudioManager(private val context: Context) {
                     "roundComplete" -> {
                         vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 90, 60, 120, 60, 200), -1))
                     }
-                    "gunReload", "reload" -> {
+                    "gunReload" -> {
                         vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 30, 40, 50), -1))
                     }
                     "playerHit" -> {
@@ -1217,7 +1249,7 @@ class AudioManager(private val context: Context) {
                     "glueWallCrack", "coverCrack" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(80, 220))
                     }
-                    "glueSound", "cover", "gloowall" -> {
+                    "glueSound", "cover" -> {
                         vibrator.vibrate(VibrationEffect.createOneShot(60, 200))
                     }
                     "medkit" -> {
@@ -1258,11 +1290,11 @@ class AudioManager(private val context: Context) {
 
         val sampleRate = 22050
         val pcm = when (key) {
-            "assault", "fire" -> generateGunshotWave(sampleRate, 0.16f, 320f, 90f)
-            "shortGun", "shotgun" -> generateGunshotWave(sampleRate, 0.28f, 180f, 60f)
+            "assault" -> generateGunshotWave(sampleRate, 0.16f, 320f, 90f)
+            "shortGun" -> generateGunshotWave(sampleRate, 0.28f, 180f, 60f)
             "pistol" -> generateGunshotWave(sampleRate, 0.12f, 440f, 140f)
             "sniperRifle" -> generateGunshotWave(sampleRate, 0.34f, 260f, 70f)
-            "gunReload", "reload" -> generateReloadWave(sampleRate, 0.45f)
+            "gunReload" -> generateReloadWave(sampleRate, 0.45f)
             "knifeHit", "knifeMiss", "swordHit", "swordMiss" -> generateHitWave(sampleRate, 0.10f)
             "knifeSwish", "knifeSwitch", "swordGlide", "swordSwitch" ->
                 generateChirpWave(sampleRate, 0.16f, 900f, 320f)
@@ -1277,7 +1309,7 @@ class AudioManager(private val context: Context) {
             "airplaneEngine" -> generateEngineLoopWave(sampleRate, 1.6f, 72f)
             "walk", "playerWalk", "enemyWalk" -> generateFootstepWave(sampleRate, 0.14f)
             "medkit" -> generateChimeWave(sampleRate, 0.35f, doubleArrayOf(523.25, 659.25, 783.99))
-            "glueSound", "gloowall" -> generateWallClankWave(sampleRate, 0.3f)
+            "glueSound" -> generateWallClankWave(sampleRate, 0.3f)
             "cover" -> generateCoverWave(sampleRate, 0.5f)
             "ammo" -> generateBeepWave(sampleRate, 0.08f, 900f)
             "spend" -> generateCoinWave(sampleRate, 0.18f)

@@ -194,6 +194,18 @@ fun ProfileScreen(viewModel: GameViewModel) {
                 fontSize = 15.sp,
                 color = Color.White
             )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "${viewModel.t("extMissilePowers")}: ${inventory.missilePowers}",
+                fontSize = 15.sp,
+                color = Color.White
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "${viewModel.t("extBombPowers")}: ${inventory.bombPowers}",
+                fontSize = 15.sp,
+                color = Color.White
+            )
 
             Spacer(modifier = Modifier.height(14.dp))
             Text(
@@ -436,6 +448,40 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
+                text = "Latest balance and accessibility update",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            val latestNotes = listOf(
+                "Weapon damage is now a fixed number of health points. A 14 point rifle always takes 14 health, never 140 on a high-round fighter. The quick menu protection is a flat 2 health points and the AWM long range hit is exactly 10 health points.",
+                "Robert fires one or two shots at random intervals between 1.5 and 2 seconds, or once a second while his own cover or glue wall protects him and you have none. He compares hits in the current exchange: two of your hits against one of his make him retreat immediately, while landing more hits keeps him fighting.",
+                "Every defence Robert carries is really deployed when his health falls, and his weapon is chosen for the situation. Stray reload, jump and unused gunshot samples no longer play on the enemy side, and a tap in the center of the battle screen never fires a gun.",
+                "Weapon sounds own one exclusive channel: a new shot stops every other weapon sound and every queued gunshot, and ducks the footsteps, so two guns or a gun and a footstep never mix or leak.",
+                "The battle, flight and result screens never vibrate - they are speech and sound only. The shop now shows a separate, dynamic unlock line under every round-gated weapon, defence and power; it disappears once the item is unlocked.",
+                "Completing round three unlocks the anti-missile system and pays one free interceptor. In round four Robert has one missile power and two interceptors; in round five he has two missile powers, four interceptors, five anti-bomb explosives and unlimited bombs and gun ammunition.",
+                "The final round keeps its seven minute limit: if Robert survives that long you lose the game. A defeat still costs 20 coins unless you have none, and the timer bomb picker still freezes all enemy fire until you confirm or cancel it."
+            )
+            latestNotes.forEach { note ->
+                Text(
+                    text = "• $note",
+                    fontSize = 14.sp,
+                    color = Color.White,
+                    lineHeight = 20.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(CardBorder)
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
                 text = "Version 2.3 (Current)",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
@@ -445,8 +491,8 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             val v23Notes = listOf(
                 "Bomb Power: new stackable consumable for 1500 coins - 1 Bomb Power allows 1 use of any bomb type (1 Atom Bomb + 1 Timer Bomb + 1 Grenade use), exactly like Missile Powers. Buy and stack in the shop, one is consumed per throw. Bombs now track the enemy like missiles and guarantee destruction at any cost unless intercepted by an anti-bomb explosive.",
                 "Tracking bombs: grenade, atom bomb and timer bomb all follow the target continuously until detonation. The old 50 metre escape race is gone - without an anti-bomb you cannot outrun a tracking bomb. The timer bomb still counts 15 to 60 seconds with its looping timer sound, but now also tracks.",
-                "Enemy bomb and anti-bomb limits aligned per round: round 3 = 1 bomb and 1 anti-bomb per game, round 4 = 3 each, round 5 = unlimited but only while clearly losing. Grenades unlock together with atom and timer bombs in round 3.",
-                "Enemy firing rebuilt: Robert fires continuously only when you are vulnerable (damaged, trapped or locked); otherwise he fires at random intervals of 2s, 1s and 1.5s. When you fire back while he is firing he immediately retreats.",
+                "Enemy bomb and anti-bomb limits aligned per round: round 3 = two grenades and two anti-bombs per game, round 4 = three uses of each bomb and three anti-bombs, round 5 = five anti-bombs and unlimited bombs. Grenades unlock together with atom and timer bombs in round 3.",
+                "Enemy firing rebuilt: Robert fires continuously only when you are vulnerable (damaged, trapped or locked); otherwise he fires at random intervals of 2, 2.5 or 3 seconds (now 1.5 to 2 seconds in the latest update). When you fire back while he is firing he immediately retreats.",
                 "Panic and defence deployment: below 150 percent health difference Robert panics and instantly deploys a defence; below 200 percent even a 1 percent dip triggers panic. Strategic weapon picking: 40-70 percent health prefers mid-range, 90-100 percent prefers close heavy weapons, 20-40 percent prefers AWM long range, about 75 percent of the time.",
                 "Retreat logic: Robert retreats when he took significant damage, when the position is unsafe, or when you have a Gloo Wall up and he has no usable sniper rifle - then he avoids you until the wall drops.",
                 "Round 5 strategy over stats: both sides fight with equal power and only tactics decide the win.",

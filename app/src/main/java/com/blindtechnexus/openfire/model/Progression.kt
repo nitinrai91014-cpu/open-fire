@@ -25,6 +25,15 @@ object Progression {
     const val MISSILE_UNLOCK_COMPLETED_ROUNDS = 2
 
     /**
+     * Completing round three (entering round four) unlocks the player's
+     * anti-missile system and also hands out one free interceptor.
+     */
+    const val ANTI_MISSILE_UNLOCK_COMPLETED_ROUNDS = 3
+
+    /** The round in which the free anti-missile reward is handed out. */
+    const val ANTI_MISSILE_REWARD_ROUND = 4
+
+    /**
      * The final round is played against the clock: seven minutes per game.
      * If Robert is still alive when they run out, the player loses.
      */
@@ -119,9 +128,13 @@ object Progression {
     fun missileUnlocked(stats: GameStats): Boolean =
         stats.completedRounds >= MISSILE_UNLOCK_COMPLETED_ROUNDS
 
-    /** True once round two has been completed, unlocking the anti-missile defence. */
+    /** True once round three has been completed: the anti-missile unlocks. */
     fun antiMissileUnlocked(stats: GameStats): Boolean =
-        stats.completedRounds >= MISSILE_UNLOCK_COMPLETED_ROUNDS
+        stats.completedRounds >= ANTI_MISSILE_UNLOCK_COMPLETED_ROUNDS
+
+    /** True when the current round owes the player the free interceptor. */
+    fun antiMissileRewardDue(round: Int, granted: Boolean): Boolean =
+        !granted && round.coerceIn(1, ROUNDS_PER_MATCH) >= ANTI_MISSILE_REWARD_ROUND
 
     /** Keeps loaded stats inside the valid ladder ranges. */
     fun normalize(stats: GameStats): GameStats = stats.copy(
