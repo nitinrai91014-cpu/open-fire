@@ -1616,7 +1616,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val proximityNow = Combat.proximityOf(state.distance)
         // Panic check: if Robert's health drops below thresholds (150/200 HP or fractions) he
         // automatically deploys available defenses according to situation — even 1% drop triggers.
-        if (RobertRules.shouldPanic(state.robertHp, state.robertMaxHp, state.robertBurstRobertHp)) {
+        if (RobertRules.shouldPanic(state.robertHp, state.robertMaxHp, state.playerBurstRobertHp)) {
             val panicDefence = RobertRules.panicDefence(
                 medikits = state.robertMedkits,
                 covers = state.robertCovers,
