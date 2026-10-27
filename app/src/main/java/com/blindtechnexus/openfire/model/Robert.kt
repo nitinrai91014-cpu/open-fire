@@ -45,7 +45,13 @@ data class RobertProfile(
     /** Bombs he may throw this game (round three and later). */
     val bombs: Int = 0,
     /** Anti-bomb explosives he may deploy this game (round three and later). */
-    val antiBombs: Int = 0
+    val antiBombs: Int = 0,
+    /** Grenades he may throw this game (twice in round three). */
+    val grenades: Int = 0,
+    /** Atom bombs he may throw this game (three times per game from round four). */
+    val atomBombs: Int = 0,
+    /** Timer bombs he may throw this game (three times per game from round four). */
+    val timerBombs: Int = 0
 )
 
 object RobertRules {
@@ -92,8 +98,35 @@ object RobertRules {
     const val PANIC_HP_150 = 150
     const val PANIC_HP_200 = 200
 
-    /** Random firing intervals when player is NOT vulnerable (1s, 1.5s, 2s). */
-    val NORMAL_INTERVALS_MS = listOf(1000L, 1500L, 2000L)
+    /**
+     * Random firing intervals while the player is not vulnerable, as the new
+     * behaviour requires: he fires at 2 s, 2.5 s or 3 s, never on a fixed
+     * clock and never like a machine gun.
+     */
+    val NORMAL_INTERVALS_MS = listOf(2_000L, 2_500L, 3_000L)
+
+    /** Maximum number of shots Robert fires in a row before he pauses. */
+    const val MAX_SUCCESSIVE_SHOTS = 2
+
+    /** Health fraction of the player that counts as "extremely weak". */
+    const val EXTREMELY_WEAK_FRACTION = 0.18f
+
+    /** Chance that Robert runs instead of firing, per decision tick. */
+    const val REPOSITION_CHANCE = 0.40f
+
+    /** Chance that Robert runs right after a finished burst. */
+    const val REPOSITION_AFTER_BURST_CHANCE = 0.75f
+
+    /** Minimum distance (metres) he keeps while repositioning. */
+    const val REPOSITION_STEP_M = 8f
+
+    /**
+     * The three damage ranges he shoots from, expressed as proximity percent:
+     * 20-40 percent, 40-70 percent and 70-100 percent. In metres these are the
+     * [FireRange] bands FAR (20 percent mid), MID (55 percent mid) and
+     * STRONG / CLOSE (80 / 95 percent mid).
+     */
+    val FIRE_PROXIMITY_RANGES = listOf(20f..40f, 40f..70f, 70f..100f)
 
     /** Consecutive hits needed before Robert runs far away. */
     fun fleeAfterHits(round: Int): Int = when (round) {
@@ -195,21 +228,30 @@ object RobertRules {
             3 -> RobertProfile(
                 3, maxHp, 3, 2, 4, weapons, false, fleeAfterHits(3),
                 bombs = BombRules.enemyBombsForRound(3),
-                antiBombs = BombRules.antiBombsForRound(3)
+                antiBombs = BombRules.antiBombsForRound(3),
+                grenades = BombRules.enemyBombUsesForRound(3, BombKind.GRENADE),
+                atomBombs = BombRules.enemyBombUsesForRound(3, BombKind.ATOM),
+                timerBombs = BombRules.enemyBombUsesForRound(3, BombKind.TIMER)
             )
             4 -> RobertProfile(
                 4, maxHp, 5, 3, 5, weapons, false, fleeAfterHits(4),
                 missilePowers = MissileRules.enemyMissilePowersForRound(4),
                 antiMissiles = MissileRules.antiMissilesForRound(4),
                 bombs = BombRules.enemyBombsForRound(4),
-                antiBombs = BombRules.antiBombsForRound(4)
+                antiBombs = BombRules.antiBombsForRound(4),
+                grenades = BombRules.enemyBombUsesForRound(4, BombKind.GRENADE),
+                atomBombs = BombRules.enemyBombUsesForRound(4, BombKind.ATOM),
+                timerBombs = BombRules.enemyBombUsesForRound(4, BombKind.TIMER)
             )
             else -> RobertProfile(
                 5, maxHp, 5, 4, 7, weapons, false, fleeAfterHits(5),
                 missilePowers = MissileRules.enemyMissilePowersForRound(5),
                 antiMissiles = MissileRules.antiMissilesForRound(5),
                 bombs = BombRules.enemyBombsForRound(5),
-                antiBombs = BombRules.antiBombsForRound(5)
+                antiBombs = BombRules.antiBombsForRound(5),
+                grenades = BombRules.enemyBombUsesForRound(5, BombKind.GRENADE),
+                atomBombs = BombRules.enemyBombUsesForRound(5, BombKind.ATOM),
+                timerBombs = BombRules.enemyBombUsesForRound(5, BombKind.TIMER)
             )
         }
     }
@@ -441,21 +483,25 @@ object RobertRules {
         playerBurstShots >= COUNTER_FIRE_BURST_SHOTS
 
     /**
-     * True when Robert answers with continuous fire: ONLY when player is vulnerable.
-     * Otherwise he uses varied intervals of 1s, 1.5s, 2s randomly.
+     * True when Robert is allowed to fire continuously.
+     *
+     * Continuous fire is a finishing move, never his default: it happens only
+     * when the player's weapon is damaged (no working gun) or the player is
+     * extremely weak with no other option left. In every other situation he
+     * fires single or double shots at 2 s, 2.5 s or 3 s and repositions.
      */
     fun shouldFireContinuously(
         playerBurstShots: Int,
         playerHealthDropping: Boolean,
         situation: CombatSituation,
-        playerVulnerable: Boolean = true
+        playerVulnerable: Boolean = true,
+        playerWeaponDamaged: Boolean = false,
+        playerHpFraction: Float = 1f
     ): Boolean {
-        // Continuous fire ONLY when player is vulnerable
-        if (!playerVulnerable) return false
-        return playerHealthDropping ||
-            isContinuousPlayerFire(playerBurstShots) ||
-            situation == CombatSituation.PRESSURE ||
-            situation == CombatSituation.ADVANTAGE
+        // The burst counters and the health trend are kept for the exchange
+        // bookkeeping, but they no longer force a machine-gun answer.
+        val pinned = playerWeaponDamaged || playerHpFraction <= EXTREMELY_WEAK_FRACTION
+        return pinned
     }
 
     /** Legacy overload for tests. */
@@ -463,10 +509,85 @@ object RobertRules {
         playerBurstShots: Int,
         playerHealthDropping: Boolean,
         situation: CombatSituation
-    ): Boolean = shouldFireContinuously(playerBurstShots, playerHealthDropping, situation, playerVulnerable = true)
+    ): Boolean = shouldFireContinuously(
+        playerBurstShots,
+        playerHealthDropping,
+        situation,
+        playerVulnerable = true
+    )
 
-    /** Random normal fire interval (1s, 1.5s, 2s) as per spec. */
+    /** True when the player is damaged or extremely weak: only then does he press. */
+    fun shouldPressPlayer(playerWeaponDamaged: Boolean, playerHpFraction: Float): Boolean =
+        playerWeaponDamaged || playerHpFraction <= EXTREMELY_WEAK_FRACTION
+
+    /** Random normal fire interval (2 s, 2.5 s or 3 s). */
     fun normalFireInterval(random: Random): Long = NORMAL_INTERVALS_MS.random(random)
+
+    /** How many shots he fires before pausing: one or two. */
+    fun burstLimit(random: Random): Int = 1 + random.nextInt(MAX_SUCCESSIVE_SHOTS)
+
+    /** True when the finished burst must be followed by a pause. */
+    fun burstFinished(successiveShots: Int, limit: Int): Boolean =
+        successiveShots >= limit.coerceIn(1, MAX_SUCCESSIVE_SHOTS)
+
+    /**
+     * True when Robert spends this tick running instead of firing. He flees
+     * just as readily as he shoots, unless the player is pinned down.
+     */
+    fun shouldRepositionInsteadOfFiring(
+        situation: CombatSituation,
+        playerWeaponDamaged: Boolean,
+        playerHpFraction: Float,
+        random: Random
+    ): Boolean {
+        if (shouldPressPlayer(playerWeaponDamaged, playerHpFraction)) return false
+        val chance = when (situation) {
+            CombatSituation.DISADVANTAGE -> REPOSITION_CHANCE + 0.15f
+            CombatSituation.EVEN -> REPOSITION_CHANCE
+            CombatSituation.ADVANTAGE -> REPOSITION_CHANCE - 0.10f
+            CombatSituation.PRESSURE -> 0f
+        }
+        return random.nextFloat() < chance
+    }
+
+    /** True when a just finished burst turns into a run instead of the next shot. */
+    fun shouldRunAfterBurst(random: Random): Boolean =
+        random.nextFloat() < REPOSITION_AFTER_BURST_CHANCE
+
+    /**
+     * The proximity range (20-40, 40-70 or 70-100 percent) Robert fires from
+     * for this situation. A pinned player is always attacked from the
+     * 70-100 percent band; otherwise the band follows who is winning.
+     */
+    fun proximityRangeFor(
+        situation: CombatSituation,
+        playerWeaponDamaged: Boolean,
+        playerHpFraction: Float,
+        random: Random
+    ): ClosedFloatingPointRange<Float> {
+        if (shouldPressPlayer(playerWeaponDamaged, playerHpFraction)) return FIRE_PROXIMITY_RANGES[2]
+        return when (situation) {
+            CombatSituation.ADVANTAGE -> FIRE_PROXIMITY_RANGES[2]
+            CombatSituation.EVEN -> FIRE_PROXIMITY_RANGES[1]
+            CombatSituation.DISADVANTAGE -> FIRE_PROXIMITY_RANGES[0]
+            CombatSituation.PRESSURE -> FIRE_PROXIMITY_RANGES[2]
+        }
+    }
+
+    /** True from round five: every gun fires without ever running dry. */
+    fun infiniteAmmo(round: Int): Boolean =
+        round.coerceIn(1, Progression.ROUNDS_PER_MATCH) >= 5
+
+    /** True from round five: bombs are unlimited as well. */
+    fun infiniteBombs(round: Int): Boolean =
+        round.coerceIn(1, Progression.ROUNDS_PER_MATCH) >= 5
+
+    /**
+     * True once Robert may end the game with his missile in this round.
+     * Round four holds one missile power, round five holds two.
+     */
+    fun missilePowersForRound(round: Int): Int =
+        MissileRules.enemyMissilePowersForRound(round)
 
     /** True when this tick should be a sideways strafe instead of a straight walk. */
     fun shouldStrafe(random: Random): Boolean = random.nextFloat() < STRAFE_CHANCE
@@ -600,15 +721,29 @@ object RobertRules {
         playerHp: Int,
         playerMaxHp: Int,
         deceptionShotsLeft: Int,
-        robertHasSniper: Boolean = true
+        robertHasSniper: Boolean = true,
+        playerWeapon: Weapon? = null
     ): FireRange {
         if (playerWeaponDamaged) return FireRange.CLOSE
         if (playerGlueWallActive) return if (robertHasSniper) FireRange.CLOSE else FireRange.FAR
         if (stored == FireRange.FAR && deceptionShotsLeft > 0) return FireRange.FAR
         val gap = advantageGap(robertHp, robertMaxHp, playerHp, playerMaxHp)
-        // Round 5 strategic: even when advantaged, prefer STRONG over CLOSE for tactical control
+        // Round 5 strategic: even when advantaged, prefer STRONG over CLOSE for
+        // tactical control.
         val isStrategyRound = robertMaxHp >= Progression.hpFor(5, 1) // approx detection
+        // Estimating the weapon in the player's hands: he denies the long-range
+        // rifle its band and refuses to stand inside a close-range gun's band.
+        val longRangeGun = playerWeapon == Weapon.AWM || playerWeapon == Weapon.SNIPER
+        val closeRangeGun = playerWeapon != null && (
+            playerWeapon.melee ||
+                playerWeapon.autoFire ||
+                playerWeapon == Weapon.SHORT_GUN
+            )
         return when {
+            longRangeGun && gap >= MODERATE_ADVANTAGE_GAP -> FireRange.CLOSE
+            longRangeGun -> FireRange.MID
+            closeRangeGun && gap < -MODERATE_ADVANTAGE_GAP -> FireRange.MID
+            closeRangeGun -> FireRange.STRONG
             gap >= BIG_ADVANTAGE_GAP -> if (isStrategyRound) FireRange.STRONG else FireRange.CLOSE
             gap > MODERATE_ADVANTAGE_GAP -> FireRange.STRONG
             gap < -MODERATE_ADVANTAGE_GAP -> FireRange.MID
@@ -616,17 +751,25 @@ object RobertRules {
         }
     }
 
-    /** The inclusive delay window (ms) before Robert's next shot. */
+    /**
+     * The inclusive delay window (ms) before Robert's next shot. Every window
+     * stays inside the 2 s - 3 s rhythm of the new behaviour, with the faster
+     * end reserved for an aggressive situation and the slower end for a
+     * retreating one.
+     */
     fun fireIntervalWindow(situation: CombatSituation, fleeing: Boolean): LongRange = when {
-        fleeing -> 2_200L..3_200L
-        situation == CombatSituation.PRESSURE -> 620L..1_000L
-        situation == CombatSituation.ADVANTAGE -> 750L..1_150L
-        situation == CombatSituation.EVEN -> 1_400L..2_200L
-        else -> 2_000L..3_000L
+        fleeing -> 2_500L..3_000L
+        situation == CombatSituation.PRESSURE -> 2_000L..2_500L
+        situation == CombatSituation.ADVANTAGE -> 2_000L..2_500L
+        situation == CombatSituation.EVEN -> 2_000L..3_000L
+        else -> 2_500L..3_000L
     }
 
-    /** The window used while Robert answers continuous fire shot for shot. */
-    fun continuousFireWindow(): LongRange = 380L..620L
+    /**
+     * The window used while Robert presses a pinned player continuously. It is
+     * still human, never a machine gun: 1.2 s to 2 s between the shots.
+     */
+    fun continuousFireWindow(): LongRange = 1_200L..2_000L
 
     /** A jittered delay before Robert's next shot, for the situation. */
     fun fireIntervalMs(
@@ -647,22 +790,38 @@ object RobertRules {
         }
     }
 
-    /** Enhanced interval that respects vulnerability spec: random 1s/1.5s/2s when not vulnerable. */
+    /**
+     * The interval before the next shot. Continuous fire only happens while
+     * the player is pinned (damaged weapon or extremely weak); every other
+     * tick waits a human 2 s, 2.5 s or 3 s, longer while he is running.
+     */
     fun firingIntervalWithVulnerability(
         situation: CombatSituation,
         fleeing: Boolean,
         playerVulnerable: Boolean,
         playerBurstShots: Int,
         playerHealthDropping: Boolean,
-        random: Random
+        random: Random,
+        playerWeaponDamaged: Boolean = false,
+        playerHpFraction: Float = 1f
     ): Long {
         if (fleeing) return fireIntervalMs(situation, fleeing, random, false)
-        val continuous = shouldFireContinuously(playerBurstShots, playerHealthDropping, situation, playerVulnerable)
+        val continuous = shouldFireContinuously(
+            playerBurstShots = playerBurstShots,
+            playerHealthDropping = playerHealthDropping,
+            situation = situation,
+            playerVulnerable = playerVulnerable,
+            playerWeaponDamaged = playerWeaponDamaged,
+            playerHpFraction = playerHpFraction
+        )
         if (continuous) return fireIntervalMs(situation, fleeing, random, true)
-        if (!playerVulnerable) {
-            // Spec: shoot randomly at intervals of 2s, 1s, 1.5s when not vulnerable
-            return normalFireInterval(random)
+        // Not pinned: the human 2 s / 2.5 s / 3 s rhythm, jittered by the
+        // situation so a losing Robert really does shoot more slowly.
+        return when (situation) {
+            CombatSituation.DISADVANTAGE -> 2_500L + (random.nextFloat() * 500f).toLong()
+            CombatSituation.ADVANTAGE, CombatSituation.PRESSURE ->
+                2_000L + (random.nextFloat() * 500f).toLong()
+            CombatSituation.EVEN -> normalFireInterval(random)
         }
-        return fireIntervalMs(situation, fleeing, random, false)
     }
 }

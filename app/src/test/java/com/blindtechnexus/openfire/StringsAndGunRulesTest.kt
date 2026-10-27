@@ -122,10 +122,10 @@ class StringsAndGunRulesTest {
 
     @Test
     fun guidesExistForEveryLanguageAndAreDetailed() {
-        // The rewritten guide covers the whole game structure in 37 entries.
-        assertEquals(37, Strings.getGuide("en").size)
-        assertEquals(37, Strings.getGuide("hi").size)
-        assertEquals(37, Strings.getGuide("ne").size)
+        // The rewritten guide covers the whole game structure in 38 entries.
+        assertEquals(38, Strings.getGuide("en").size)
+        assertEquals(38, Strings.getGuide("hi").size)
+        assertEquals(38, Strings.getGuide("ne").size)
         for (lang in listOf("en", "hi", "ne")) {
             val guide = Strings.getGuide(lang)
             assertTrue("Guide must be detailed", guide.joinToString(" ").length > 8000)
@@ -211,9 +211,9 @@ class StringsAndGunRulesTest {
         assertTrue("Guide must document the thrower death", en.contains("destroys its own thrower"))
         assertTrue("Guide must document the safe distance", en.contains("at least 50 meters away"))
         assertTrue("Guide must document the bomb destination display", en.contains("shown and spoken next to the enemy health"))
-        assertTrue("Guide must document Robert's bombs", en.contains("one per game in round three and two per game"))
+        assertTrue("Guide must document Robert's bombs", en.contains("two grenades per game in round three"))
         assertTrue("Guide must document the anti-bomb price", en.contains("anti-bomb explosive defence costs 2600 coins"))
-        assertTrue("Guide must document the single enemy deployment", en.contains("never deploys a second one in the same game"))
+        assertTrue("Guide must document the enemy anti-bomb table", en.contains("two anti-bomb explosives per game in round three"))
         // Defences, barriers and Robert's tactics.
         assertTrue("Guide must document the glue wall", en.contains("gloo wall"))
         assertTrue("Guide must document the cover", en.contains("Cover costs 450 coins"))

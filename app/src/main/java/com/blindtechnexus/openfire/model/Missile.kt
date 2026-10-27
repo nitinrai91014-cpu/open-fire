@@ -26,9 +26,10 @@ package com.blindtechnexus.openfire.model
  *  - from round four Robert owns an anti-missile system, but he may only
  *    fire it in an end-game situation: his health below
  *    [ANTI_MISSILE_MAX_HP] while a player missile is in the air. Round
- *    four holds one interceptor, round five holds two;
- *  - from round four Robert also carries one missile power per game. He
- *    spends it only as a desperation weapon while he is clearly losing.
+ *    four holds two interceptors, round five holds four;
+ *  - from round four Robert also carries one missile power per game (two in
+ *    round five). He spends it only as a desperation weapon while he is
+ *    clearly losing.
  */
 object MissileRules {
     /** Shop price of the missile launcher itself (200 coins cheaper). */
@@ -117,16 +118,23 @@ object MissileRules {
     fun canLaunch(ownsMissile: Boolean, missilePowers: Int, missileInFlight: Boolean): Boolean =
         ownsMissile && missilePowers > 0 && !missileInFlight
 
-    /** Interceptors Robert carries in a round: 0, then 1 in round 4, 2 in round 5. */
+    /** Interceptors Robert carries in a round: 0, then 2 in round 4, 4 in round 5. */
     fun antiMissilesForRound(round: Int): Int = when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
-        4 -> 1
-        5 -> 2
+        4 -> 2
+        5 -> 4
         else -> 0
     }
 
-    /** Missile powers Robert carries in a round: one per game from round four. */
+    /**
+     * Missile powers Robert carries in a round: one per game in round four
+     * and two per game in round five.
+     */
     fun enemyMissilePowersForRound(round: Int): Int =
-        if (round.coerceIn(1, Progression.ROUNDS_PER_MATCH) >= FIRST_MISSILE_ROUND) 1 else 0
+        when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
+            4 -> 1
+            5 -> 2
+            else -> 0
+        }
 
     /**
      * True when Robert fires an interceptor against a player missile. All

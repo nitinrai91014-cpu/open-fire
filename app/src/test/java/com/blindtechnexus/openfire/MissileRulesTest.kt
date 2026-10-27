@@ -78,21 +78,21 @@ class MissileRulesTest {
     fun interceptorsGrowFromRoundFourToRoundFive() {
         assertEquals(0, MissileRules.antiMissilesForRound(1))
         assertEquals(0, MissileRules.antiMissilesForRound(3))
-        assertEquals(1, MissileRules.antiMissilesForRound(4))
-        assertEquals(2, MissileRules.antiMissilesForRound(5))
+        assertEquals(2, MissileRules.antiMissilesForRound(4))
+        assertEquals(4, MissileRules.antiMissilesForRound(5))
         assertEquals(0, MissileRules.enemyMissilePowersForRound(3))
         assertEquals(1, MissileRules.enemyMissilePowersForRound(4))
-        assertEquals(1, MissileRules.enemyMissilePowersForRound(5))
+        assertEquals(2, MissileRules.enemyMissilePowersForRound(5))
     }
 
     @Test
     fun interceptionIsAnEndGameOnlySave() {
         // Below 100 health with a missile in the air: he fires it.
-        assertTrue(MissileRules.willIntercept(4, 99, 1, missileInFlight = true))
-        assertTrue(MissileRules.willIntercept(5, 1, 2, missileInFlight = true))
+        assertTrue(MissileRules.willIntercept(4, 99, 2, missileInFlight = true))
+        assertTrue(MissileRules.willIntercept(5, 1, 4, missileInFlight = true))
         // A healthy Robert never wastes an interceptor.
-        assertFalse(MissileRules.willIntercept(4, 100, 1, missileInFlight = true))
-        assertFalse(MissileRules.willIntercept(5, 1500, 2, missileInFlight = true))
+        assertFalse(MissileRules.willIntercept(4, 100, 2, missileInFlight = true))
+        assertFalse(MissileRules.willIntercept(5, 1500, 4, missileInFlight = true))
         // No missile in the air, no interceptor.
         assertFalse(MissileRules.willIntercept(4, 50, 1, missileInFlight = false))
         // No interceptors left (round four already used its only one).

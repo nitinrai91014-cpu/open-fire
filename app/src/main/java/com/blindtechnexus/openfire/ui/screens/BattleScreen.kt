@@ -24,6 +24,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.blindtechnexus.openfire.model.BattleMenuItem
+import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.HitZone
@@ -178,6 +179,35 @@ fun BattleScreen(viewModel: GameViewModel) {
                     color = TextMuted,
                     textAlign = TextAlign.Center
                 )
+                // From round three Robert carries bombs: the HUD always shows
+                // exactly how many grenades, atom bombs, timer bombs and
+                // anti-bomb explosives he still owns (unlimited reads as ∞).
+                if (gameState.round >= BombRules.FIRST_BOMB_ROUND) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "${viewModel.t("gunGrenade")} ${enemyCount(gameState.robertGrenades)} | " +
+                            "${viewModel.t("gunAtomBomb")} ${enemyCount(gameState.robertAtomBombs)} | " +
+                            "${viewModel.t("gunTimerBomb")} ${enemyCount(gameState.robertTimerBombs)} | " +
+                            "${viewModel.t("antiBomb")} ${enemyCount(gameState.robertAntiBombs)}",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = WarnBright,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                // The final round has a seven minute limit, so the remaining
+                // time is part of the enemy status as well.
+                if (gameState.timeLimitActive) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "${viewModel.t("timeRemaining")}: " +
+                            formatRemaining(gameState.battleRemainingMs),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = WarnBright,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
         }
 
@@ -378,3 +408,17 @@ fun BattleScreen(viewModel: GameViewModel) {
         }
     }
 }
+
+/** An enemy bomb count, where the unlimited round five stock reads as ∞. */
+private fun enemyCount(count: Int): String = if (count >= UNLIMITED_COUNT) "\u221E" else "$count"
+
+/** Remaining milliseconds of the final round as mm:ss. */
+private fun formatRemaining(remainingMs: Long): String {
+    val totalSeconds = (remainingMs.coerceAtLeast(0L) + 999L) / 1_000L
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return "$minutes:${seconds.toString().padStart(2, '0')}"
+}
+
+/** Bomb and ammunition stocks at or above this count are unlimited. */
+private const val UNLIMITED_COUNT = 90
