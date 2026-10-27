@@ -24,9 +24,9 @@ enum class SoundTheme(val title: String) {
 }
 
 /**
- * The seven items of the in-game quick menu, in the order they are cycled by a
+ * The six items of the in-game quick menu, in the order they are cycled by a
  * two-finger swipe up or down: medikit, cover, glue wall, anti-missile system,
- * anti-bomb explosive, exit and recover.
+ * exit and recover.
  *
  * The old "play" item was replaced by Recovery, which repairs every damaged
  * weapon for [Combat.GUN_RECOVERY_COST] coins.
@@ -39,7 +39,6 @@ enum class BattleMenuItem(
     COVER("cover", DefenceItem.COVER),
     GLUE_WALL("glooWall", DefenceItem.GLUE_WALL),
     ANTI_MISSILE("antiMissile", DefenceItem.ANTI_MISSILE),
-    ANTI_BOMB("antiBomb", DefenceItem.ANTI_BOMB),
     EXIT("exitGame", null),
     RECOVER("recoverWeapon", null);
 
@@ -145,9 +144,6 @@ data class GameState(
     val robertX: Float = Arena.ROBERT_START_X,
     val robertY: Float = Arena.ROBERT_START_Y,
 
-    /** The running speed level toggled by a three-finger swipe ([RunSpeed.id]). */
-    val runSpeed: String = RunSpeed.NORMAL.id,
-
     /** A cover blocks 11 hits; the 12th breaks it. */
     val coverActive: Boolean = false,
     val coverHits: Int = 0,
@@ -187,80 +183,6 @@ data class GameState(
     /** Which way Robert comes around while flanking: +1 right, -1 left. */
     val robertFlankSide: Int = 1,
 
-    /** True while a guided missile is in the air (either fighter's). */
-    val missileInFlight: Boolean = false,
-    /** True when the missile in the air was launched by the player. */
-    val missileFromPlayer: Boolean = false,
-    /** True when Robert will fire his anti-missile interceptor at impact. */
-    val missileInterceptPlanned: Boolean = false,
-    /** Missile powers Robert may still spend this game (rounds 4 and 5). */
-    val robertMissilePowers: Int = 0,
-    /** Anti-missile interceptors Robert may still fire this game. */
-    val robertAntiMissiles: Int = 0,
-
-    // ------------------------------------------------------------------
-    // Bombs (grenade, atom bomb and timer bomb), from round three onwards.
-    // ------------------------------------------------------------------
-    /** True while a bomb is counting down towards its destination. */
-    val bombInFlight: Boolean = false,
-    /** True when the bomb in the air was thrown by the player. */
-    val bombFromPlayer: Boolean = false,
-    /** The bomb in the air ([BombKind.id]), or empty. */
-    val bombKind: String = "",
-    /** Destination of the bomb inside the zone: it never moves again. */
-    val bombX: Float = Arena.PLAYER_START_X,
-    val bombY: Float = Arena.PLAYER_START_Y,
-    /** True when Robert will deploy his anti-bomb explosive at the blast. */
-    val bombInterceptPlanned: Boolean = false,
-    /** True when the player deployed the anti-bomb explosive at this bomb. */
-    val bombInterceptedByPlayer: Boolean = false,
-    /** Bombs Robert may still throw this game. */
-    val robertBombs: Int = 0,
-    /** Grenades Robert may still throw this game (twice in round three). */
-    val robertGrenades: Int = 0,
-    /** Atom bombs Robert may still throw (three per game from round four). */
-    val robertAtomBombs: Int = 0,
-    /** Timer bombs Robert may still throw (three per game from round four). */
-    val robertTimerBombs: Int = 0,
-    /** Anti-bomb explosives Robert may still deploy this game (2 / 3 / 5). */
-    val robertAntiBombs: Int = 0,
-
-    /**
-     * Shots Robert has fired in a row without pausing, and the length of the
-     * current burst (one or two shots). This is what stops him from firing
-     * more than once or twice in succession.
-     */
-    val robertSuccessiveShots: Int = 0,
-    val robertBurstLimit: Int = RobertRules.MAX_SUCCESSIVE_SHOTS,
-
-    /**
-     * Round five time limit in milliseconds (0 = no limit). Seven minutes are
-     * armed only in the final round: when they run out while Robert is still
-     * alive, the player loses the game.
-     */
-    val battleLimitMs: Long = 0L,
-    /** Milliseconds left before the round five limit expires. */
-    val battleRemainingMs: Long = 0L,
-
-    /** True while the timer bomb duration picker is open. */
-    val timerSelectActive: Boolean = false,
-    /** Highlighted duration of the timer bomb picker. */
-    val timerIndex: Int = BombRules.DEFAULT_TIMER_INDEX,
-
-    /** True while an automatic weapon keeps firing (the up-swipe is held). */
-    val autoFireActive: Boolean = false,
-
-    /**
-     * The player's current fire burst: how many shots landed inside
-     * [RobertRules.PLAYER_BURST_WINDOW_MS], and the health both fighters had
-     * when the burst started. Robert reads these to answer continuous fire
-     * with continuous fire, to retreat while his own health drops and to keep
-     * firing while the player's health drops.
-     */
-    val playerBurstShots: Int = 0,
-    val playerBurstRobertHp: Int = 0,
-    val playerBurstPlayerHp: Int = 0,
-
     /**
      * The band Robert randomly prefers to fire from ([FireRange.id]):
      * 40%-70%, 90%-100%, or the 0%-40% deception band.
@@ -290,7 +212,7 @@ data class GameState(
 
     /** Index of the highlighted quick-menu item ([BattleMenuItem]). */
     val menuIndex: Int = BattleMenuItem.RECOVER_INDEX,
-    /** True while the player is navigating the menu: hits then cost 2 percent. */
+    /** True while the player is navigating the menu: hits then cost 2 health. */
     val menuActive: Boolean = false,
     /** Item waiting for the second confirming tap ("Tap again to buy"). */
     val pendingPurchaseId: String? = null,
@@ -325,38 +247,6 @@ data class GameState(
     /** True while Robert refuses to approach an unbreakable glue wall. */
     val robertAvoiding: Boolean
         get() = robertState == "avoid"
-
-    /** True while Robert is running away from a bomb destination. */
-    val robertBombFleeing: Boolean
-        get() = robertState == "bombFlee"
-
-    /** The running speed level selected with the three-finger gesture. */
-    val runSpeedLevel: RunSpeed
-        get() = RunSpeed.fromId(runSpeed)
-
-    /** The bomb currently in the air, or null. */
-    val bomb: BombKind?
-        get() = BombKind.fromId(bombKind)
-
-    /** The chosen timer bomb duration in seconds. */
-    val timerSeconds: Int
-        get() = BombRules.timerSecondsAt(timerIndex)
-
-    /** True while the round five seven minute limit is running. */
-    val timeLimitActive: Boolean
-        get() = battleLimitMs > 0L
-
-    /** True when the player's anti-bomb explosive is free and always usable. */
-    val playerAntiBombFree: Boolean
-        get() = BombRules.playerAntiBombsFree(round)
-
-    /** Distance of the player from the bomb destination, in metres. */
-    val playerDistanceFromBomb: Float
-        get() = Arena.distanceTo(bombX, bombY, playerX, playerY)
-
-    /** Distance of Robert from the bomb destination, in metres. */
-    val robertDistanceFromBomb: Float
-        get() = Arena.distanceTo(bombX, bombY, robertX, robertY)
 
     /** The band Robert picked for himself, ignoring forced point blank. */
     val robertRange: FireRange

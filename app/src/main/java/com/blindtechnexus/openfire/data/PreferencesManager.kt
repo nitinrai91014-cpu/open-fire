@@ -30,7 +30,7 @@ class PreferencesManager(context: Context) {
         const val FILE_SETTINGS = "settings"
         const val FILE_PROFILE = "profile"
         const val FILE_INVENTORY = "inventory"
-        const val SCHEMA_VERSION = 2
+        const val SCHEMA_VERSION = 5
 
         const val KEY_SCHEMA = "schema"
     }
@@ -61,7 +61,8 @@ class PreferencesManager(context: Context) {
             musicVolume = map["musicVolume"]?.toFloatOrNull() ?: 0.5f,
             sfxVolume = map["sfxVolume"]?.toFloatOrNull() ?: 1.0f,
             soundTheme = theme,
-            hapticsEnabled = map["haptics"]?.toBooleanStrictOrNull() ?: true
+            hapticsEnabled = map["haptics"]?.toBooleanStrictOrNull() ?: true,
+            keepScreenOn = map["keepScreenOn"]?.toBooleanStrictOrNull() ?: false
         )
     }
 
@@ -79,7 +80,8 @@ class PreferencesManager(context: Context) {
                 "musicVolume" to s.musicVolume.toString(),
                 "sfxVolume" to s.sfxVolume.toString(),
                 "soundTheme" to s.soundTheme.name,
-                "haptics" to s.hapticsEnabled.toString()
+                "haptics" to s.hapticsEnabled.toString(),
+                "keepScreenOn" to s.keepScreenOn.toString()
             )
         )
     }
@@ -92,6 +94,7 @@ class PreferencesManager(context: Context) {
         val map = store.read(FILE_PROFILE)
         if (map.isEmpty()) return Progression.normalize(GameStats())
         val wins = map["wins"]?.toIntOrNull() ?: 0
+        val round = map["round"]?.toIntOrNull() ?: 1
         val migratedLevelWins = wins % Progression.WINS_PER_LEVEL
         return Progression.normalize(
             GameStats(
@@ -99,9 +102,11 @@ class PreferencesManager(context: Context) {
                 wins = wins,
                 kills = map["kills"]?.toIntOrNull() ?: 0,
                 coins = map["coins"]?.toIntOrNull() ?: 100,
-                round = map["round"]?.toIntOrNull() ?: 1,
+                round = round,
                 level = map["level"]?.toIntOrNull() ?: 1,
-                levelWins = map["levelWins"]?.toIntOrNull() ?: migratedLevelWins
+                levelWins = map["levelWins"]?.toIntOrNull() ?: migratedLevelWins,
+                completedRounds = map["completedRounds"]?.toIntOrNull()
+                    ?: (round - 1).coerceAtLeast(0)
             )
         )
     }
@@ -118,7 +123,8 @@ class PreferencesManager(context: Context) {
                 "coins" to normalized.coins.toString(),
                 "round" to normalized.round.toString(),
                 "level" to normalized.level.toString(),
-                "levelWins" to normalized.levelWins.toString()
+                "levelWins" to normalized.levelWins.toString(),
+                "completedRounds" to normalized.completedRounds.toString()
             )
         )
     }

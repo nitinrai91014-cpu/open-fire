@@ -808,8 +808,7 @@ class AudioManager(private val context: Context) {
      * The local player's own footsteps stay centred at the speech level
      * regardless of Robert's distance, exactly as heard while running
      * yourself. The playback rate follows the real running speed in metres per
-     * second, and [volumeGain] is the running-speed level gain from
-     * [com.blindtechnexus.openfire.model.RunSpeed]: a fast run is louder, a
+     * second, and [volumeGain] scales the running sound: a fast run is louder, a
      * slow run is clearly quieter, exactly like Robert's distance-scaled steps.
      */
     fun updatePlayerWalkAudio(

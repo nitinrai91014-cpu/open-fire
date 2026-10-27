@@ -260,7 +260,7 @@ fun GameState.placeRobertAt(distance: Float): FighterMove {
     val beforeY = Arena.clampY(robertY)
     val next = withPositions(robertX = target.first, robertY = target.second)
     val stuck = Arena.sameSpot(beforeX, beforeY, target.first, target.second)
-    val short = abs(next.distance - wanted) > max(Combat.WALL_TOLERANCE_M, 0.001f)
+    val short = abs(next.distance - wanted) > max(Arena.WALL_EPSILON, 0.001f)
     val blocked = stuck || (short && Arena.atWall(target.first, target.second))
     return FighterMove(next, blockedByWall = blocked, touchedWall = blocked || short)
 }

@@ -2,13 +2,11 @@ package com.blindtechnexus.openfire
 
 import com.blindtechnexus.openfire.model.Arena
 import com.blindtechnexus.openfire.model.BattleMenuItem
-import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.FireRange
 import com.blindtechnexus.openfire.model.GameState
 import com.blindtechnexus.openfire.model.MoveDirection
-import com.blindtechnexus.openfire.model.RunSpeed
 import com.blindtechnexus.openfire.model.movePlayer
 import com.blindtechnexus.openfire.model.movePlayerLateral
 import org.junit.Assert.assertEquals
@@ -20,20 +18,19 @@ import org.junit.Test
  * Locks the quick menu contract.
  *
  * The old "play" item was replaced by Recovery, which repairs every damaged
- * weapon for [Combat.GUN_RECOVERY_COST] coins, and the anti-bomb explosive
- * sits in the menu right after the anti-missile system.
+ * weapon for [Combat.GUN_RECOVERY_COST] coins. Every defence in the menu
+ * must be supported by the current shop and inventory.
  */
 class BattleMenuTest {
 
     @Test
-    fun theMenuRunsMedikitCoverGlueWallAntiMissileAntiBombExitAndRecover() {
+    fun theMenuRunsMedikitCoverGlueWallAntiMissileExitAndRecover() {
         assertEquals(
             listOf(
                 BattleMenuItem.MEDKIT,
                 BattleMenuItem.COVER,
                 BattleMenuItem.GLUE_WALL,
                 BattleMenuItem.ANTI_MISSILE,
-                BattleMenuItem.ANTI_BOMB,
                 BattleMenuItem.EXIT,
                 BattleMenuItem.RECOVER
             ),
@@ -50,7 +47,7 @@ class BattleMenuTest {
     @Test
     fun recoverIsTheSafeDefaultSelection() {
         assertEquals(BattleMenuItem.RECOVER.ordinal, BattleMenuItem.RECOVER_INDEX)
-        assertEquals(6, BattleMenuItem.RECOVER_INDEX)
+        assertEquals(5, BattleMenuItem.RECOVER_INDEX)
         assertEquals(BattleMenuItem.RECOVER_INDEX, GameState().menuIndex)
         assertEquals(BattleMenuItem.RECOVER, GameState().menuItem)
         // Nothing is damaged in a fresh battle, so the default tap is free.
@@ -61,26 +58,22 @@ class BattleMenuTest {
 
     @Test
     fun cyclingWrapsAroundBothEnds() {
-        assertEquals(BattleMenuItem.MEDKIT, BattleMenuItem.at(0))
-        assertEquals(BattleMenuItem.ANTI_MISSILE, BattleMenuItem.at(3))
-        assertEquals(BattleMenuItem.ANTI_BOMB, BattleMenuItem.at(4))
-        assertEquals(BattleMenuItem.EXIT, BattleMenuItem.at(5))
-        assertEquals(BattleMenuItem.RECOVER, BattleMenuItem.at(6))
-        assertEquals(BattleMenuItem.MEDKIT, BattleMenuItem.at(7))
+        val items = BattleMenuItem.entries
+        for ((index, item) in items.withIndex()) {
+            assertEquals(item, BattleMenuItem.at(index))
+            assertEquals(item, BattleMenuItem.at(index + items.size))
+            assertEquals(item, BattleMenuItem.at(index - items.size))
+        }
         assertEquals(BattleMenuItem.RECOVER, BattleMenuItem.at(-1))
         assertEquals(BattleMenuItem.EXIT, BattleMenuItem.at(-2))
-        assertEquals(BattleMenuItem.ANTI_BOMB, BattleMenuItem.at(-3))
-        assertEquals(BattleMenuItem.ANTI_MISSILE, BattleMenuItem.at(-4))
-        assertEquals(BattleMenuItem.GLUE_WALL, BattleMenuItem.at(-5))
     }
 
     @Test
-    fun onlyTheFiveDefencesCarryAnItem() {
+    fun onlyTheFourSupportedDefencesCarryAnItem() {
         assertEquals(DefenceItem.MEDKIT, BattleMenuItem.MEDKIT.defence)
         assertEquals(DefenceItem.COVER, BattleMenuItem.COVER.defence)
         assertEquals(DefenceItem.GLUE_WALL, BattleMenuItem.GLUE_WALL.defence)
         assertEquals(DefenceItem.ANTI_MISSILE, BattleMenuItem.ANTI_MISSILE.defence)
-        assertEquals(DefenceItem.ANTI_BOMB, BattleMenuItem.ANTI_BOMB.defence)
         assertEquals(null, BattleMenuItem.EXIT.defence)
         assertEquals(null, BattleMenuItem.RECOVER.defence)
     }
@@ -94,18 +87,14 @@ class BattleMenuTest {
         assertEquals("advance", state.robertState)
         assertFalse(state.robertFleeing)
         assertFalse(state.activeWeaponDamaged)
-        // Head-on by default, with no missile activity in the air.
         assertEquals(0f, state.robertLateral, 0.0001f)
-        assertFalse(state.missileInFlight)
-        assertFalse(state.missileFromPlayer)
-        assertFalse(state.missileInterceptPlanned)
-        assertEquals(0, state.robertMissilePowers)
-        assertEquals(0, state.robertAntiMissiles)
+        assertFalse(state.robertMissileUsed)
+        assertEquals(0, state.robertAntiMissilesUsed)
         assertEquals(0, state.robertExchangeShots)
     }
 
     @Test
-    fun aFreshBattleStartsInsideTheHundredMeterZoneAtNormalSpeed() {
+    fun aFreshBattleStartsInsideTheHundredMeterZone() {
         val state = GameState()
         // Both fighters start on the centre line at opposite edges, one full
         // range apart, and the stored distance agrees with the positions.
@@ -115,20 +104,6 @@ class BattleMenuTest {
         assertEquals(Arena.MAX, state.robertY, 0.0001f)
         assertEquals(100f, state.distance, 0.0001f)
         assertEquals(100f, Arena.SIZE, 0.0001f)
-
-        // The battle always starts at the normal running speed.
-        assertEquals(RunSpeed.NORMAL, state.runSpeedLevel)
-        assertEquals(RunSpeed.NORMAL.id, state.runSpeed)
-
-        // No bomb, no timer picker and no burst in a fresh battle.
-        assertFalse(state.bombInFlight)
-        assertEquals(null, state.bomb)
-        assertFalse(state.timerSelectActive)
-        assertEquals(BombRules.DEFAULT_TIMER_INDEX, state.timerIndex)
-        assertEquals(30, state.timerSeconds)
-        assertEquals(0, state.playerBurstShots)
-        assertFalse(state.autoFireActive)
-        assertEquals(0, state.robertTurnBackTicks)
     }
 
     @Test

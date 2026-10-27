@@ -145,6 +145,18 @@ object RobertRules {
     fun shouldUseDefence(robertHp: Int, defenceArmed: Boolean): Boolean =
         defenceArmed && robertHp in 1 until DEFENCE_THRESHOLD_HP
 
+    /** Fire every second under pressure, otherwise every 1.5 to 2 seconds. */
+    fun fireInterval(
+        playerWeaponDamaged: Boolean,
+        enemyHasDefence: Boolean,
+        playerHasDefence: Boolean,
+        random: Random
+    ): Long = if (playerWeaponDamaged || (enemyHasDefence && !playerHasDefence)) {
+        1000L
+    } else {
+        1500L + random.nextLong(0, 501L)
+    }
+
     /**
      * AI retreat logic: if the enemy is losing in a fight against the player
      * (the player gains the upper hand / lands more hits), the enemy retreats very quickly.

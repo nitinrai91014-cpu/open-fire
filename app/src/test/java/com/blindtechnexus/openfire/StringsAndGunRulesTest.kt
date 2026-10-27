@@ -1,6 +1,7 @@
 package com.blindtechnexus.openfire
 
 import com.blindtechnexus.openfire.data.Strings
+import com.blindtechnexus.openfire.model.BattleMenuItem
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.Weapon
@@ -133,21 +134,23 @@ class StringsAndGunRulesTest {
             assertTrue(Strings.get("itemMissingTail", lang).isNotBlank())
             assertTrue(Strings.get("robertFled", lang).isNotBlank())
             assertTrue(Strings.get("matchWon", lang).isNotBlank())
-            assertTrue(Strings.get("version", lang).contains("2.1") || Strings.get("version", lang).contains("२.१"))
+            assertTrue(Strings.get("version", lang).contains("2.3") || Strings.get("version", lang).contains("२.३"))
         }
     }
 
     @Test
-    fun everyDefenceAndExtensionHasADescription() {
-        for (item in DefenceItem.entries) {
+    fun everyCatalogAndMenuKeyHasARealTranslationInEveryLanguage() {
+        val keys = Weapon.entries.map { it.nameKey } +
+            BattleMenuItem.entries.map { it.nameKey } +
+            DefenceItem.entries.flatMap { listOf(it.nameKey, it.pluralKey, it.descriptionKey) } +
+            Extension.entries.flatMap { listOf(it.nameKey, it.descriptionKey) } +
+            listOf("hapticsDesc", "keepScreenOn", "keepScreenOnDesc", "rewardReceived")
+        for (key in keys) {
             for (lang in listOf("en", "hi", "ne")) {
-                assertTrue(Strings.get(item.descriptionKey, lang).isNotBlank())
-            }
-        }
-        for (extension in Extension.entries) {
-            for (lang in listOf("en", "hi", "ne")) {
-                assertTrue(Strings.get(extension.nameKey, lang).isNotBlank())
-                assertTrue(Strings.get(extension.descriptionKey, lang).isNotBlank())
+                assertTrue("Missing '$key' in '$lang'", Strings.hasTranslation(key, lang))
+                val value = Strings.get(key, lang)
+                assertTrue("Blank '$key' in '$lang'", value.isNotBlank())
+                assertTrue("Raw key '$key' in '$lang'", value != key)
             }
         }
     }
