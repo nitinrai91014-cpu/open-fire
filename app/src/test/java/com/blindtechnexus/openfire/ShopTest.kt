@@ -335,9 +335,13 @@ class ShopTest {
             .copy(lastWeaponId = Weapon.PISTOL.id)
         val disabled = Shop.toggleWeaponEnabled(bought, 0, Weapon.PISTOL).inventory
         assertEquals(Weapon.SHORT_GUN, disabled.startingWeapon())
-        // It is still owned and still remembered, only switched off.
-        assertEquals(Weapon.PISTOL, disabled.rememberedWeapon())
+        // It is still owned, only switched off - and because it was the
+        // remembered weapon the memory moves to an enabled one, so a battle can
+        // never start on a hidden weapon.
         assertTrue(disabled.ownsWeapon(Weapon.PISTOL))
+        assertEquals(Weapon.SHORT_GUN.id, disabled.lastWeaponId)
+        assertEquals(Weapon.SHORT_GUN, disabled.rememberedWeapon())
+        assertFalse(disabled.battleWeapons().contains(Weapon.PISTOL))
 
         // Buying an owned weapon never flips the switch: it is refused as
         // already owned, spends nothing, and the Enable button stays the only
@@ -348,11 +352,17 @@ class ShopTest {
         assertEquals(2000, again.coins)
         assertFalse(again.inventory.weaponEnabled(Weapon.PISTOL))
 
-        // The Enable switch turns it back on and it is the starting weapon
-        // again, because it is the one the player last used.
+        // The Enable switch puts it back into the rotation. The memory stayed
+        // where disabling it moved it, and as soon as the pistol is the
+        // remembered weapon again the next battle really starts with it.
         val enabled = Shop.toggleWeaponEnabled(disabled, 0, Weapon.PISTOL).inventory
         assertTrue(enabled.weaponEnabled(Weapon.PISTOL))
-        assertEquals(Weapon.PISTOL, enabled.startingWeapon())
+        assertTrue(enabled.battleWeapons().contains(Weapon.PISTOL))
+        assertEquals(Weapon.SHORT_GUN, enabled.startingWeapon())
+        assertEquals(
+            Weapon.PISTOL,
+            enabled.copy(lastWeaponId = Weapon.PISTOL.id).startingWeapon()
+        )
 
         // A free grant of a not yet owned weapon always arrives enabled, even
         // when its id was left over in the disabled set.
