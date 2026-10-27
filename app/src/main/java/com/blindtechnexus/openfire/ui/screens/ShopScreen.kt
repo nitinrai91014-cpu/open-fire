@@ -27,9 +27,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.Inventory
+import com.blindtechnexus.openfire.model.MissileRules
+import com.blindtechnexus.openfire.model.Progression
 import com.blindtechnexus.openfire.model.Screen
 import com.blindtechnexus.openfire.model.Shop
 import com.blindtechnexus.openfire.model.Weapon
@@ -58,6 +61,8 @@ fun ShopScreen(viewModel: GameViewModel) {
     var pendingWeapon by remember { mutableStateOf<Weapon?>(null) }
     var pendingDefence by remember { mutableStateOf<DefenceItem?>(null) }
     var pendingExtension by remember { mutableStateOf<Extension?>(null) }
+    var pendingMissilePowerRemove by remember { mutableStateOf(false) }
+    var pendingBombPowerRemove by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -114,25 +119,136 @@ fun ShopScreen(viewModel: GameViewModel) {
                 color = WarnBright,
                 modifier = Modifier.semantics { heading() }
             )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = viewModel.t("flatDamageInfo"),
+                fontSize = 13.sp,
+                color = TextMuted,
+                lineHeight = 18.sp,
+                modifier = Modifier.testTag("shop_flat_damage_info")
+            )
             Spacer(modifier = Modifier.height(12.dp))
             Weapon.forSale().forEach { weapon ->
                 val owned = inventory.ownsWeapon(weapon)
-                val isLocked = weapon.unlockAfterRound > 0 && stats.round <= weapon.unlockAfterRound
-                val unlockMessage = if (isLocked) viewModel.t(Shop.unlockReasonKey(weapon.unlockAfterRound)) else null
+                val weaponLocked = Shop.isLocked(
+                    weapon.requiredCompletedRounds,
+                    stats.completedRounds
+                )
+                // A separate, dynamic sentence below the description: it
+                // disappears as soon as the required round is completed.
+                val unlockMessage = if (weaponLocked) {
+                    viewModel.t(Shop.unlockReasonKey(weapon.requiredCompletedRounds))
+                } else {
+                    null
+                }
+                val detail = if (weapon.missileLauncher) {
+                    if (!weaponLocked) {
+                        "${viewModel.t("missileInfo")} ${viewModel.t("missileRequiresPowers")}"
+                    } else {
+                        viewModel.t("missileLocked")
+                    }
+                } else if (weapon.bomb) {
+                    // Bombs are lethal, not "100 HP" weapons.
+                    "${viewModel.t("explosiveLethal")} " +
+                        "${viewModel.t("ammo")}: ${weapon.magazine}."
+                } else {
+                    // Damage is flat health points, never a percentage of the
+                    // enemy's maximum health.
+                    "${viewModel.t("weaponPower")}: ${weapon.powerPercent} ${viewModel.t("hp")}. " +
+                        "${viewModel.t("closeRangePower")}: " +
+                        "${weapon.closeRangePowerPercent} ${viewModel.t("hp")}. " +
+                        "${viewModel.t("ammo")}: ${weapon.magazine}."
+                }
+                val weaponOn = inventory.weaponEnabled(weapon)
                 ShopItemRow(
                     title = "${viewModel.t(weapon.nameKey)}, ${weapon.price} ${viewModel.t("coins")}.",
-                    detail = "${viewModel.t("weaponPower")}: ${weapon.powerPercent}%. " +
-                        "${viewModel.t("ammo")}: ${weapon.magazine}.",
+                    detail = detail + if (owned) {
+                        " ${viewModel.t("weaponState")}: " +
+                            if (weaponOn) {
+                                viewModel.t("enabledState")
+                            } else {
+                                viewModel.t("disabledState")
+                            } + "."
+                    } else {
+                        ""
+                    },
                     unlockMessage = unlockMessage,
                     owned = owned,
                     buyLabel = viewModel.t("buy"),
                     removeLabel = viewModel.t("remove"),
                     onBuy = { viewModel.buyWeapon(weapon.id) },
                     onRemove = { pendingWeapon = weapon },
-                    testTagPrefix = "shop_weapon_${weapon.id}"
+                    testTagPrefix = "shop_weapon_${weapon.id}",
+                    // The Enable / Disable switch below buy and remove: a
+                    // disabled weapon is skipped by the game screen swipes.
+                    toggleLabel = if (weaponOn) {
+                        viewModel.t("disableWeapon")
+                    } else {
+                        viewModel.t("enableWeapon")
+                    },
+                    onToggle = { viewModel.toggleWeaponEnabled(weapon.id) }
                 )
                 Spacer(modifier = Modifier.height(10.dp))
             }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ------------------------------------------------------------------
+        // Missile powers: stackable consumables, exactly like defences.
+        // ------------------------------------------------------------------
+        GameCard {
+            Text(
+                text = viewModel.t("extMissilePowers"),
+                fontSize = 21.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            MissilePowerRow(
+                viewModel = viewModel,
+                inventory = inventory,
+                unlocked = Progression.missileUnlocked(stats),
+                unlockMessage = if (!Progression.missileUnlocked(stats)) {
+                    viewModel.t(
+                        Shop.unlockReasonKey(Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS)
+                    )
+                } else {
+                    null
+                },
+                onRemove = { pendingMissilePowerRemove = true }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ------------------------------------------------------------------
+        // Bomb powers: stackable consumables for grenades/atom/timer — 1500 coins each.
+        // 1 Bomb Power = 1 use of any bomb type, tracking like missiles.
+        // ------------------------------------------------------------------
+        GameCard {
+            Text(
+                text = viewModel.t("extBombPowers"),
+                fontSize = 21.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            BombPowerRow(
+                viewModel = viewModel,
+                inventory = inventory,
+                unlocked = stats.completedRounds >= BombRules.FIRST_BOMB_ROUND - 1,
+                unlockMessage = if (stats.completedRounds < BombRules.FIRST_BOMB_ROUND - 1) {
+                    viewModel.t(
+                        Shop.unlockReasonKey(BombRules.FIRST_BOMB_ROUND - 1)
+                    )
+                } else {
+                    null
+                },
+                onRemove = { pendingBombPowerRemove = true }
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -166,11 +282,17 @@ fun ShopScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(12.dp))
 
             DefenceItem.entries.forEach { item ->
+                val unlocked = stats.completedRounds >= item.requiredCompletedRounds
                 DefenceRow(
                     viewModel = viewModel,
                     item = item,
                     inventory = inventory,
-                    currentRound = stats.round,
+                    unlocked = unlocked,
+                    unlockMessage = if (!unlocked) {
+                        viewModel.t(Shop.unlockReasonKey(item.requiredCompletedRounds))
+                    } else {
+                        null
+                    },
                     onRemove = { pendingDefence = item }
                 )
                 Spacer(modifier = Modifier.height(10.dp))
@@ -356,6 +478,94 @@ fun ShopScreen(viewModel: GameViewModel) {
         )
     }
 
+    // Confirmation before removing one stacked missile power.
+    if (pendingMissilePowerRemove) {
+        AlertDialog(
+            onDismissRequest = { pendingMissilePowerRemove = false },
+            title = {
+                Text(
+                    text = viewModel.t("removeConfirmTitle"),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "${viewModel.t("extMissilePowers")}. ${viewModel.t("removeConfirmMessage")}",
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingMissilePowerRemove = false
+                        viewModel.removeMissilePower()
+                    },
+                    modifier = Modifier.testTag("shop_missile_power_confirm_remove")
+                ) {
+                    Text(
+                        text = viewModel.t("confirmRemove"),
+                        color = WarnBright,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingMissilePowerRemove = false }) {
+                    Text(text = viewModel.t("cancel"), color = TextAccent)
+                }
+            },
+            containerColor = CardBg,
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
+
+    // Confirmation before removing one stacked bomb power.
+    if (pendingBombPowerRemove) {
+        AlertDialog(
+            onDismissRequest = { pendingBombPowerRemove = false },
+            title = {
+                Text(
+                    text = viewModel.t("removeConfirmTitle"),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "${viewModel.t("extBombPowers")}. ${viewModel.t("removeConfirmMessage")}",
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingBombPowerRemove = false
+                        viewModel.removeBombPower()
+                    },
+                    modifier = Modifier.testTag("shop_bomb_power_confirm_remove")
+                ) {
+                    Text(
+                        text = viewModel.t("confirmRemove"),
+                        color = WarnBright,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingBombPowerRemove = false }) {
+                    Text(text = viewModel.t("cancel"), color = TextAccent)
+                }
+            },
+            containerColor = CardBg,
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
+
     // Confirmation before removing an extension.
     pendingExtension?.let { extension ->
         AlertDialog(
@@ -401,7 +611,7 @@ fun ShopScreen(viewModel: GameViewModel) {
     }
 }
 
-/** "You've total 5 medikits, 10 glue walls, 2 covers, 0 anti-missile systems." */
+/** "You've total 5 medikits, 10 glue walls, 2 covers, 1 anti-missile systems." */
 private fun defenceTotalsText(viewModel: GameViewModel, inventory: Inventory): String {
     val medkits = "${inventory.medikits} ${viewModel.t("medkitsPlural")}"
     val glueWalls = "${inventory.glueWalls} ${viewModel.t("glueWallsPlural")}"
@@ -415,18 +625,16 @@ private fun DefenceRow(
     viewModel: GameViewModel,
     item: DefenceItem,
     inventory: Inventory,
-    currentRound: Int,
+    unlocked: Boolean,
+    unlockMessage: String?,
     onRemove: () -> Unit
 ) {
-    val isLocked = item.unlockAfterRound > 0 && currentRound <= item.unlockAfterRound
-    val unlockMessage = if (isLocked) viewModel.t(Shop.unlockReasonKey(item.unlockAfterRound)) else null
-
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = "${viewModel.t(item.nameKey)}, ${item.price} ${viewModel.t("coins")}.",
             fontSize = 16.sp,
             fontWeight = FontWeight.Bold,
-            color = Color.White
+            color = if (item == DefenceItem.ANTI_MISSILE) WarnBright else Color.White
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
@@ -439,11 +647,20 @@ private fun DefenceRow(
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = unlockMessage,
-                fontSize = 14.sp,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
                 color = WarnBright,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 19.sp,
+                lineHeight = 18.sp,
                 modifier = Modifier.testTag("shop_defence_${item.id}_unlock_msg")
+            )
+        }
+        if (!unlocked) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = viewModel.t(item.lockedKey),
+                fontSize = 13.sp,
+                color = TextMuted,
+                lineHeight = 18.sp
             )
         }
         Spacer(modifier = Modifier.height(4.dp))
@@ -478,16 +695,151 @@ private fun DefenceRow(
 }
 
 @Composable
+private fun MissilePowerRow(
+    viewModel: GameViewModel,
+    inventory: Inventory,
+    unlocked: Boolean,
+    unlockMessage: String?,
+    onRemove: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "${viewModel.t("extMissilePowers")}, ${MissileRules.MISSILE_POWER_PRICE} " +
+                "${viewModel.t("coins")}.",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = viewModel.t("extMissilePowersInfo"),
+            fontSize = 14.sp,
+            color = TextMuted,
+            lineHeight = 20.sp
+        )
+        if (unlockMessage != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = unlockMessage,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                lineHeight = 18.sp,
+                modifier = Modifier.testTag("shop_missile_power_unlock_msg")
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "${viewModel.t("owned")}: ${inventory.missilePowers}",
+            fontSize = 14.sp,
+            color = WarnBright,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Keep the locked row clickable so its unlock condition is spoken.
+            // Buying is repeatable: powers stack like defences.
+            GameButton(
+                text = viewModel.t("buy"),
+                onClick = { viewModel.buyMissilePower() },
+                type = ButtonType.PRIMARY,
+                modifier = Modifier.weight(1f),
+                testTag = "shop_missile_power_buy"
+            )
+            GameButton(
+                text = viewModel.t("remove"),
+                onClick = onRemove,
+                type = ButtonType.DANGER,
+                modifier = Modifier.weight(1f),
+                testTag = "shop_missile_power_remove",
+                enabled = inventory.missilePowers > 0
+            )
+        }
+    }
+}
+
+@Composable
+private fun BombPowerRow(
+    viewModel: GameViewModel,
+    inventory: Inventory,
+    unlocked: Boolean,
+    unlockMessage: String?,
+    onRemove: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "${viewModel.t("extBombPowers")}, ${BombRules.BOMB_POWER_PRICE} " +
+                "${viewModel.t("coins")}.",
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = viewModel.t("extBombPowersInfo"),
+            fontSize = 14.sp,
+            color = TextMuted,
+            lineHeight = 20.sp
+        )
+        if (unlockMessage != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = unlockMessage,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                lineHeight = 18.sp,
+                modifier = Modifier.testTag("shop_bomb_power_unlock_msg")
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "${viewModel.t("owned")}: ${inventory.bombPowers}",
+            fontSize = 14.sp,
+            color = WarnBright,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            GameButton(
+                text = viewModel.t("buy"),
+                onClick = { viewModel.buyBombPower() },
+                type = ButtonType.PRIMARY,
+                modifier = Modifier.weight(1f),
+                testTag = "shop_bomb_power_buy"
+            )
+            GameButton(
+                text = viewModel.t("remove"),
+                onClick = onRemove,
+                type = ButtonType.DANGER,
+                modifier = Modifier.weight(1f),
+                testTag = "shop_bomb_power_remove",
+                enabled = inventory.bombPowers > 0
+            )
+        }
+    }
+}
+
+@Composable
 private fun ShopItemRow(
     title: String,
     detail: String,
-    unlockMessage: String? = null,
+    unlockMessage: String?,
     owned: Boolean,
     buyLabel: String,
     removeLabel: String,
     onBuy: () -> Unit,
     onRemove: () -> Unit,
-    testTagPrefix: String
+    testTagPrefix: String,
+    /** Optional Enable / Disable switch shown under an owned item. */
+    toggleLabel: String? = null,
+    onToggle: (() -> Unit)? = null
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
@@ -503,14 +855,16 @@ private fun ShopItemRow(
             color = TextMuted,
             lineHeight = 20.sp
         )
+        // Round-gated items get their own text view. It is driven by the live
+        // profile, so the sentence disappears forever once the item unlocks.
         if (unlockMessage != null) {
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = unlockMessage,
-                fontSize = 14.sp,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
                 color = WarnBright,
-                fontWeight = FontWeight.Medium,
-                lineHeight = 19.sp,
+                lineHeight = 18.sp,
                 modifier = Modifier.testTag("${testTagPrefix}_unlock_msg")
             )
         }
@@ -523,6 +877,17 @@ private fun ShopItemRow(
                     type = ButtonType.DANGER,
                     testTag = "${testTagPrefix}_remove"
                 )
+            }
+            if (toggleLabel != null && onToggle != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    GameButton(
+                        text = toggleLabel,
+                        onClick = onToggle,
+                        type = ButtonType.WARN,
+                        testTag = "${testTagPrefix}_toggle"
+                    )
+                }
             }
         } else {
             GameButton(

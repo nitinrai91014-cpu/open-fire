@@ -4,7 +4,9 @@ import com.blindtechnexus.openfire.model.GameAction
 import com.blindtechnexus.openfire.model.GestureRouter
 import com.blindtechnexus.openfire.model.Arena
 import com.blindtechnexus.openfire.model.MoveDirection
+import com.blindtechnexus.openfire.model.RobertRules
 import com.blindtechnexus.openfire.model.RunPressure
+import com.blindtechnexus.openfire.model.RunSpeed
 import com.blindtechnexus.openfire.model.Screen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -15,7 +17,7 @@ import org.junit.Test
  * Locks down the battle gesture contract:
  *  - One finger: up fire, down reload, right/left switch weapon.
  *  - Two fingers: up/down move the quick menu, right/left speak the status.
- *  - Three or more fingers: ignored.
+ *  - Three or more fingers: right runs faster, left runs slower.
  *  - A single tap activates the highlighted quick-menu item.
  *  - Holding a zone runs in one of the four directions of the 100 m zone.
  */
@@ -38,12 +40,73 @@ class GestureRouterTest {
     }
 
     @Test
-    fun threeOrMoreFingersNeverTriggerRemovedSpeedControlsOrOtherBattleActions() {
-        for (fingers in listOf(3, 4, 5)) {
-            for (direction in listOf("up", "down", "left", "right")) {
-                assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, direction, fingers))
-            }
+    fun threeFingerSwipesCycleTheRunningSpeed() {
+        assertEquals(GameAction.SPEED_FASTER, GestureRouter.route(Screen.BATTLE, "right", 3))
+        assertEquals(GameAction.SPEED_SLOWER, GestureRouter.route(Screen.BATTLE, "left", 3))
+        assertEquals(GameAction.SPEED_FASTER, GestureRouter.route(Screen.BATTLE, "right", 4))
+        assertEquals(GameAction.SPEED_SLOWER, GestureRouter.route(Screen.BATTLE, "left", 5))
+        // Up and down stay reserved for firing and reloading.
+        assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "up", 3))
+        assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "down", 3))
+        // The speed gesture only means something inside a battle.
+        assertEquals(GameAction.NONE, GestureRouter.route(Screen.MENU, "right", 3))
+        assertEquals(GameAction.NONE, GestureRouter.route(Screen.RESULT, "left", 3))
+    }
+
+    @Test
+    fun theThreeSpeedLevelsCycleSlowNormalFast() {
+        // A battle always starts at the normal level.
+        assertEquals(RunSpeed.NORMAL, RunSpeed.fromId("normal"))
+        assertEquals(RunSpeed.NORMAL, RunSpeed.fromId(null))
+        assertEquals(RunSpeed.NORMAL, RunSpeed.fromId("nonsense"))
+
+        assertEquals(RunSpeed.FAST, RunSpeed.NORMAL.faster())
+        assertEquals(RunSpeed.FAST, RunSpeed.FAST.faster())
+        assertEquals(RunSpeed.NORMAL, RunSpeed.FAST.slower())
+        assertEquals(RunSpeed.SLOW, RunSpeed.NORMAL.slower())
+        assertEquals(RunSpeed.SLOW, RunSpeed.SLOW.slower())
+        assertEquals(RunSpeed.NORMAL, RunSpeed.SLOW.faster())
+    }
+
+    @Test
+    fun theFastLevelMatchesTheEnemyFastSpeed() {
+        val enemyFast = RobertRules.enemyFastSpeedMps(3)
+        val fast = RunSpeed.FAST.speedMps(RunPressure.DEFAULT_SPEED_FACTOR, enemyFast)
+        // The requirement: running fast covers ground at exactly the enemy's
+        // own fast (fleeing) speed for the round.
+        assertEquals(enemyFast, fast, 0.01f)
+        // ... in every round, so the safety cap never cuts a sprint short.
+        for (round in 1..5) {
+            val enemy = RobertRules.enemyFastSpeedMps(round)
+            assertEquals(
+                "Round $round fast level must match Robert's fast speed",
+                enemy,
+                RunSpeed.FAST.speedMps(RunPressure.DEFAULT_SPEED_FACTOR, enemy),
+                0.01f
+            )
         }
+        // Slow is half of the base walking speed, normal follows the press.
+        assertEquals(
+            RunPressure.BASE_SPEED_MPS * RunSpeed.SLOW_FACTOR,
+            RunSpeed.SLOW.speedMps(2.0f, enemyFast),
+            0.0001f
+        )
+        assertEquals(
+            RunPressure.BASE_SPEED_MPS,
+            RunSpeed.NORMAL.speedMps(0f, enemyFast),
+            0.0001f
+        )
+        assertTrue(
+            RunSpeed.FAST.speedMps(1f, enemyFast) >
+                RunSpeed.NORMAL.speedMps(1f, enemyFast)
+        )
+    }
+
+    @Test
+    fun theRunningSoundVolumeFollowsTheSpeedLevel() {
+        assertTrue(RunSpeed.SLOW.volumeGain() < RunSpeed.NORMAL.volumeGain())
+        assertTrue(RunSpeed.NORMAL.volumeGain() < RunSpeed.FAST.volumeGain())
+        assertEquals(1.0f, RunSpeed.FAST.volumeGain(), 0.0001f)
     }
 
     @Test
