@@ -95,7 +95,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var bombTrackJob: Job? = null
     private var autoFireJob: Job? = null
     private var endingJob: Job? = null
+    private var matchLimitJob: Job? = null
     private var foreground = true
+
+    /** Wall-clock moment the round five seven minute limit expires (0 = none). */
+    private var matchDeadlineMs: Long = 0L
+
 
     /** Latest touch pressure of the running hold (0 = unknown / released). */
     @Volatile
@@ -169,6 +174,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         /** Result screen lock-out before another game may start. */
         const val RESULT_LOCK_MS = 4000L
 
+        /**
+         * While the timer bomb picker is open the enemy holds his fire and
+         * simply re-checks this often, so he resumes the moment the player
+         * confirms or deselects.
+         */
+        const val TIMER_SELECTION_HOLD_MS = 250L
+
         /** Health percentage considered the "last stage" for automatic defences. */
         const val LAST_STAGE_FRACTION = 0.20f
 
@@ -211,7 +223,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         audioManager.sfxVolume = s.sfxVolume
         audioManager.musicVolume = s.musicVolume
         audioManager.soundTheme = s.soundTheme
-        audioManager.hapticsEnabled = s.hapticsEnabled
+        // The game screen never vibrates: haptics belong to the menus only,
+        // so the battle stays pure speech and sound.
+        audioManager.hapticsEnabled = s.hapticsEnabled && !audioManager.battleActive
         // Footsteps play at exactly the voice level so movement is always
         // as clear as the speech announcements.
         audioManager.walkVolume = s.ttsVolume
@@ -364,6 +378,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         when (screen) {
             Screen.WELCOME, Screen.MENU, Screen.SETTINGS, Screen.GUIDE, Screen.PROFILE,
             Screen.SHOP, Screen.ABOUT, Screen.CHANGELOG, Screen.READER -> {
+                audioManager.battleActive = false
+                audioManager.hapticsEnabled = _settings.value.hapticsEnabled
                 audioManager.stopScreenAudio()
                 audioManager.startMusic()
             }
@@ -382,12 +398,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 audioManager.stopSound("parachute")
             }
             Screen.BATTLE -> {
+                // From here on there is no vibration at all: the battle screen
+                // is played with sound and speech only.
+                audioManager.battleActive = true
+                audioManager.hapticsEnabled = false
                 audioManager.stopMusic()
                 audioManager.stopScreenAudio()
                 // Footsteps start only when a fighter is actually running.
                 audioManager.stopFootsteps()
             }
             Screen.RESULT -> {
+                audioManager.battleActive = false
+                audioManager.hapticsEnabled = _settings.value.hapticsEnabled
                 audioManager.stopMusic()
                 audioManager.stopFootsteps()
             }
@@ -714,7 +736,61 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Nothing is spoken when the game screen starts. The hint stays on
         // screen only, so the battle always begins in silence.
         planRobertStep(1300L)
+        startMatchTimeLimit()
         startRobertFireLoop(2600L)
+    }
+
+    /**
+     * Arms the seven minute limit of the final round. Round five is the only
+     * timed round: if the time runs out while Robert is still alive, the
+     * player loses the game.
+     */
+    private fun startMatchTimeLimit() {
+        matchLimitJob?.cancel()
+        matchLimitJob = null
+        val state = _gameState.value
+        val limit = Progression.roundTimeLimitMs(state.round)
+        if (limit <= 0L) {
+            matchDeadlineMs = 0L
+            return
+        }
+        matchDeadlineMs = System.currentTimeMillis() + limit
+        _gameState.update {
+            it.copy(battleLimitMs = limit, battleRemainingMs = limit)
+        }
+        matchLimitJob = viewModelScope.launch {
+            var warnedTwoMinutes = false
+            var warnedOneMinute = false
+            var warnedThirtySeconds = false
+            while (true) {
+                delay(1_000L)
+                if (!foreground || _currentScreen.value != Screen.BATTLE) break
+                val current = _gameState.value
+                if (current.playerHp <= 0 || current.robertHp <= 0 || endingJob != null) break
+                val remaining = (matchDeadlineMs - System.currentTimeMillis()).coerceAtLeast(0L)
+                _gameState.update { it.copy(battleRemainingMs = remaining) }
+                if (remaining <= 0L) {
+                    matchDeadlineMs = 0L
+                    _gameState.update { it.copy(battleLimitMs = 0L) }
+                    setLog(t("timeUpDefeat"))
+                    endGame(won = false, timeUp = true)
+                    break
+                }
+                // Spoken warnings: two minutes, one minute and thirty seconds
+                // left. Each is spoken exactly once.
+                val seconds = remaining / 1_000L
+                if (!warnedTwoMinutes && seconds <= 120L) {
+                    warnedTwoMinutes = true
+                    speak("${t("timeRemaining")} 2 ${t("minutes")}.")
+                } else if (!warnedOneMinute && seconds <= 60L) {
+                    warnedOneMinute = true
+                    speak("${t("timeRemaining")} 1 ${t("minute")}.")
+                } else if (!warnedThirtySeconds && seconds <= 30L) {
+                    warnedThirtySeconds = true
+                    speak("${t("timeRemaining")} 30 ${t("seconds")}.")
+                }
+            }
+        }
     }
 
     private fun resetBattleState() {
@@ -729,6 +805,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         moveDirection = null
         missileImpactAtMs = 0L
         bombBlastAtMs = 0L
+        matchDeadlineMs = 0L
         lastWallAnnounceAtMs = 0L
         menuProtectUntilMs = 0L
         playerBurstStartedAtMs = 0L
@@ -800,7 +877,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             bombY = Arena.PLAYER_START_Y,
             bombInterceptPlanned = false,
             robertBombs = profile.bombs,
+            robertGrenades = profile.grenades,
+            robertAtomBombs = profile.atomBombs,
+            robertTimerBombs = profile.timerBombs,
             robertAntiBombs = profile.antiBombs,
+            robertSuccessiveShots = 0,
+            robertBurstLimit = RobertRules.burstLimit(Random),
+            battleLimitMs = Progression.roundTimeLimitMs(round),
+            battleRemainingMs = Progression.roundTimeLimitMs(round),
             timerSelectActive = false,
             timerIndex = BombRules.DEFAULT_TIMER_INDEX,
             autoFireActive = false,
@@ -1047,7 +1131,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         playerHp = state.playerHp,
         playerMaxHp = state.playerMaxHp,
         deceptionShotsLeft = state.robertDeceptionShots,
-        robertHasSniper = robertHasUsableSniper(state)
+        robertHasSniper = robertHasUsableSniper(state),
+        playerWeapon = state.activeWeapon
     )
 
     /** True when Robert owns a sniper rifle he may use and that is not damaged. */
@@ -1460,13 +1545,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Enhanced situational fire timing — strictly follows spec:
-     * continuous fire ONLY when player is vulnerable (damaged, trapped, locked, hindered);
-     * otherwise random intervals of 1s, 1.5s, 2s. If player fires back, enemy retreats.
-     * Health-based panic and smart weapon logic are handled in [robertAttack].
+     * The delay before Robert's next shot.
+     *
+     *  - while the timer picker is open he holds his fire completely (a short
+     *    internal tick keeps the loop alive without shooting);
+     *  - he presses continuously only when the player's weapon is damaged or
+     *    the player is extremely weak;
+     *  - in every other case he waits a random 2 s, 2.5 s or 3 s, and a bit
+     *    longer while he is running.
      */
     private fun robertFireInterval(): Long {
         val state = _gameState.value
+        // The player is choosing a timer: Robert does not fire at all until
+        // the choice is locked in or the picker is dismissed.
+        if (state.timerSelectActive) return TIMER_SELECTION_HOLD_MS
         val situation = RobertRules.assessSituation(
             robertHp = state.robertHp,
             robertMaxHp = state.robertMaxHp,
@@ -1492,9 +1584,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerVulnerable = vulnerable,
             playerBurstShots = state.playerBurstShots,
             playerHealthDropping = playerHealthDropping(state),
-            random = Random
+            random = Random,
+            playerWeaponDamaged = isPlayerWeaponLocked(state),
+            playerHpFraction = playerHpFraction(state)
         )
     }
+
+    /** The player's health as a fraction of their own maximum. */
+    private fun playerHpFraction(state: GameState): Float =
+        if (state.playerMaxHp <= 0) 0f else state.playerHp.toFloat() / state.playerMaxHp.toFloat()
+
 
     /** True while the player's health went down inside the current burst. */
     private fun playerHealthDropping(state: GameState): Boolean =
@@ -1557,12 +1656,65 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (!foreground || _currentScreen.value != Screen.BATTLE) return
         var state = _gameState.value
         if (state.robertHp <= 0 || state.playerHp <= 0) return
+        // While the player is choosing a timer bomb duration he neither fires
+        // nor lands a hit: only a locked-in choice or a dismissed picker lets
+        // him start again.
+        if (state.timerSelectActive) return
         // While a missile is in the air all normal fire is suspended: the
         // target is running for its life and the outcome is already sealed.
         if (state.missileInFlight) return
         // The same holds for a bomb counting down towards him: he only runs.
         if (state.bombInFlight && state.bombFromPlayer) return
         expirePlayerBurstIfStale()
+
+        val situation = RobertRules.assessSituation(
+            robertHp = state.robertHp,
+            robertMaxHp = state.robertMaxHp,
+            playerHp = state.playerHp,
+            playerMaxHp = state.playerMaxHp,
+            playerWeaponDamaged = isPlayerWeaponLocked(state)
+        )
+        val playerWeakFraction = playerHpFraction(state)
+
+        // A finished burst is never extended: he fired one or two shots, so
+        // now he pauses and very often repositions instead of shooting again.
+        if (RobertRules.burstFinished(state.robertSuccessiveShots, state.robertBurstLimit)) {
+            _gameState.update {
+                it.copy(
+                    robertSuccessiveShots = 0,
+                    robertBurstLimit = RobertRules.burstLimit(Random)
+                )
+            }
+            val fresh = _gameState.value
+            if (RobertRules.shouldRunAfterBurst(Random) &&
+                (fresh.robertState == "advance" || fresh.robertState == "flank")
+            ) {
+                _gameState.update { it.copy(robertState = "retreat", robertConsecutiveHits = 0) }
+                rollRobertFireRange(allowDeception = true)
+                playSound("jump", volume = 0.6f, posZ = -fresh.distance)
+                planRobertStep(120L)
+            }
+            return
+        }
+
+        // He runs as readily as he shoots: unless the player is pinned down,
+        // a good share of his decisions is a reposition instead of a shot.
+        if (RobertRules.shouldRepositionInsteadOfFiring(
+                situation = situation,
+                playerWeaponDamaged = isPlayerWeaponLocked(state),
+                playerHpFraction = playerWeakFraction,
+                random = Random
+            )
+        ) {
+            if (state.robertState == "advance" || state.robertState == "flank") {
+                _gameState.update {
+                    it.copy(robertState = "retreat", robertConsecutiveHits = 0)
+                }
+                rollRobertFireRange(allowDeception = true)
+                planRobertStep(120L)
+                return
+            }
+        }
 
         // Round four and later he may spend his one missile power, but only
         // as a desperation weapon while he is clearly losing.
@@ -1582,8 +1734,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // From round three he also carries bombs. Like his missile they are a
-        // desperation weapon: he throws one only while clearly losing.
+        // From round three he also carries bombs: twice-used grenades in round
+        // three, all three bombs three times each in round four and unlimited
+        // bombs in round five. Like his missile they are desperation weapons.
         if (
             BombRules.shouldEnemyThrow(
                 round = state.round,
@@ -1679,8 +1832,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             state = _gameState.value
         }
 
-        // Six rounds per magazine, then a free reload.
-        if (chosen.needsReload && state.robertAmmoNow <= 0) {
+        // Six rounds per magazine, then a free reload. From round five every
+        // gun is unlimited, so he never reloads and never runs dry.
+        val unlimitedAmmo = RobertRules.infiniteAmmo(state.round)
+        if (!unlimitedAmmo && chosen.needsReload && state.robertAmmoNow <= 0) {
             _gameState.update { s ->
                 s.copy(
                     robertAmmo = s.robertAmmo.toMutableList().also {
@@ -1695,11 +1850,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         // A melee attack must not play its swing/switch sound before the
         // outcome is known: a miss uses only *-miss and a hit uses *-hit.
+        // Firearm sounds are exclusive: his shot cuts whatever weapon sound
+        // the player still has in the air, so the two never mix.
         if (!chosen.melee) {
-            playSound(chosen.fireSoundKey, volume = 0.9f, posZ = -state.distance)
+            audioManager.playWeaponSound(chosen.fireSoundKey, volume = 0.9f, posZ = -state.distance)
         }
         _gameState.update { s ->
-            val nextAmmo = if (chosen.needsReload) {
+            val nextAmmo = if (chosen.needsReload && !unlimitedAmmo) {
                 s.robertAmmo.toMutableList().also {
                     it[s.robertWeaponIndex] = (it[s.robertWeaponIndex] - 1).coerceAtLeast(0)
                 }
@@ -1709,6 +1866,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             s.copy(
                 robertShots = s.robertShots + 1,
                 robertExchangeShots = s.robertExchangeShots + 1,
+                robertSuccessiveShots = s.robertSuccessiveShots + 1,
                 robertAmmo = nextAmmo
             )
         }
@@ -1729,7 +1887,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val zone = Combat.zoneFor(proxPercent)
 
         if (zone == HitZone.MISS) {
-            if (chosen.melee) playSound(chosen.missSoundKey, volume = 0.55f, posZ = -state.distance)
+            if (chosen.melee) {
+                audioManager.playWeaponSound(chosen.missSoundKey, volume = 0.55f, posZ = -state.distance)
+            }
             _gameState.update { it.copy(consecutiveHeavyHits = 0) }
             setLog("${t("robertMissed")} ${t(chosen.nameKey)}.")
             return
@@ -2270,6 +2430,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         playSound("click")
         msg(t("selectTimer"))
         speakTimerSelection(instructions = true)
+        // Robert holds his fire for as long as the picker is open.
+        speak(t("enemyHoldsFire"))
     }
 
     /** Walks the timer picker one duration left (-1) or right (+1). */
@@ -2292,14 +2454,30 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _gameState.update { it.copy(timerSelectActive = false) }
         msg("${t("timerSet")} ${state.timerSeconds} ${t("seconds")}.")
         launchPlayerBomb()
+        resumeEnemyFireAfterSelection()
     }
 
-    /** Cancels the picker without throwing (used when leaving the battle). */
+    /**
+     * Cancels the picker without throwing (used when leaving the battle).
+     * The enemy holds his fire for as long as the picker is open and starts
+     * again only here, that is after the player deselected it.
+     */
     fun cancelTimerSelection() {
         if (!_gameState.value.timerSelectActive) return
         _gameState.update { it.copy(timerSelectActive = false) }
         playSound("click")
         msg(t("timerCancelled"))
+        resumeEnemyFireAfterSelection()
+    }
+
+    /**
+     * Restarts the enemy fire rhythm after the timer picker closed, so his
+     * first shot after the choice comes at a fresh, human interval instead of
+     * instantly or with a stale delay.
+     */
+    private fun resumeEnemyFireAfterSelection() {
+        if (_currentScreen.value != Screen.BATTLE) return
+        startRobertFireLoop(1_600L)
     }
 
     /** Speaks the highlighted duration, and how to change it on first open. */
@@ -2334,9 +2512,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             msg(t("missileInFlight"))
             return
         }
-        // Bomb Power check — similar to Missile Power. Needs one Bomb Power per throw.
-        // From round 3, bombs require bomb powers; before that they use ammo fallback for tests.
-        val needsPower = BombRules.requiresBombPower(state.round)
+        // Bomb Power check — similar to Missile Power. The grenade is free in
+        // round three onwards (Robert receives one too), so only the atom bomb
+        // and the timer bomb consume a stacked Bomb Power.
+        val needsPower = BombRules.requiresBombPower(state.round, kind)
         if (needsPower && _inventory.value.bombPowers <= 0) {
             playSound("ammo")
             msg(t("bombNoCharge") + " " + t("bombPowerNeeded"))
@@ -2412,11 +2591,30 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun launchEnemyBomb() {
         val state = _gameState.value
         if (state.robertBombs <= 0 || state.bombInFlight || state.missileInFlight) return
-        val kind = if (state.round >= 4 && Random.nextBoolean()) BombKind.ATOM else BombKind.GRENADE
-        val flightMs = BombRules.flightMs(kind)
+        // Round three: grenades only, twice per game. Round four: all three
+        // bombs, three times each. Round five: unlimited bombs of every kind.
+        val kind = BombRules.chooseEnemyBomb(
+            round = state.round,
+            grenades = state.robertGrenades,
+            atomBombs = state.robertAtomBombs,
+            timerBombs = state.robertTimerBombs,
+            playerHpFraction = if (state.playerMaxHp <= 0) 1f
+            else state.playerHp.toFloat() / state.playerMaxHp.toFloat(),
+            random = Random
+        ) ?: BombKind.GRENADE
+        val flightMs = BombRules.flightMs(kind, state.timerSeconds)
         _gameState.update {
             it.copy(
                 robertBombs = (it.robertBombs - 1).coerceAtLeast(0),
+                robertGrenades = if (kind == BombKind.GRENADE) {
+                    (it.robertGrenades - 1).coerceAtLeast(0)
+                } else it.robertGrenades,
+                robertAtomBombs = if (kind == BombKind.ATOM) {
+                    (it.robertAtomBombs - 1).coerceAtLeast(0)
+                } else it.robertAtomBombs,
+                robertTimerBombs = if (kind == BombKind.TIMER) {
+                    (it.robertTimerBombs - 1).coerceAtLeast(0)
+                } else it.robertTimerBombs,
                 bombInFlight = true,
                 bombFromPlayer = false,
                 bombKind = kind.id,
@@ -2729,7 +2927,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // A held automatic burst already has its sound on loop, so the single
         // shot sound is only played for taps and for every other weapon.
         if (!weapon.melee && !(weapon.autoFire && state.autoFireActive)) {
-            playSound(weapon.fireSoundKey, volume = 1.0f)
+            // Exclusive weapon channel: this shot cuts any weapon sound that is
+            // still playing (the enemy's, or an earlier one of ours), so two
+            // gunshots never mix or leak.
+            audioManager.playWeaponSound(weapon.fireSoundKey, volume = 1.0f)
         }
 
         val proxPercent = Combat.proximityOf(state.distance)
@@ -2741,7 +2942,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (zone == HitZone.MISS && !longRange) {
             // Firearms already played their shot; only melee weapons have a
             // dedicated miss sound, so the shot is never played twice.
-            if (weapon.melee) playSound(weapon.missSoundKey, volume = 0.6f)
+            if (weapon.melee) {
+                audioManager.playWeaponSound(weapon.missSoundKey, volume = 0.6f)
+            }
             msg(autoReloadIfNeeded()?.let { "$it ${t("missed")}" } ?: t("missed"))
             return
         }
@@ -2875,9 +3078,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         markExplicitAction()
         _gameState.update { it.copy(autoFireActive = true) }
-        // MP40 submachine gun sound loops stably until trigger release (handled via streamed MediaPlayer).
+        // The held weapon's own sound loops stably until the trigger is
+        // released, and it takes the exclusive weapon channel so nothing else
+        // mixes with it while the burst runs.
         try {
-            audioManager.startMp40Loop(volume = 1.0f, posZ = -_gameState.value.distance)
+            audioManager.playWeaponLoop(
+                weapon.fireSoundKey,
+                volume = 1.0f,
+                posZ = -_gameState.value.distance
+            )
         } catch (_: Exception) {
             audioManager.playLoop(weapon.fireSoundKey)
         }
@@ -3019,6 +3228,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         // The missile announces its stacked powers, or the swipe-down
         // purchase when the player owns none.
+        val bombNote = if (weapon.bomb) {
+            val needsPower = BombRules.requiresBombPower(_gameState.value.round, BombKind.fromWeapon(weapon))
+            if (needsPower) " ${t("bombPowerNeeded")}" else " ${t("grenadeFreeMsg")}"
+        } else {
+            ""
+        }
         val missileNote = if (weapon.missileLauncher) {
             val powers = _inventory.value.missilePowers
             if (powers > 0) {
@@ -3029,7 +3244,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             ""
         }
-        msg("${t("switchedTo")} ${t(weapon.nameKey)}.$ammoNote$damagedNote$pressureNote$missileNote")
+        msg("${t("switchedTo")} ${t(weapon.nameKey)}.$ammoNote$damagedNote$pressureNote$bombNote$missileNote")
     }
 
     private fun rememberWeapon(weapon: Weapon) {
@@ -3105,7 +3320,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             BattleMenuItem.ANTI_MISSILE,
             BattleMenuItem.ANTI_BOMB -> {
                 val defence = item.defence ?: return
-                val count = _inventory.value.count(defence)
+                val free = defence == DefenceItem.ANTI_BOMB &&
+                    _gameState.value.playerAntiBombFree
+                val count = if (free) t("freeItem") else "${_inventory.value.count(defence)}"
                 speak("${t("menuNow")}: ${t(defence.nameKey)}. $count.")
             }
             BattleMenuItem.EXIT -> speak("${t("menuNow")}: ${t("exitGame")}.")
@@ -3146,6 +3363,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun useDefenceFromMenu(defence: DefenceItem) {
         val inventory = _inventory.value
         val state = _gameState.value
+        // From round three the anti-bomb explosive is free, so it is deployed
+        // straight from the menu with no count and no purchase prompt.
+        if (defence == DefenceItem.ANTI_BOMB && state.playerAntiBombFree) {
+            _gameState.update { it.copy(pendingPurchaseId = null) }
+            val spoken = useDefence(defence)
+            if (spoken != null) msg(spoken)
+            resetMenuSelection()
+            return
+        }
         // Both interceptors only make sense with a projectile in the air.
         val antiMissileIdle = defence == DefenceItem.ANTI_MISSILE && !state.missileInFlight
         val antiBombIdle = defence == DefenceItem.ANTI_BOMB &&
@@ -3246,7 +3472,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun useDefence(item: DefenceItem, automatic: Boolean = false): String? {
         val state = _gameState.value
         val inventory = _inventory.value
-        if (inventory.count(item) <= 0) return null
+        // From round three the player's anti-bomb explosive is free and always
+        // usable, so it never needs an inventory count.
+        val freeAntiBomb = item == DefenceItem.ANTI_BOMB && state.playerAntiBombFree
+        if (!freeAntiBomb && inventory.count(item) <= 0) return null
 
         when (item) {
             DefenceItem.MEDKIT -> {
@@ -3319,7 +3548,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             DefenceItem.ANTI_BOMB -> {
                 // The anti-bomb explosive is deployed on hearing a bomb: it
                 // marks the bomb in the air as destroyed, and the explosion
-                // sound still plays when the countdown ends.
+                // sound still plays when the countdown ends. From round three
+                // the player's one is free, so no inventory is spent.
                 if (!state.bombInFlight || state.bombFromPlayer) {
                     playSound("click")
                     return t("noActiveBomb")
@@ -3329,7 +3559,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     return t("antiBombAlreadyDeployed")
                 }
                 _gameState.update { it.copy(bombInterceptedByPlayer = true) }
-                consumeDefence(item)
+                if (!freeAntiBomb) consumeDefence(item)
                 playSound("click")
                 return t("antiBombDeployed")
             }
@@ -3371,6 +3601,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 .ifEmpty { t("noneOwned") }
             val chance = if (state.playerSecondChanceUsed) " ${t("secondChanceUsed")}." else ""
+            // The final round is timed: the remaining time belongs to the
+            // own status read as well.
+            val timeText = if (state.timeLimitActive) {
+                " ${t("timeRemaining")} ${(state.battleRemainingMs / 1000L)} ${t("seconds")}."
+            } else {
+                ""
+            }
+            val antiBombText = if (state.playerAntiBombFree) {
+                " ${t("playerAntiBombFree")}"
+            } else {
+                ""
+            }
             // The three-finger running speed and the position inside the
             // 100 metre zone belong to the own status too.
             val speedText = "${t("runSpeed")} ${t(state.runSpeedLevel.nameKey)}."
@@ -3386,7 +3628,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     "$weaponState. $speedText $positionText $weapons. " +
                     "${t("medkits")} ${inv.medikits}. ${t("glooWall")} ${inv.glueWalls}. " +
                     "${t("cover")} ${inv.covers}. ${t("antiMissile")} ${inv.antiMissiles}. " +
-                    "${t("antiBomb")} ${inv.antiBombs}.$bombText " +
+                    "${t("antiBomb")} ${inv.antiBombs}.$antiBombText$bombText $timeText " +
                     "${if (state.coverActive) t("coverOn") else t("coverOff")}. " +
                     "${t("profileExtensions")} $extensions. ${t("coins")} ${_stats.value.coins}.$chance"
             )
@@ -3444,18 +3686,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * always pays two glue walls, two medikits and three covers with
      * round-complete.mp3.
      */
-    private fun endGame(won: Boolean) {
+    private fun endGame(won: Boolean, timeUp: Boolean = false) {
         stopTimers()
         audioManager.stopFootsteps()
 
         val state = _gameState.value
-        val base = if (won) 150 else 30
-        var gain = (base + state.playerHits * 10 + max(0, state.playerHp) * 0.5f).roundToInt()
-        if (gain < 20) gain = 20
-
         val oldStats = _stats.value
+        // A defeat costs the player 20 coins instead of earning any. A player
+        // with no coins is the exception: nothing can be taken from them.
+        val coinsLost = if (won) 0 else Progression.coinsLostOnDefeat(oldStats.coins)
+        val gain = if (won) {
+            val earned = (150 + state.playerHits * 10 + max(0, state.playerHp) * 0.5f).roundToInt()
+            max(earned, 20)
+        } else {
+            -coinsLost
+        }
+
         var updatedStats = oldStats.copy(
-            coins = oldStats.coins + gain,
+            coins = (oldStats.coins + gain).coerceAtLeast(0),
             games = oldStats.games + 1,
             wins = if (won) oldStats.wins + 1 else oldStats.wins,
             kills = if (won) oldStats.kills + 1 else oldStats.kills
@@ -3503,7 +3751,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             rewardText = if (reward.isEmpty) "" else rewardSpeech(reward),
             rewardMedkits = reward.medikits,
             rewardCovers = reward.covers,
-            rewardGlueWalls = reward.glueWalls
+            rewardGlueWalls = reward.glueWalls,
+            coinsLost = coinsLost,
+            timeUp = timeUp
         )
 
         _gameState.update { it.copy(matchWon = matchWon) }
@@ -3520,8 +3770,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         startResultLock()
 
-        var speech = if (won) t("victoryMsg") else t("defeatMsg")
-        speech += " ${t("earned")} $gain."
+        var speech = if (won) {
+            t("victoryMsg")
+        } else if (timeUp) {
+            t("timeUpDefeat")
+        } else {
+            t("defeatMsg")
+        }
+        if (won) {
+            speech += " ${t("earned")} $gain."
+        } else if (coinsLost > 0) {
+            speech += " ${t("coinsLostOnDefeat")} $coinsLost."
+        } else {
+            speech += " ${t("noCoinsToLose")}"
+        }
         if (matchWon) {
             speech += " ${t("matchWonMsg")}"
         } else if (roundCompleted) {
@@ -3662,6 +3924,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         autoFireJob = null
         endingJob?.cancel()
         endingJob = null
+        matchLimitJob?.cancel()
+        matchLimitJob = null
+        matchDeadlineMs = 0L
         // Stop a missile or a bomb still in the air (their countdown sounds
         // included), but never cut an explosion that has just impacted:
         // screen changes stop that separately.

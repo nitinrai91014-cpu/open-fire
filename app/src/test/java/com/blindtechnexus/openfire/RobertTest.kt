@@ -116,11 +116,16 @@ class RobertTest {
         assertEquals(0, roundThree.missilePowers)
         assertEquals(0, roundThree.antiMissiles)
         assertEquals(0, MissileRules.antiMissilesForRound(3))
-        // One bomb and one anti-bomb explosive per game from round three.
-        assertEquals(1, roundThree.bombs)
-        assertEquals(1, roundThree.antiBombs)
-        assertEquals(1, BombRules.enemyBombsForRound(3))
-        assertEquals(1, BombRules.antiBombsForRound(3))
+        // Two grenades and two anti-bomb explosives per game from round three.
+        assertEquals(2, roundThree.bombs)
+        assertEquals(2, roundThree.antiBombs)
+        assertEquals(2, roundThree.grenades)
+        assertEquals(0, roundThree.atomBombs)
+        assertEquals(0, roundThree.timerBombs)
+        assertEquals(2, BombRules.enemyBombsForRound(3))
+        assertEquals(2, BombRules.antiBombsForRound(3))
+        assertEquals(2, BombRules.enemyBombUsesForRound(3, BombKind.GRENADE))
+        assertEquals(0, BombRules.enemyBombUsesForRound(3, BombKind.ATOM))
         assertEquals(4, RobertRules.profile(3, 5).covers)
     }
 
@@ -134,10 +139,14 @@ class RobertTest {
         // The missile is a once-per-game special, not a random rotation weapon.
         assertFalse(roundFour.weapons.contains(Weapon.MISSILE))
         assertEquals(1, roundFour.missilePowers)
-        assertEquals(1, roundFour.antiMissiles)
+        // Two anti-missile interceptors from round four.
+        assertEquals(2, roundFour.antiMissiles)
         assertEquals(4, roundFour.fleeAfterHits)
-        // Three bombs and three anti-bomb explosives per game from round four (spec: 1/3/unlimited).
-        assertEquals(3, roundFour.bombs)
+        // All three bombs, each usable three times per game: nine throws.
+        assertEquals(9, roundFour.bombs)
+        assertEquals(3, roundFour.grenades)
+        assertEquals(3, roundFour.atomBombs)
+        assertEquals(3, roundFour.timerBombs)
         assertEquals(3, roundFour.antiBombs)
         assertTrue(roundFour.weapons.contains(Weapon.MACHINE_GUN))
     }
@@ -150,12 +159,16 @@ class RobertTest {
         assertEquals(7, roundFive.covers)
         assertEquals(RobertRules.ALL_STANDARD_WEAPONS.toSet(), roundFive.weapons.toSet())
         assertFalse(roundFive.weapons.contains(Weapon.MISSILE))
-        assertEquals(1, roundFive.missilePowers)
-        assertEquals(2, roundFive.antiMissiles)
+        // Round five holds two missiles, four anti-missiles and five anti-bombs.
+        assertEquals(2, roundFive.missilePowers)
+        assertEquals(4, roundFive.antiMissiles)
         assertEquals(5, roundFive.fleeAfterHits)
-        // Unlimited bombs and anti-bombs in round five (represented as 99) — strategy over stats.
+        assertEquals(5, roundFive.antiBombs)
+        // Unlimited bombs in round five (represented as 99) — strategy over stats.
         assertEquals(99, roundFive.bombs)
-        assertEquals(99, roundFive.antiBombs)
+        assertEquals(99, roundFive.grenades)
+        assertEquals(99, roundFive.atomBombs)
+        assertEquals(99, roundFive.timerBombs)
         assertTrue(roundFive.weapons.contains(Weapon.MACHINE_GUN))
     }
 
@@ -319,29 +332,44 @@ class RobertTest {
         assertTrue(RobertRules.isContinuousPlayerFire(3))
         assertTrue(RobertRules.isContinuousPlayerFire(9))
 
-        // Your continuous fire makes him fire continuously back.
-        assertTrue(
+        // Continuous fire only happens while the player is pinned: a damaged
+        // weapon or an extremely weak player, no matter the burst count.
+        assertFalse(
             RobertRules.shouldFireContinuously(
                 playerBurstShots = 4,
                 playerHealthDropping = false,
                 situation = RobertRules.CombatSituation.EVEN
             )
         )
-        // Your health dropping makes him keep firing even without a burst.
         assertTrue(
             RobertRules.shouldFireContinuously(
                 playerBurstShots = 0,
-                playerHealthDropping = true,
-                situation = RobertRules.CombatSituation.DISADVANTAGE
+                playerHealthDropping = false,
+                situation = RobertRules.CombatSituation.EVEN,
+                playerWeaponDamaged = true
+            )
+        )
+        assertTrue(
+            RobertRules.shouldFireContinuously(
+                playerBurstShots = 0,
+                playerHealthDropping = false,
+                situation = RobertRules.CombatSituation.ADVANTAGE,
+                playerHpFraction = RobertRules.EXTREMELY_WEAK_FRACTION
             )
         )
         assertFalse(
             RobertRules.shouldFireContinuously(
-                playerBurstShots = 1,
-                playerHealthDropping = false,
-                situation = RobertRules.CombatSituation.EVEN
+                playerBurstShots = 9,
+                playerHealthDropping = true,
+                situation = RobertRules.CombatSituation.ADVANTAGE,
+                playerHpFraction = 0.8f
             )
         )
+        // One or two shots in a row, never a machine gun.
+        val burstRandom = Random(5)
+        repeat(100) { assertTrue(RobertRules.burstLimit(burstRandom) in 1..2) }
+        assertTrue(RobertRules.burstFinished(2, 2))
+        assertFalse(RobertRules.burstFinished(1, 2))
 
         // His own health dropping under sustained fire makes him retreat.
         assertTrue(
@@ -377,7 +405,7 @@ class RobertTest {
             )
         }
         assertTrue(continuous.all { it in RobertRules.continuousFireWindow() })
-        assertTrue(continuous.max() < 700L)
+        assertTrue(continuous.max() <= 2_000L)
         // While fleeing he never answers continuously.
         assertTrue(
             (1..30).map {
@@ -387,7 +415,7 @@ class RobertTest {
                     random = random,
                     continuous = true
                 )
-            }.all { it >= 2_200L }
+            }.all { it >= 2_500L }
         )
     }
 
@@ -528,9 +556,13 @@ class RobertTest {
         assertTrue(BombRules.bombsUnlocked(3))
         assertEquals(3, BombRules.FIRST_BOMB_ROUND)
         assertEquals(0, BombRules.antiBombsForRound(2))
-        assertEquals(99, BombRules.antiBombsForRound(5))
+        assertEquals(5, BombRules.antiBombsForRound(5))
         assertEquals(3, BombRules.antiBombsForRound(4))
-        assertEquals(1, BombRules.antiBombsForRound(3))
+        assertEquals(2, BombRules.antiBombsForRound(3))
+        // The player's own anti-bomb explosive is free from round three.
+        assertTrue(BombRules.playerAntiBombsFree(3))
+        assertTrue(BombRules.playerAntiBombsFree(4))
+        assertFalse(BombRules.playerAntiBombsFree(2))
     }
 
     @Test
@@ -539,25 +571,32 @@ class RobertTest {
         fun samples(situation: RobertRules.CombatSituation, fleeing: Boolean) =
             (1..60).map { RobertRules.fireIntervalMs(situation, fleeing, random) }
 
+        // Every situation stays inside the human 2 s to 3 s rhythm.
         val advantage = samples(RobertRules.CombatSituation.ADVANTAGE, false)
-        assertTrue(advantage.all { it in 750L..1_150L })
-        assertTrue("advantage fire must vary", advantage.distinct().size > 10)
+        assertTrue("advantage=$advantage", advantage.all { it in 2_000L..2_500L })
+        assertTrue("advantage variation $advantage", advantage.distinct().size > 10)
 
         val pressure = samples(RobertRules.CombatSituation.PRESSURE, false)
-        assertTrue(pressure.all { it in 620L..1_000L })
+        assertTrue("pressure=$pressure", pressure.all { it in 2_000L..2_500L })
 
         val even = samples(RobertRules.CombatSituation.EVEN, false)
-        assertTrue(even.all { it in 1_400L..2_200L })
-        assertTrue("even fire must vary", even.distinct().size > 10)
+        assertTrue("even=$even", even.all { it in 2_000L..3_000L })
+        assertTrue("even variation $even", even.distinct().size > 10)
 
         val disadvantage = samples(RobertRules.CombatSituation.DISADVANTAGE, false)
-        assertTrue(disadvantage.all { it in 2_000L..3_000L })
+        assertTrue("disadvantage=$disadvantage", disadvantage.all { it in 2_500L..3_000L })
 
-        // Advantage always fires faster than even, even faster than losing.
-        assertTrue(advantage.max() < even.min())
-        assertTrue(even.max() <= disadvantage.max())
+        // Advantage fires faster than a losing Robert, and nothing goes
+        // outside the human rhythm.
+        assertTrue(
+            "advantage max ${advantage.max()} vs disadvantage min ${disadvantage.min()}",
+            advantage.max() <= disadvantage.min()
+        )
+        assertTrue("even max ${even.max()}", even.max() <= 3_000L)
+        assertTrue("even min ${even.min()}", even.min() >= 2_000L)
         // While fleeing he barely fires at all.
-        assertTrue(samples(RobertRules.CombatSituation.ADVANTAGE, true).all { it >= 2_200L })
+        val fleeing = samples(RobertRules.CombatSituation.ADVANTAGE, true)
+        assertTrue("fleeing=$fleeing", fleeing.all { it >= 2_500L })
     }
 
     @Test

@@ -93,6 +93,34 @@ class AudioManager(private val context: Context) {
         /** Max load attempts (asset retry + synthetic fallback) per sound key. */
         private const val MAX_LOAD_ATTEMPTS = 3
 
+        /**
+         * Every sound that belongs to a weapon being fired or swung. Only one
+         * of them may ever sound at a time: the moment a new weapon sound
+         * starts, the previous one is cut, so the player's AWM shot and
+         * Robert's answering gunshot never overlap and never leak.
+         */
+        val WEAPON_SOUND_KEYS: Set<String> = setOf(
+            "assault",
+            "fire",
+            "pistol",
+            "shortGun",
+            "shotgun",
+            "sniperRifle",
+            "awm",
+            "mp40",
+            "machineGun",
+            "knifeSwish",
+            "knifeMiss",
+            "swordGlide",
+            "swordMiss"
+        )
+
+        /** Footsteps are ducked for this long while a weapon sounds. */
+        private const val WALK_DUCK_MS = 450L
+
+        /** Footstep gain multiplier during that window. */
+        const val WALK_DUCK_FACTOR = 0.25f
+
         /** Delay before a refused stream is retried once. */
         private const val STREAM_RETRY_DELAY_MS = 90L
 
@@ -207,7 +235,23 @@ class AudioManager(private val context: Context) {
         }
 
     var soundTheme: SoundTheme = SoundTheme.TACTICAL
-    var hapticsEnabled: Boolean = true
+
+    /**
+     * Haptics belong to the menus only. While an actual game screen is being
+     * played this stays false, so the battle is pure sound and speech: no
+     * vibration at all, however many shots, hits and explosions happen.
+     */
+    var hapticsEnabled: Boolean = false
+
+    /**
+     * True while the battle screen is open. It is the hard switch that mutes
+     * every vibration during play, independent of the settings toggle.
+     */
+    @Volatile
+    var battleActive: Boolean = false
+
+    /** Moment until which footsteps stay ducked under a weapon sound. */
+    private var walkDuckUntilMs: Long = 0L
 
     private val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
@@ -657,11 +701,62 @@ class AudioManager(private val context: Context) {
     }
 
     /**
+     * Plays one weapon sound exclusively: every other weapon sound that is
+     * still playing (a looping submachine gun, a long AWM tail, the other
+     * fighter's gunshot) is stopped first, so weapon sounds never mix and
+     * never leak. Footsteps are ducked under it for a moment as well, which
+     * keeps a running enemy from bleeding into the gunfire.
+     */
+    fun playWeaponSound(
+        key: String,
+        volume: Float = 1.0f,
+        posX: Float = 0f,
+        posY: Float = 0f,
+        posZ: Float = 0f
+    ) {
+        exclusiveWeaponStart(key)
+        playSound(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
+    }
+
+    /** The looping variant of [playWeaponSound] (held submachine gun bursts). */
+    fun playWeaponLoop(
+        key: String,
+        volume: Float = 1.0f,
+        posX: Float = 0f,
+        posY: Float = 0f,
+        posZ: Float = 0f
+    ) {
+        exclusiveWeaponStart(key)
+        playLoop(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
+    }
+
+    /** Cuts every weapon sound that is still playing, loops included. */
+    fun stopWeaponSounds() {
+        for (weaponKey in WEAPON_SOUND_KEYS) {
+            stopSound(weaponKey)
+        }
+    }
+
+    /** Stops the other weapon sounds, ducks the footsteps, then starts [key]. */
+    private fun exclusiveWeaponStart(key: String) {
+        if (released) return
+        for (weaponKey in WEAPON_SOUND_KEYS) {
+            if (weaponKey != key) stopSound(weaponKey)
+        }
+        // A weapon sound always wins over footsteps.
+        walkDuckUntilMs = System.currentTimeMillis() + WALK_DUCK_MS
+    }
+
+    /** Current footstep ducking multiplier. */
+    private fun walkDuckFactor(): Float =
+        if (System.currentTimeMillis() < walkDuckUntilMs) WALK_DUCK_FACTOR else 1f
+
+    /**
      * Dedicated stable start/stop for the MP40 submachine gun loop.
      * The MP40 loops until [stopMp40Loop] is called on trigger release — no leakage, no overlap.
      */
     fun startMp40Loop(volume: Float = 1.0f, posZ: Float = 0f) {
-        playLoop("mp40", volume = volume, posZ = posZ)
+        playWeaponLoop("mp40", volume = volume, posZ = posZ)
     }
     fun stopMp40Loop() {
         stopSound("mp40")
@@ -733,6 +828,9 @@ class AudioManager(private val context: Context) {
     private fun updateWalkingTrack(key: String, left: Float, right: Float, speedMps: Float) {
         if (released) return
         val player = managedPlayers[key]
+        val duck = walkDuckFactor()
+        val duckedLeft = (left * duck).coerceIn(0f, 1f)
+        val duckedRight = (right * duck).coerceIn(0f, 1f)
         if (player == null || !player.isPlaying) {
             // The track is prepared on a background thread: ask for it once
             // with the gains it should start at, then let the next ticks
@@ -740,7 +838,7 @@ class AudioManager(private val context: Context) {
             if (!preparingTracks.contains(key)) {
                 walkLastApplyAt.remove(key)
                 walkCurrentGains.remove(key)
-                trackGains[key] = Pair(left.coerceIn(0f, 1f), right.coerceIn(0f, 1f))
+                trackGains[key] = Pair(duckedLeft, duckedRight)
                 playManagedTrack(key, volume = 1.0f, posX = 0f, posY = 0f, posZ = 0f, loop = true)
             }
             return
@@ -757,11 +855,11 @@ class AudioManager(private val context: Context) {
             // continuous approach / retreat, never like volume steps.
             val current = walkCurrentGains[key]
             val smoothed = if (current == null) {
-                Pair(left, right)
+                Pair(duckedLeft, duckedRight)
             } else {
                 Pair(
-                    current.first + (left - current.first) * 0.6f,
-                    current.second + (right - current.second) * 0.6f
+                    current.first + (duckedLeft - current.first) * 0.6f,
+                    current.second + (duckedRight - current.second) * 0.6f
                 )
             }
             try {
@@ -1085,6 +1183,9 @@ class AudioManager(private val context: Context) {
     }
 
     private fun triggerHapticForSound(key: String) {
+        // No vibration while a game is being played: the game screen is
+        // speech and sound only.
+        if (battleActive) return
         if (!hapticsEnabled || vibrator == null || !vibrator.hasVibrator()) return
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

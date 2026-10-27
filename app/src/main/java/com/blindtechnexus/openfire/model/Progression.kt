@@ -24,6 +24,32 @@ object Progression {
     /** Completed rounds needed to unlock the missile and its powers. */
     const val MISSILE_UNLOCK_COMPLETED_ROUNDS = 2
 
+    /**
+     * The final round is played against the clock: seven minutes per game.
+     * If Robert is still alive when they run out, the player loses.
+     */
+    const val FINAL_ROUND_TIME_LIMIT_MS = 7L * 60L * 1_000L
+
+    /** Coins taken away from the player for a lost game. */
+    const val DEFEAT_COIN_PENALTY = 20
+
+    /** The time limit of a round in milliseconds (0 = no limit). */
+    fun roundTimeLimitMs(round: Int): Long =
+        if (round.coerceIn(1, ROUNDS_PER_MATCH) >= ROUNDS_PER_MATCH) {
+            FINAL_ROUND_TIME_LIMIT_MS
+        } else {
+            0L
+        }
+
+    /**
+     * Coins really deducted for a defeat: the penalty, capped by what the
+     * player actually owns, so a player with no coins loses nothing at all.
+     */
+    fun coinsLostOnDefeat(coins: Int): Int {
+        val safe = coins.coerceAtLeast(0)
+        return minOf(DEFEAT_COIN_PENALTY, safe)
+    }
+
     data class WinResult(
         val stats: GameStats,
         val leveledUp: Boolean,

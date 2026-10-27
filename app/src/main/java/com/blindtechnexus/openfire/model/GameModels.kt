@@ -216,8 +216,31 @@ data class GameState(
     val bombInterceptedByPlayer: Boolean = false,
     /** Bombs Robert may still throw this game. */
     val robertBombs: Int = 0,
-    /** Anti-bomb explosives Robert may still deploy this game (one per game). */
+    /** Grenades Robert may still throw this game (twice in round three). */
+    val robertGrenades: Int = 0,
+    /** Atom bombs Robert may still throw (three per game from round four). */
+    val robertAtomBombs: Int = 0,
+    /** Timer bombs Robert may still throw (three per game from round four). */
+    val robertTimerBombs: Int = 0,
+    /** Anti-bomb explosives Robert may still deploy this game (2 / 3 / 5). */
     val robertAntiBombs: Int = 0,
+
+    /**
+     * Shots Robert has fired in a row without pausing, and the length of the
+     * current burst (one or two shots). This is what stops him from firing
+     * more than once or twice in succession.
+     */
+    val robertSuccessiveShots: Int = 0,
+    val robertBurstLimit: Int = RobertRules.MAX_SUCCESSIVE_SHOTS,
+
+    /**
+     * Round five time limit in milliseconds (0 = no limit). Seven minutes are
+     * armed only in the final round: when they run out while Robert is still
+     * alive, the player loses the game.
+     */
+    val battleLimitMs: Long = 0L,
+    /** Milliseconds left before the round five limit expires. */
+    val battleRemainingMs: Long = 0L,
 
     /** True while the timer bomb duration picker is open. */
     val timerSelectActive: Boolean = false,
@@ -311,6 +334,14 @@ data class GameState(
     val timerSeconds: Int
         get() = BombRules.timerSecondsAt(timerIndex)
 
+    /** True while the round five seven minute limit is running. */
+    val timeLimitActive: Boolean
+        get() = battleLimitMs > 0L
+
+    /** True when the player's anti-bomb explosive is free and always usable. */
+    val playerAntiBombFree: Boolean
+        get() = BombRules.playerAntiBombsFree(round)
+
     /** Distance of the player from the bomb destination, in metres. */
     val playerDistanceFromBomb: Float
         get() = Arena.distanceTo(bombX, bombY, playerX, playerY)
@@ -349,7 +380,11 @@ data class ResultData(
     val rewardCovers: Int = 0,
     val rewardGlueWalls: Int = 0,
     /** Weapons issued for free with this promotion, by id. */
-    val rewardWeapons: List<String> = emptyList()
+    val rewardWeapons: List<String> = emptyList(),
+    /** Coins deducted for a defeat (0 when the player had none). */
+    val coinsLost: Int = 0,
+    /** True when the round five time limit ran out: Robert survived. */
+    val timeUp: Boolean = false
 ) {
     val hasReward: Boolean
         get() = rewardText.isNotBlank() ||

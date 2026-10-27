@@ -120,11 +120,12 @@ enum class BombKind(
  *  - the timer bomb is the exception: its thrower must stay at least
  *    [SAFE_DISTANCE] metres away from the destination, or both fighters are
  *    destroyed together and the thrower loses;
- *  - from round three Robert carries anti-bomb explosives per the new limits:
- *    once in round 3, three times in round 4, and unlimited in round 5;
- *  - bomb power: each Bomb Power upgrade costs 1500 coins and allows each bomb
- *    to be used once (1 Bomb Power = 1 use of any bomb type). Similar to Missile
- *    Power, it stacks and must be bought again once used;
+ *  - from round three Robert carries anti-bomb explosives per the round
+ *    table: twice in round 3, three times in round 4 and five times in round 5;
+ *    the player's anti-bomb explosive is free and always usable from round 3;
+ *  - bomb power: each Bomb Power upgrade costs 1500 coins and allows one atom
+ *    bomb or one timer bomb throw. The grenade is free for both fighters, so
+ *    it never spends a Bomb Power;
  *  - an intercepted, disposed or destroyed bomb always plays the explosion
  *    sound, exactly like an intercepted missile does.
  */
@@ -169,23 +170,44 @@ object BombRules {
     /** How often a tracking bomb updates its destination (ms). */
     const val TRACKING_UPDATE_MS = 80L
 
-    /** Anti-bomb explosives Robert carries per round: 1 in R3, 3 in R4, unlimited in R5. */
+    /**
+     * Anti-bomb explosives Robert carries per round: twice per game in round
+     * three, three in round four and five in round five.
+     */
     fun antiBombsForRound(round: Int): Int =
         when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
-            3 -> 1
+            3 -> 2
             4 -> 3
-            5 -> 99 // unlimited — as many as he chooses
+            5 -> 5
             else -> 0
         }
 
-    /** Bombs Robert may throw per game: 1 in R3, 3 in R4, unlimited in R5. */
-    fun enemyBombsForRound(round: Int): Int =
+    /**
+     * How many times Robert may use one specific bomb in a round.
+     *
+     *  - round three: the grenade, twice per game (his only bomb);
+     *  - round four: all three bombs arrive, each usable three times;
+     *  - round five: bombs are unlimited, so he throws them as he likes.
+     *
+     * Before round three he has no bombs at all.
+     */
+    fun enemyBombUsesForRound(round: Int, kind: BombKind): Int =
         when (round.coerceIn(1, Progression.ROUNDS_PER_MATCH)) {
-            3 -> 1
+            3 -> if (kind == BombKind.GRENADE) 2 else 0
             4 -> 3
             5 -> 99 // unlimited — strategic use, not stat-based
             else -> 0
         }
+
+    /**
+     * Total bombs Robert may throw in a round: twice in round three, nine in
+     * round four (three of each bomb) and unlimited in round five.
+     */
+    fun enemyBombsForRound(round: Int): Int {
+        val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
+        if (safeRound >= 5) return 99
+        return BombKind.entries.sumOf { enemyBombUsesForRound(safeRound, it) }
+    }
 
     /** True when bombs are part of this round at all. */
     fun bombsUnlocked(round: Int): Boolean =
@@ -314,6 +336,49 @@ object BombRules {
     fun canThrowWithBombPower(bombPowers: Int, bombInFlight: Boolean, missileInFlight: Boolean): Boolean =
         bombPowers > 0 && !bombInFlight && !missileInFlight
 
-    /** Whether the bomb kind requires bomb power (all bombs do from round 3). */
-    fun requiresBombPower(round: Int): Boolean = bombsUnlocked(round)
+    /**
+     * True when this bomb consumes one stacked Bomb Power.
+     *
+     * From round three the grenade is free for the player, exactly like
+     * Robert's own grenades, so only the atom bomb and the timer bomb need a
+     * Bomb Power. [kind] null keeps the old "every bomb" answer for callers
+     * that do not know which bomb is being thrown yet.
+     */
+    fun requiresBombPower(round: Int, kind: BombKind? = null): Boolean {
+        if (!bombsUnlocked(round)) return false
+        return kind == null || kind != BombKind.GRENADE
+    }
+
+    /**
+     * True when the player's anti-bomb explosive is free and always usable.
+     * From round three onwards the player never has to buy one: the defence
+     * is available in the quick menu for every battle of those rounds.
+     */
+    fun playerAntiBombsFree(round: Int): Boolean = bombsUnlocked(round)
+
+    /**
+     * The bomb Robert throws next, or null when he has none left. The atom
+     * bomb is preferred to finish a weak player, the grenade is his standard
+     * throw and the timer bomb is his occasional tactical choice.
+     */
+    fun chooseEnemyBomb(
+        round: Int,
+        grenades: Int,
+        atomBombs: Int,
+        timerBombs: Int,
+        playerHpFraction: Float,
+        random: kotlin.random.Random
+    ): BombKind? {
+        if (!bombsUnlocked(round)) return null
+        val available = buildList {
+            if (grenades > 0) add(BombKind.GRENADE)
+            if (atomBombs > 0) add(BombKind.ATOM)
+            if (timerBombs > 0) add(BombKind.TIMER)
+        }
+        if (available.isEmpty()) return null
+        if (available.contains(BombKind.ATOM) && playerHpFraction <= 0.35f) return BombKind.ATOM
+        if (available.contains(BombKind.TIMER) && random.nextFloat() < 0.30f) return BombKind.TIMER
+        if (available.contains(BombKind.GRENADE)) return BombKind.GRENADE
+        return available[random.nextInt(available.size)]
+    }
 }
