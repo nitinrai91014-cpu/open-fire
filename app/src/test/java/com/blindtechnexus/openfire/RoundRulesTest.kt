@@ -216,8 +216,8 @@ class RoundRulesTest {
             playerHpFraction = 1f,
             random = random
         )
-        assertEquals(70f, close.first, 0.0001f)
-        assertEquals(100f, close.last, 0.0001f)
+        assertEquals(70f, close.start, 0.0001f)
+        assertEquals(100f, close.endInclusive, 0.0001f)
         // A losing Robert shoots from the 20-40 percent band, an even one from
         // the 40-70 percent band.
         val far = RobertRules.proximityRangeFor(
@@ -226,16 +226,16 @@ class RoundRulesTest {
             playerHpFraction = 1f,
             random = random
         )
-        assertEquals(20f, far.first, 0.0001f)
-        assertEquals(40f, far.last, 0.0001f)
+        assertEquals(20f, far.start, 0.0001f)
+        assertEquals(40f, far.endInclusive, 0.0001f)
         val mid = RobertRules.proximityRangeFor(
             situation = RobertRules.CombatSituation.EVEN,
             playerWeaponDamaged = false,
             playerHpFraction = 1f,
             random = random
         )
-        assertEquals(40f, mid.first, 0.0001f)
-        assertEquals(70f, mid.last, 0.0001f)
+        assertEquals(40f, mid.start, 0.0001f)
+        assertEquals(70f, mid.endInclusive, 0.0001f)
     }
 
     @Test
