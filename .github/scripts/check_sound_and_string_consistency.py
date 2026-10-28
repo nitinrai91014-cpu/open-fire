@@ -11,6 +11,11 @@ These checks mirror (and go beyond) what the JVM unit tests can see:
      and the English, Hindi and Nepali tables define exactly the same keys.
   4. Braces, parentheses and brackets balance in every Kotlin file and no
      Kotlin file mixes tabs into its indentation.
+  5. Every sound asset really is an MP3 file: a well-formed ID3v2 tag (when
+     present) followed by at least one MPEG audio frame. A truncated or
+     non-audio asset (an HTML error page, a partial download, a Git LFS
+     pointer) plays as silence on the device and is what makes ZIP tooling
+     report bogus stream errors for that one file.
 """
 import os
 import re
@@ -215,6 +220,72 @@ for path in kotlin_files():
     for number, line in enumerate(src.split("\n"), start=1):
         if line.startswith("\t") or "\t" in line[: len(line) - len(line.lstrip())]:
             fail("%s:%d uses tab indentation" % (os.path.relpath(path, ROOT), number))
+
+# ------------------------------------------------------------- 5: MP3 assets
+BITRATES = {
+    (1, 1): [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+    (1, 2): [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+    (1, 3): [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+    (2, 1): [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],
+    (2, 2): [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+    (2, 3): [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+}
+SAMPLE_RATES = {1: [44100, 48000, 32000], 2: [22050, 24000, 16000], 25: [11025, 12000, 8000]}
+
+
+def id3v2_size(data):
+    """Return the byte length of a leading ID3v2 tag, or 0 when there is none."""
+    if len(data) < 10 or data[:3] != b"ID3":
+        return 0
+    major = data[3]
+    size = (data[6] << 21) | (data[7] << 14) | (data[8] << 7) | data[9]
+    footer = 10 if major >= 4 and data[5] & 0x10 else 0
+    return 10 + size + footer
+
+
+def mp3_frame_length(data, offset):
+    """Return the length of the MPEG audio frame at offset, or 0 when there is none."""
+    if offset + 4 > len(data):
+        return 0
+    header = data[offset : offset + 4]
+    if header[0] != 0xFF or (header[1] & 0xE0) != 0xE0:
+        return 0
+    version = {3: 1, 2: 2, 0: 25}.get((header[1] >> 3) & 3)
+    layer = {3: 1, 2: 2, 1: 3}.get((header[1] >> 1) & 3)
+    bitrate_index = (header[2] >> 4) & 0xF
+    rate_index = (header[2] >> 2) & 3
+    if version is None or layer is None or bitrate_index in (0, 15) or rate_index == 3:
+        return 0
+    padding = (header[2] >> 1) & 1
+    bitrate = BITRATES[(1 if version == 1 else 2, layer)][bitrate_index] * 1000
+    rate = SAMPLE_RATES[version][rate_index]
+    if layer == 1:
+        return (12 * bitrate // rate + padding) * 4
+    if layer == 3 and version != 1:
+        return 72 * bitrate // rate + padding
+    return 144 * bitrate // rate + padding
+
+
+for name in sorted(assets):
+    path = os.path.join(SOUNDS_DIR, name)
+    with open(path, "rb") as handle:
+        data = handle.read()
+    if not data:
+        fail("sound asset sounds/%s is empty" % name)
+        continue
+    tag_size = id3v2_size(data)
+    if tag_size > len(data):
+        fail("sound asset sounds/%s has an ID3v2 tag larger than the file" % name)
+        continue
+    if not tag_size and data[:3] != b"ID3" and not mp3_frame_length(data, 0):
+        fail("sound asset sounds/%s does not start with an ID3v2 tag or an MPEG frame" % name)
+        continue
+    offset = mp3_frame_length(data, tag_size)
+    if not offset:
+        fail("sound asset sounds/%s contains no MPEG audio frame after its tag" % name)
+        continue
+    if tag_size + offset > len(data):
+        fail("sound asset sounds/%s ends inside its first MPEG frame (truncated)" % name)
 
 # ---------------------------------------------------------------------- report
 print("sound keys declared : %d" % len(aliases))

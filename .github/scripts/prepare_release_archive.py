@@ -1,12 +1,46 @@
 #!/usr/bin/env python3
 """Normalize unsigned release APKs and package a standard seekable ZIP archive.
 
-The outer archive stores APKs without compression: APKs are already ZIP files,
-so recompressing them saves little and adds another DEFLATE stream to decode.
-The upload action must upload this file directly, not wrap it in another ZIP.
-Both the archive and its APKs are checked with independent ZIP readers in CI.
-ZIP data descriptors and stored DEFLATE blocks are valid formats; they are not
-by themselves evidence of corruption.
+Failure signature this script exists to prevent
+===============================================
+Tools built on ``com.android.apksig`` (``apksigner``, Android Studio, AI Studio and
+several third-party APK utilities) report a broken release APK as::
+
+    W: Malformed ZIP entry: assets/sounds/medkit.mp3
+    W: invalid stored block lengths
+
+``com.android.apksig.internal.zip.LocalFileRecord`` resolves an entry's payload from
+the **Central Directory** (compression method, compressed size) and then inflates it
+(``outputUncompressedData``/``getUncompressedData``).  When the recorded method says
+``DEFLATE`` but the bytes are really stored audio, or when the Local File Header and
+the Central Directory disagree about method/flags/sizes, or when the payload is
+truncated, the inflater is handed raw MP3 bytes.  An MP3 that starts with
+``ID3\\x04`` begins with ``0x49`` = ``BFINAL=1, BTYPE=00`` (stored block) followed by
+``LEN=0x3344``/``NLEN=0x0004``, so zlib fails immediately with::
+
+    invalid stored block lengths
+
+and apksig wraps that cause in ``ApkFormatException("Malformed ZIP entry: " + name)``.
+
+The sound assets must stay ``ZIP_STORED``: ``AudioManager`` opens them with
+``AssetManager.openFd()``, which cannot descriptor-map compressed entries.  The sound
+entries are therefore both the ones that must remain uncompressed *and* the ones whose
+raw bytes look like a bogus DEFLATE stream when a header lies about the method.
+
+Packaging contract (enforced here, in CI, for the archive and for every APK in it)
+=================================================================================
+* Exactly one canonical set of ZIP records: Local File Header and Central Directory
+  agree on name, flags, method, CRC-32 and both sizes; no GPB bit 3 (Data Descriptor),
+  no encryption, no ZIP64, nothing after the End of Central Directory.
+* ``resources.arsc`` and ``assets/sounds/*.mp3`` are ``ZIP_STORED`` and 4-byte aligned
+  so the framework can mmap them (``openFd``).
+* Every payload decodes with the method that the Central Directory declares, exactly
+  reproducing what apksig's inflater will do, so "Malformed ZIP entry" and
+  "invalid stored block lengths" cannot reach the published artifact.
+
+The outer archive stores the APKs without compression: APKs are already ZIP files, so
+recompressing them saves little and adds another DEFLATE stream to decode.  The upload
+action must upload this file directly (``archive: false``), not wrap it in another ZIP.
 """
 
 from __future__ import annotations
@@ -26,8 +60,23 @@ from pathlib import Path
 LFH_SIGNATURE = 0x04034B50
 CDH_SIGNATURE = 0x02014B50
 EOCD_SIGNATURE = 0x06054B50
+
+GPB_ENCRYPTED_MASK = 0x0001
 GPB_DATA_DESCRIPTOR_MASK = 0x0008
+GPB_STRONG_ENCRYPTION_MASK = 0x0040
+GPB_EFS_MASK = 0x0800  # UTF-8 file name (general purpose bit 11)
+SUPPORTED_GPB_FLAGS = GPB_EFS_MASK
+
+ALIGNMENT_EXTRA_ID = 0xD935
+DEFAULT_ALIGNMENT = 4
+NATIVE_LIBRARY_ALIGNMENT = 16384
+ALIGNMENT_EXTRA_HEADER_SIZE = 6  # id + data size + alignment value
+
+ZIP_VERSION = 20  # 2.0: DEFLATE and Data Descriptors are understood
+DEFAULT_DATE = 0x0021  # 1980-01-01
 STREAM_CHUNK_SIZE = 4096
+SAFE_NAME_BYTES = set(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+                      b"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ ")
 
 
 class ZipValidationError(RuntimeError):
@@ -42,13 +91,92 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def must_store(name: str) -> bool:
+    """Entries the Android runtime must be able to mmap straight out of the APK."""
+    return name == "resources.arsc" or (
+        name.startswith("assets/sounds/") and name.endswith(".mp3")
+    )
+
+
+def alignment_for(name: str) -> int:
+    return NATIVE_LIBRARY_ALIGNMENT if name.endswith(".so") else DEFAULT_ALIGNMENT
+
+
+def inflate_exact(
+    payload: bytes,
+    *,
+    expected_usize: int,
+    expected_crc: int,
+    label: str,
+) -> bytes:
+    """Inflate a raw DEFLATE stream the way apksig does and verify size and CRC."""
+    inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+    chunks = []
+    try:
+        for offset in range(0, len(payload), STREAM_CHUNK_SIZE):
+            chunk = inflater.decompress(payload[offset : offset + STREAM_CHUNK_SIZE])
+            if chunk:
+                chunks.append(chunk)
+        tail = inflater.flush()
+        if tail:
+            chunks.append(tail)
+    except zlib.error as exc:
+        raise ZipValidationError(
+            f"{label}: DEFLATE stream error: {exc} "
+            f"(the entry declares DEFLATE but its bytes are not a DEFLATE stream)"
+        ) from exc
+    raw = b"".join(chunks)
+    if not inflater.eof:
+        raise ZipValidationError(f"{label}: truncated DEFLATE stream (no final block)")
+    if inflater.unused_data:
+        raise ZipValidationError(
+            f"{label}: {len(inflater.unused_data)} unused bytes after the DEFLATE stream"
+        )
+    if len(raw) != expected_usize:
+        raise ZipValidationError(
+            f"{label}: inflated size {len(raw)} != declared {expected_usize}"
+        )
+    actual_crc = zlib.crc32(raw) & 0xFFFFFFFF
+    if actual_crc != expected_crc:
+        raise ZipValidationError(
+            f"{label}: inflated CRC {actual_crc:#010x} != declared {expected_crc:#010x}"
+        )
+    return raw
+
+
+def deflate_raw(payload: bytes, level: int = 6) -> bytes:
+    compressor = zlib.compressobj(level, zlib.DEFLATED, -zlib.MAX_WBITS)
+    return compressor.compress(payload) + compressor.flush()
+
+
+def alignment_extra_field(alignment: int, data_start_without_extra: int) -> bytes:
+    """Return a well-formed 0xD935 alignment extra field (the layout zipalign uses)."""
+    padding = (-(data_start_without_extra + ALIGNMENT_EXTRA_HEADER_SIZE)) % alignment
+    header = struct.pack("<HHH", ALIGNMENT_EXTRA_ID, 2 + padding, alignment)
+    return header + b"\x00" * padding
+
+
+def _decode_name(raw_name: bytes, path: Path) -> str:
+    try:
+        return raw_name.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ZipValidationError(f"{path}: entry name is not valid UTF-8: {raw_name!r}") from exc
+
+
 def parse_and_validate_zip_headers(
     archive_path: Path,
     *,
     forbid_extra_fields: bool = False,
     check_contiguous: bool = True,
-) -> list[dict[str, int | str]]:
-    """Validate that every entry has complete LFH fields and no bit-3 Data Descriptor."""
+    allow_data_descriptors: bool = False,
+) -> list[dict[str, int | str | bytes]]:
+    """Validate that every entry has complete LFH fields and no bit-3 Data Descriptor.
+
+    ``allow_data_descriptors`` is only used by the normalization pass, which has to read
+    archives that older build tools wrote in streaming mode (GPB bit 3 with zeroed LFH
+    sizes) before rewriting them into canonical form.  Every other caller gets the strict
+    contract that apksig and the platform expect.
+    """
     data = archive_path.read_bytes()
     size = len(data)
     if size < 22:
@@ -89,7 +217,7 @@ def parse_and_validate_zip_headers(
     if total_entries == 0:
         raise ZipValidationError(f"{archive_path}: archive contains zero entries")
 
-    entries: list[dict[str, int | str]] = []
+    entries: list[dict[str, int | str | bytes]] = []
     pos = cd_offset
     for idx in range(total_entries):
         if pos + 46 > eocd_pos:
@@ -109,8 +237,8 @@ def parse_and_validate_zip_headers(
             ex_len_cd,
             cm_len_cd,
             _disk_start,
-            _int_attr,
-            _ext_attr,
+            int_attr_cd,
+            ext_attr_cd,
             lfh_offset,
         ) = struct.unpack_from("<IHHHHHHIIIHHHHHII", data, pos)
 
@@ -119,10 +247,10 @@ def parse_and_validate_zip_headers(
                 f"{archive_path}: invalid CDH signature {cd_sig:#x} at entry {idx}"
             )
         name_bytes_cd = data[pos + 46 : pos + 46 + fn_len_cd]
-        name = name_bytes_cd.decode("utf-8")
+        name = _decode_name(name_bytes_cd, archive_path)
         pos += 46 + fn_len_cd + ex_len_cd + cm_len_cd
 
-        if flags_cd & GPB_DATA_DESCRIPTOR_MASK:
+        if flags_cd & GPB_DATA_DESCRIPTOR_MASK and not allow_data_descriptors:
             raise ZipValidationError(
                 f"{archive_path}: entry {name!r} sets GPB bit 3 (Data Descriptor) in CDH "
                 f"(flags=0x{flags_cd:04x})"
@@ -146,8 +274,8 @@ def parse_and_validate_zip_headers(
             ver_need_lfh,
             flags_lfh,
             method_lfh,
-            _mtime_lfh,
-            _mdate_lfh,
+            mtime_lfh,
+            mdate_lfh,
             crc_lfh,
             csize_lfh,
             usize_lfh,
@@ -159,10 +287,20 @@ def parse_and_validate_zip_headers(
             raise ZipValidationError(
                 f"{archive_path}: entry {name!r} invalid LFH signature {lfh_sig:#x}"
             )
-        if flags_lfh & GPB_DATA_DESCRIPTOR_MASK:
+        if flags_lfh & GPB_DATA_DESCRIPTOR_MASK and not allow_data_descriptors:
             raise ZipValidationError(
                 f"{archive_path}: entry {name!r} sets GPB bit 3 (Data Descriptor) in LFH "
                 f"(flags=0x{flags_lfh:04x})"
+            )
+        if (flags_lfh & GPB_DATA_DESCRIPTOR_MASK) != (flags_cd & GPB_DATA_DESCRIPTOR_MASK):
+            raise ZipValidationError(
+                f"{archive_path}: entry {name!r} Data Descriptor presence mismatch between "
+                f"LFH (0x{flags_lfh:04x}) and CDH (0x{flags_cd:04x})"
+            )
+        if flags_lfh != flags_cd and not allow_data_descriptors:
+            raise ZipValidationError(
+                f"{archive_path}: entry {name!r} LFH flags 0x{flags_lfh:04x} != "
+                f"CDH flags 0x{flags_cd:04x}"
             )
         if forbid_extra_fields and ex_len_lfh != 0:
             raise ZipValidationError(
@@ -173,22 +311,31 @@ def parse_and_validate_zip_headers(
                 f"{archive_path}: entry {name!r} requires ZIP64 (ver_need={ver_need_lfh})"
             )
 
-        name_bytes_lfh = data[lfh_offset + 30 : lfh_offset + 30 + fn_len_lfh]
+        data_start = lfh_offset + 30 + fn_len_lfh + ex_len_lfh
+        name_bytes_lfh = data[lfh_offset + 30 : data_start - ex_len_lfh]
         if name_bytes_lfh != name_bytes_cd:
             raise ZipValidationError(
                 f"{archive_path}: entry {name!r} LFH filename {name_bytes_lfh!r} != CDH filename"
             )
+        # A reader that trusts the Local File Header (ZipInputStream, zipalign) and a
+        # reader that trusts the Central Directory (apksig, Java ZipFile) must resolve
+        # the same method and the same payload; anything else is the "Malformed ZIP
+        # entry"/"invalid stored block lengths" class of bug.
         if method_lfh != method_cd:
             raise ZipValidationError(
-                f"{archive_path}: entry {name!r} LFH method {method_lfh} != CDH method {method_cd}"
+                f"{archive_path}: entry {name!r} LFH method {method_lfh} != CDH method "
+                f"{method_cd} (readers would decompress the same bytes differently)"
             )
+        if allow_data_descriptors and flags_lfh & GPB_DATA_DESCRIPTOR_MASK:
+            # Streaming writers leave these fields zeroed in the Local File Header and
+            # put the real values in the trailing Data Descriptor and the CDH.
+            crc_lfh, csize_lfh, usize_lfh = crc_cd, csize_cd, usize_cd
         if (crc_lfh, csize_lfh, usize_lfh) != (crc_cd, csize_cd, usize_cd):
             raise ZipValidationError(
                 f"{archive_path}: entry {name!r} LFH (crc={crc_lfh:#x}, csize={csize_lfh}, "
                 f"usize={usize_lfh}) != CDH (crc={crc_cd:#x}, csize={csize_cd}, usize={usize_cd})"
             )
 
-        data_start = lfh_offset + 30 + fn_len_lfh + ex_len_lfh
         data_end = data_start + csize_cd
         if data_end > cd_offset:
             raise ZipValidationError(
@@ -246,6 +393,8 @@ def parse_and_validate_zip_headers(
         entries.append(
             {
                 "name": name,
+                "name_bytes": name_bytes_cd,
+                "flags": flags_cd,
                 "lfh_offset": lfh_offset,
                 "data_start": data_start,
                 "data_end": data_end,
@@ -253,6 +402,10 @@ def parse_and_validate_zip_headers(
                 "csize": csize_lfh,
                 "usize": usize_lfh,
                 "crc": crc_lfh,
+                "mtime": mtime_cd,
+                "mdate": mdate_cd,
+                "ext_attr": ext_attr_cd,
+                "int_attr": int_attr_cd,
             }
         )
 
@@ -275,120 +428,307 @@ def parse_and_validate_zip_headers(
                 f"{cd_offset - int(entries_sorted[-1]['data_end'])} bytes before Central Directory"
             )
 
-    with zipfile.ZipFile(archive_path, "r") as zf:
-        bad_member = zf.testzip()
-        if bad_member is not None:
-            raise ZipValidationError(f"{archive_path}: zipfile.testzip() failed on {bad_member!r}")
+    try:
+        with zipfile.ZipFile(archive_path, "r") as zf:
+            bad_member = zf.testzip()
+    except (RuntimeError, NotImplementedError, zipfile.BadZipFile, zlib.error) as exc:
+        raise ZipValidationError(
+            f"{archive_path}: zipfile could not read the archive: {exc}"
+        ) from exc
+    if bad_member is not None:
+        raise ZipValidationError(f"{archive_path}: zipfile.testzip() failed on {bad_member!r}")
 
     return entries
 
 
-def rewrite_apk_without_data_descriptors(apk_path: Path) -> None:
-    """Rewrite an APK with explicit LFH sizes/CRCs and no GPB bit-3 Data Descriptors."""
-    with tempfile.NamedTemporaryFile(
-        prefix="normalized-",
-        suffix=".apk",
-        dir=str(apk_path.parent),
-        delete=False,
-    ) as tmp_handle:
-        tmp_path = Path(tmp_handle.name)
+def verify_entry_metadata(archive_path: Path, entries: list[dict[str, int | str | bytes]]) -> None:
+    """Reject per-entry metadata that apksig or the platform would refuse or misread."""
+    seen: set[str] = set()
+    for entry in entries:
+        name = str(entry["name"])
+        flags = int(entry["flags"])
+        if name in seen:
+            raise ZipValidationError(f"{archive_path}: duplicate ZIP entry {name!r}")
+        seen.add(name)
+        if flags & GPB_ENCRYPTED_MASK or flags & GPB_STRONG_ENCRYPTION_MASK:
+            raise ZipValidationError(
+                f"{archive_path}: entry {name!r} is marked encrypted (flags=0x{flags:04x})"
+            )
+        if flags & ~SUPPORTED_GPB_FLAGS:
+            raise ZipValidationError(
+                f"{archive_path}: entry {name!r} uses unsupported GPB flags 0x{flags:04x}"
+            )
+        if (
+            not name
+            or name.startswith("/")
+            or "\\" in name
+            or any(part in ("..", ".") for part in name.split("/"))
+            or not set(bytes(entry["name_bytes"])) <= SAFE_NAME_BYTES
+        ):
+            raise ZipValidationError(f"{archive_path}: unsafe entry name {name!r}")
+        if int(entry["method"]) not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+            raise ZipValidationError(
+                f"{archive_path}: entry {name!r} uses unsupported compression method "
+                f"{entry['method']}"
+            )
 
-    try:
-        with zipfile.ZipFile(apk_path, "r") as src_zf, zipfile.ZipFile(tmp_path, "w") as dst_zf:
-            for src_info in src_zf.infolist():
-                payload = src_zf.read(src_info.filename)
-                dst_info = zipfile.ZipInfo(
-                    filename=src_info.filename,
-                    date_time=src_info.date_time,
+
+def verify_entry_streams(archive_path: Path, entries: list[dict[str, int | str | bytes]]) -> None:
+    """Decode every payload exactly as apksig's inflater would.
+
+    ``com.android.apksig.internal.zip.LocalFileRecord.getUncompressedData`` takes the
+    method and the compressed size from the Central Directory and inflates that range.
+    Reproducing it here turns "W: Malformed ZIP entry" plus
+    "W: invalid stored block lengths" into a build failure with the offending entry.
+    """
+    data = archive_path.read_bytes()
+    for entry in entries:
+        name = str(entry["name"])
+        method = int(entry["method"])
+        payload = data[int(entry["data_start"]) : int(entry["data_end"])]
+        label = f"{archive_path}: entry {name!r}"
+        if len(payload) != int(entry["csize"]):
+            raise ZipValidationError(
+                f"{label} has {len(payload)} bytes but the Central Directory declares "
+                f"{entry['csize']} compressed bytes"
+            )
+        if method == zipfile.ZIP_DEFLATED:
+            inflate_exact(
+                payload,
+                expected_usize=int(entry["usize"]),
+                expected_crc=int(entry["crc"]),
+                label=label,
+            )
+        else:
+            if len(payload) != int(entry["usize"]):
+                raise ZipValidationError(
+                    f"{label} is STORED with {len(payload)} bytes but declares "
+                    f"{entry['usize']} uncompressed bytes"
                 )
-                dst_info.compress_type = src_info.compress_type
-                dst_info.create_system = src_info.create_system
-                dst_info.external_attr = src_info.external_attr
-                dst_info.internal_attr = src_info.internal_attr
-                dst_info.flag_bits = src_info.flag_bits & ~GPB_DATA_DESCRIPTOR_MASK
-                if dst_info.compress_type == zipfile.ZIP_DEFLATED:
-                    dst_zf.writestr(dst_info, payload, compress_type=zipfile.ZIP_DEFLATED, compresslevel=6)
-                else:
-                    dst_zf.writestr(dst_info, payload, compress_type=zipfile.ZIP_STORED)
-        os.replace(tmp_path, apk_path)
+            actual_crc = zlib.crc32(payload) & 0xFFFFFFFF
+            if actual_crc != int(entry["crc"]):
+                raise ZipValidationError(
+                    f"{label} STORED CRC {actual_crc:#010x} != declared {int(entry['crc']):#010x}"
+                )
+
+
+def verify_apk_entries(
+    apk_path: Path,
+    entries: list[dict[str, int | str | bytes]] | None = None,
+    *,
+    require_alignment: bool = True,
+) -> list[dict[str, int | str | bytes]]:
+    """Full apksig-equivalent and Android-runtime verification of an APK."""
+    if entries is None:
+        entries = parse_and_validate_zip_headers(
+            apk_path,
+            forbid_extra_fields=False,
+            check_contiguous=True,
+        )
+    verify_entry_metadata(apk_path, entries)
+    verify_entry_streams(apk_path, entries)
+    validate_apk_store_and_alignment(apk_path, entries, require_alignment=require_alignment)
+    return entries
+
+
+def canonicalize_apk(apk_path: Path, entries: list[dict[str, int | str | bytes]]) -> None:
+    """Rewrite an APK so every ZIP record is canonical and self-consistent.
+
+    The rewrite keeps entry order and payload bytes, but rebuilds the Local File
+    Headers and the Central Directory from a single source of truth:
+
+    * identical flags/method/CRC-32/sizes in both headers,
+    * no Data Descriptors and no ZIP64,
+    * ``resources.arsc`` and ``assets/sounds/*.mp3`` stored so ``openFd`` works,
+    * STORED payloads aligned with a well-formed 0xD935 alignment extra field.
+    """
+    source = apk_path.read_bytes()
+    ordered = sorted(entries, key=lambda item: int(item["lfh_offset"]))
+
+    out = bytearray()
+    cd_records: list[dict[str, int | str | bytes]] = []
+    stored_count = 0
+    deflated_count = 0
+
+    for entry in ordered:
+        name = str(entry["name"])
+        name_bytes = bytes(entry["name_bytes"])
+        method_in = int(entry["method"])
+        payload = source[int(entry["data_start"]) : int(entry["data_end"])]
+        if method_in == zipfile.ZIP_DEFLATED:
+            raw = inflate_exact(
+                payload,
+                expected_usize=int(entry["usize"]),
+                expected_crc=int(entry["crc"]),
+                label=f"{apk_path}: entry {name!r}",
+            )
+        else:
+            raw = payload
+
+        crc = zlib.crc32(raw) & 0xFFFFFFFF
+        usize = len(raw)
+
+        method = zipfile.ZIP_DEFLATED
+        if must_store(name) or name.endswith("/"):
+            method = zipfile.ZIP_STORED
+        body = raw if method == zipfile.ZIP_STORED else deflate_raw(raw)
+        if method == zipfile.ZIP_STORED:
+            stored_count += 1
+        else:
+            deflated_count += 1
+
+        flags = GPB_EFS_MASK if any(byte > 0x7F for byte in name_bytes) else 0
+        lfh_offset = len(out)
+        extra = b""
+        if method == zipfile.ZIP_STORED and body:
+            extra = alignment_extra_field(alignment_for(name), lfh_offset + 30 + len(name_bytes))
+
+        mdate = int(entry["mdate"]) or DEFAULT_DATE
+        mtime = int(entry["mtime"]) if int(entry["mdate"]) else 0
+
+        out += struct.pack(
+            "<IHHHHHIIIHH",
+            LFH_SIGNATURE,
+            max(ZIP_VERSION, 10),
+            flags,
+            method,
+            mtime,
+            mdate,
+            crc,
+            len(body),
+            usize,
+            len(name_bytes),
+            len(extra),
+        )
+        out += name_bytes
+        out += extra
+        out += body
+
+        cd_records.append(
+            {
+                "name_bytes": name_bytes,
+                "extra": extra,
+                "flags": flags,
+                "method": method,
+                "mtime": mtime,
+                "mdate": mdate,
+                "crc": crc,
+                "csize": len(body),
+                "usize": usize,
+                "lfh_offset": lfh_offset,
+                "ext_attr": int(entry["ext_attr"]),
+                "int_attr": int(entry["int_attr"]),
+            }
+        )
+
+    cd_offset = len(out)
+    for record in cd_records:
+        out += struct.pack(
+            "<IHHHHHHIIIHHHHHII",
+            CDH_SIGNATURE,
+            ZIP_VERSION,
+            ZIP_VERSION,
+            int(record["flags"]),
+            int(record["method"]),
+            int(record["mtime"]),
+            int(record["mdate"]),
+            int(record["crc"]),
+            int(record["csize"]),
+            int(record["usize"]),
+            len(bytes(record["name_bytes"])),
+            len(bytes(record["extra"])),
+            0,  # file comment length
+            0,  # disk number start
+            int(record["int_attr"]),
+            int(record["ext_attr"]),
+            int(record["lfh_offset"]),
+        )
+        out += bytes(record["name_bytes"])
+        out += bytes(record["extra"])
+    cd_size = len(out) - cd_offset
+
+    out += struct.pack(
+        "<IHHHHIIH",
+        EOCD_SIGNATURE,
+        0,
+        0,
+        len(cd_records),
+        len(cd_records),
+        cd_size,
+        cd_offset,
+        0,
+    )
+
+    temp_path = apk_path.with_name(f".{apk_path.name}.canonical")
+    try:
+        temp_path.write_bytes(bytes(out))
+        os.replace(temp_path, apk_path)
     finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
+        if temp_path.exists():
+            temp_path.unlink()
+
+    print(
+        f"Canonicalized APK {apk_path.name}: {len(cd_records)} entries "
+        f"({stored_count} STORED, {deflated_count} DEFLATED), 0 Data Descriptors"
+    )
 
 
 def validate_apk_store_and_alignment(
     apk_path: Path,
-    entries: list[dict[str, int | str]],
+    entries: list[dict[str, int | str | bytes]],
     *,
     require_alignment: bool,
 ) -> None:
-    """Confirm resources.arsc and sound assets stay uncompressed (and 4-byte aligned when aligned)."""
+    """Confirm resources.arsc and sound assets stay uncompressed (and 4-byte aligned)."""
     for entry in entries:
         name = str(entry["name"])
         method = int(entry["method"])
         data_start = int(entry["data_start"])
-        if name == "resources.arsc" or (name.startswith("assets/sounds/") and name.endswith(".mp3")):
+        if must_store(name):
             if method != zipfile.ZIP_STORED:
                 raise ZipValidationError(
-                    f"{apk_path}: {name!r} must be ZIP_STORED (0), found method={method}"
+                    f"{apk_path}: {name!r} must be ZIP_STORED (0), found method={method} "
+                    f"(AssetManager.openFd() cannot map compressed assets)"
                 )
         if require_alignment and method == zipfile.ZIP_STORED and int(entry["usize"]) > 0:
-            align = 4096 if name.endswith(".so") else 4
+            align = alignment_for(name)
             if data_start % align != 0:
                 raise ZipValidationError(
-                    f"{apk_path}: STORED entry {name!r} at offset {data_start} is not {align}-byte aligned"
+                    f"{apk_path}: STORED entry {name!r} at offset {data_start} is not "
+                    f"{align}-byte aligned"
                 )
 
 
-def ensure_apk_aligned_and_normalized(apk_path: Path, zipalign_bin: str | None) -> None:
-    """Ensure the unsigned APK has zero Data Descriptors and passes 4-byte zipalign."""
-    needs_rewrite = False
-    try:
-        parse_and_validate_zip_headers(
-            apk_path,
-            forbid_extra_fields=False,
-            check_contiguous=False,
-        )
-    except ZipValidationError as exc:
-        print(f"Normalizing APK headers for {apk_path.name}: {exc}")
-        needs_rewrite = True
-
-    if needs_rewrite:
-        rewrite_apk_without_data_descriptors(apk_path)
-
-    if zipalign_bin:
-        with tempfile.NamedTemporaryFile(
-            prefix="aligned-",
-            suffix=".apk",
-            dir=str(apk_path.parent),
-            delete=False,
-        ) as aligned_handle:
-            aligned_path = Path(aligned_handle.name)
-        try:
-            subprocess.run(
-                [zipalign_bin, "-f", "-p", "4", str(apk_path), str(aligned_path)],
-                check=True,
-            )
-            os.replace(aligned_path, apk_path)
-        finally:
-            if aligned_path.exists():
-                aligned_path.unlink()
-        subprocess.run([zipalign_bin, "-c", "4", str(apk_path)], check=True)
+def normalize_apk(apk_path: Path, zipalign_bin: str | None) -> None:
+    """Rewrite the APK into canonical form, then verify it like apksig and Android do."""
+    entries = parse_and_validate_zip_headers(
+        apk_path,
+        forbid_extra_fields=False,
+        check_contiguous=False,
+        allow_data_descriptors=True,
+    )
+    canonicalize_apk(apk_path, entries)
 
     entries = parse_and_validate_zip_headers(
         apk_path,
         forbid_extra_fields=False,
-        check_contiguous=bool(zipalign_bin or needs_rewrite),
+        check_contiguous=True,
     )
-    validate_apk_store_and_alignment(
-        apk_path,
-        entries,
-        require_alignment=bool(zipalign_bin),
-    )
+    verify_apk_entries(apk_path, entries, require_alignment=True)
+
+    if zipalign_bin:
+        # The APK is already aligned by the canonical writer; let the Android SDK's own
+        # tool confirm that instead of rewriting the file a second time.
+        subprocess.run([zipalign_bin, "-c", "4", str(apk_path)], check=True)
+
     print(f"Verified APK {apk_path.name}: {len(entries)} entries, 0 Data Descriptors")
 
 
-def build_release_zip(apk_paths: list[Path], output_zip: Path, zipalign_bin: str | None) -> None:
+def build_release_zip(
+    apk_paths: list[Path],
+    output_zip: Path,
+    zipalign_bin: str | None,
+) -> None:
     if not apk_paths:
         raise ZipValidationError("No APK files provided to package")
 
@@ -397,7 +737,7 @@ def build_release_zip(apk_paths: list[Path], output_zip: Path, zipalign_bin: str
         raise ZipValidationError("'zip' CLI utility is required to build standard seekable archives")
 
     for apk in apk_paths:
-        ensure_apk_aligned_and_normalized(apk, zipalign_bin)
+        normalize_apk(apk, zipalign_bin)
 
     if output_zip.exists():
         output_zip.unlink()
@@ -417,6 +757,9 @@ def verify_release_zip(zip_path: Path, expected_apks: list[Path]) -> None:
         raise ZipValidationError(f"Release ZIP not found: {zip_path}")
 
     entries = parse_and_validate_zip_headers(zip_path, forbid_extra_fields=True)
+    verify_entry_metadata(zip_path, entries)
+    verify_entry_streams(zip_path, entries)
+
     expected_by_name = {apk.name: sha256_file(apk) for apk in expected_apks}
     actual_names = {str(entry["name"]) for entry in entries}
 
@@ -440,7 +783,7 @@ def verify_release_zip(zip_path: Path, expected_apks: list[Path]) -> None:
                     f"{zip_path}: SHA-256 mismatch for {name}: "
                     f"{actual_sha} != {expected_by_name[name]}"
                 )
-            inner_entries = parse_and_validate_zip_headers(extracted_apk, forbid_extra_fields=False)
+            inner_entries = verify_apk_entries(extracted_apk, require_alignment=True)
             print(
                 f"Verified extracted {name} ({extracted_apk.stat().st_size} bytes, "
                 f"sha256={actual_sha[:16]}..., {len(inner_entries)} inner entries)"
@@ -472,12 +815,22 @@ def main(argv: list[str] | None = None) -> int:
         help="Expected original .apk file (may be specified multiple times)",
     )
 
+    normalize_parser = subparsers.add_parser(
+        "normalize",
+        help="Canonicalize an unsigned APK in place without packaging it",
+    )
+    normalize_parser.add_argument("--zipalign", type=str, default=None, help="Optional zipalign binary")
+    normalize_parser.add_argument("apks", nargs="+", type=Path, help="Input .apk files")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "build":
             build_release_zip(args.apks, args.output, args.zipalign)
         elif args.command == "verify":
             verify_release_zip(args.zip_path, args.expected_apks)
+        elif args.command == "normalize":
+            for apk in args.apks:
+                normalize_apk(apk, args.zipalign)
     except (ZipValidationError, subprocess.CalledProcessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
