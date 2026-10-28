@@ -435,6 +435,23 @@ jobs:
       - name: Publish release APK summary
         shell: bash
         run: |
+          set -euo pipefail
+
+          files=()
+          archive="release-artifacts/open-fire-release-apks.zip"
+          if [[ -f "$archive" ]]; then
+            files+=("$archive")
+          fi
+          for apk in release-artifacts/*.apk; do
+            if [[ -f "$apk" ]]; then
+              files+=("$apk")
+            fi
+          done
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No release artifacts to summarize"
+            exit 0
+          fi
+
           {
             echo '### Open Fire Release APKs'
             echo
@@ -442,7 +459,7 @@ jobs:
             echo
             echo '| File | Purpose | Size | SHA-256 Checksum |'
             echo '| --- | --- | --- | --- |'
-            for file in release-artifacts/open-fire-release.apks.zip release-artifacts/*.apk; do
+            for file in "${files[@]}"; do
               filename="$(basename "$file")"
               case "$filename" in
                 open-fire-release-unsigned.apk) purpose='Unsigned package for Play Console / distributor signing' ;;
