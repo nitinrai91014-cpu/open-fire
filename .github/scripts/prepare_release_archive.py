@@ -554,11 +554,21 @@ def parse_and_validate_zip_headers(
                     f"{archive_path}: gap/Data Descriptor of "
                     f"{int(nxt['lfh_offset']) - int(cur['data_end'])} bytes after {cur['name']!r}"
                 )
-        if int(entries_sorted[-1]["data_end"]) != content_end:
+        last_entry_end = int(entries_sorted[-1]["data_end"])
+        if signing_block:
+            # apksig pads the area in front of the APK Signing Block (it aligns the
+            # block, and those pad bytes are covered by the v2/v3 digest). Any other
+            # writer that pads there is equally fine for the platform, so the region
+            # is accepted as long as it does not overlap an entry.
+            if last_entry_end > content_end:
+                raise ZipValidationError(
+                    f"{archive_path}: last entry {entries_sorted[-1]['name']!r} overlaps the "
+                    f"APK Signing Block at {content_end}"
+                )
+        elif last_entry_end != content_end:
             raise ZipValidationError(
                 f"{archive_path}: gap/Data Descriptor of "
-                f"{content_end - int(entries_sorted[-1]['data_end'])} bytes before "
-                f"{'the APK Signing Block' if signing_block else 'the Central Directory'}"
+                f"{content_end - last_entry_end} bytes before the Central Directory"
             )
 
     try:

@@ -109,7 +109,14 @@ SIG_PAIR_ID = 0x7109871A  # APK Signature Scheme v2 block ID
 PADDING_PAIR_ID = 0x42726577  # "werB": what apksig writes to align the block
 
 
-def add_signing_block(apk_path, *, pair_value=b"\x00" * 32, corrupt_sizes=False, broken_pair=False):
+def add_signing_block(
+    apk_path,
+    *,
+    pair_value=b"\x00" * 32,
+    corrupt_sizes=False,
+    broken_pair=False,
+    leading_padding=b"",
+):
     data = bytearray(apk_path.read_bytes())
     eocd_pos = data.rfind(b"PK\x05\x06")
     cd_offset = struct.unpack_from("<I", data, eocd_pos + 16)[0]
@@ -123,6 +130,9 @@ def add_signing_block(apk_path, *, pair_value=b"\x00" * 32, corrupt_sizes=False,
     size = archive.SIG_BLOCK_MAGIC_SIZE + archive.SIG_BLOCK_SIZE_FIELD + len(pair)
     trailing = size + 8 if corrupt_sizes else size
     block = struct.pack("<Q", size) + pair + struct.pack("<Q", trailing) + archive.SIG_BLOCK_MAGIC
+    # apksig pads the area in front of the block (it aligns it); the platform
+    # ignores those bytes, so packaging must accept them.
+    block = leading_padding + block
     data[cd_offset:cd_offset] = block
     new_eocd = eocd_pos + len(block)
     struct.pack_into("<I", data, new_eocd + 16, cd_offset + len(block))
@@ -155,6 +165,20 @@ class SignedApkTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.apk = self.root / "open-fire-release.apk"
         self.signed_bytes = signed_apk(self.apk)
+
+    def test_padding_before_the_signing_block_is_accepted(self):
+        """apksig aligns the block and pads the gap in front of it."""
+        apk = self.root / "padded.apk"
+        signed_apk(apk)
+        data = bytearray(apk.read_bytes())
+        eocd_pos = data.rfind(b"PK\x05\x06")
+        cd_offset = struct.unpack_from("<I", data, eocd_pos + 16)[0]
+        trailing_size = struct.unpack_from("<Q", data, cd_offset - 24)[0]
+        start = cd_offset - 8 - trailing_size
+        padded = data[:start] + b"\x00" * 850 + data[start:]
+        struct.pack_into("<I", padded, eocd_pos + 850 + 16, cd_offset + 850)
+        apk.write_bytes(bytes(padded))
+        archive.verify_apk_entries(apk)
 
     def test_signing_block_is_detected_and_validated(self):
         self.assertTrue(archive.apk_has_signing_block(self.apk))
