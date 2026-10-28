@@ -1,26 +1,12 @@
 #!/usr/bin/env python3
 """Normalize unsigned release APKs and package a standard seekable ZIP archive.
 
-Why this script exists:
-`actions/upload-artifact` (when `archive: true`, the default) wraps uploaded files
-on the fly using Node `archiver` (`compress-commons` streaming mode). Streaming mode
-sets General Purpose Bit 3 (`0x0008`, Extended Local Header / trailing Data Descriptor),
-writes `crc32 = 0`, `compressed_size = 0`, and `uncompressed_size = 0` into the Local
-File Header (`PK\\x03\\x04`), emits ZIP64 `version_made_by = 4.5` (`0x032d`), and wraps
-incompressible APK/MP3 bytes in raw DEFLATE Type-0 (`STORED`) blocks that contain literal
-inner APK `PK\\x03\\x04` and `PK\\x07\\x08` signatures. Stream/LFH-oriented extractors and
-Android/Apktool ZIP readers fail on such archives with `W: invalid stored block lengths`
-(from `zlib` `inflate.c`).
-
-This script:
-1. Verifies (and if necessary rewrites + `zipalign`s) each unsigned `.apk` so no entry
-   inside the APK carries a streaming Data Descriptor (`flags & 0x0008`) or mismatched
-   Local File Header vs Central Directory sizes/CRCs.
-2. Packages the `.apk` files into a standard seekable ZIP 2.0 archive using `zip -j -X -6`
-   (no Data Descriptors, no extra fields, exact CRC32 and sizes in every Local File Header).
-3. Strictly validates raw Local File Headers, Central Directory records, raw DEFLATE streams
-   (in small streaming chunks), and extracted APK SHA-256 digests so `actions/upload-artifact`
-   can upload the verified `.zip` directly with `archive: false`.
+The outer archive stores APKs without compression: APKs are already ZIP files,
+so recompressing them saves little and adds another DEFLATE stream to decode.
+The upload action must upload this file directly, not wrap it in another ZIP.
+Both the archive and its APKs are checked with independent ZIP readers in CI.
+ZIP data descriptors and stored DEFLATE blocks are valid formats; they are not
+by themselves evidence of corruption.
 """
 
 from __future__ import annotations
@@ -73,6 +59,8 @@ def parse_and_validate_zip_headers(
     eocd_pos = data.rfind(b"PK\x05\x06", search_start)
     if eocd_pos < 0:
         raise ZipValidationError(f"{archive_path}: missing End of Central Directory signature")
+    if eocd_pos + 22 > size:
+        raise ZipValidationError(f"{archive_path}: truncated End of Central Directory")
 
     (
         eocd_sig,
@@ -417,8 +405,8 @@ def build_release_zip(apk_paths: list[Path], output_zip: Path, zipalign_bin: str
 
     # -j: store flat basenames without directory prefixes
     # -X: strip extra OS file attributes so LFH and CDH extra_field_length == 0
-    # -6: standard DEFLATE with seekable LFH rewrite (flags=0x0000, no Data Descriptors)
-    cmd = [zip_bin, "-j", "-X", "-6", str(output_zip), *[str(p) for p in apk_paths]]
+    # -0: store APK bytes verbatim, without an outer DEFLATE stream
+    cmd = [zip_bin, "-j", "-X", "-0", str(output_zip), *[str(p) for p in apk_paths]]
     subprocess.run(cmd, check=True)
 
     verify_release_zip(output_zip, expected_apks=apk_paths)
