@@ -56,16 +56,16 @@ class GameplayUpgradeTest {
             assertTrue("normal interval=$interval", interval in 1_500L..2_000L)
         }
         assertTrue(
-            "normal fire must not be a fixed clock",
-            (1..100).map { RobertRules.normalTacticalInterval(random) }.distinct().size > 10
+            "normal fire must use both tactical beats",
+            (1..100).map { RobertRules.normalTacticalInterval(random) }.toSet() == setOf(1_500L, 2_000L)
         )
     }
 
     @Test
-    fun protectedRobertFiresOnceEverySecond() {
+    fun protectedRobertFiresAtTheFastContinuousBeat() {
         val random = Random(5)
         assertEquals(
-            1_000L,
+            1_500L,
             RobertRules.tacticalFireInterval(
                 enemyHasDefence = true,
                 playerHasDefence = false,

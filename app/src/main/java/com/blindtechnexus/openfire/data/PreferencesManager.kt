@@ -9,6 +9,7 @@ import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameStats
 import com.blindtechnexus.openfire.model.Inventory
 import com.blindtechnexus.openfire.model.Progression
+import com.blindtechnexus.openfire.model.RunSpeed
 import com.blindtechnexus.openfire.model.SoundTheme
 import com.blindtechnexus.openfire.model.Weapon
 
@@ -214,6 +215,7 @@ class PreferencesManager(context: Context) {
             antiBombs = map["antiBombs"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
             extensions = extensions,
             lastWeaponId = Weapon.fromId(map["lastWeapon"])?.id ?: Weapon.SHORT_GUN.id,
+            lastRunSpeedId = RunSpeed.fromId(map["lastRunSpeed"]).id,
             missilePowers = missilePowers,
             bombPowers = bombPowers,
             antiMissileRewardGranted =
@@ -232,6 +234,7 @@ class PreferencesManager(context: Context) {
             "antiMissiles" to inventory.antiMissiles.toString(),
             "antiBombs" to inventory.antiBombs.toString(),
             "lastWeapon" to inventory.lastWeaponId,
+            "lastRunSpeed" to RunSpeed.fromId(inventory.lastRunSpeedId).id,
             "missilePowers" to inventory.missilePowers.toString(),
             "bombPowers" to inventory.bombPowers.toString(),
             "antiMissileRewardGranted" to inventory.antiMissileRewardGranted.toString(),

@@ -104,7 +104,7 @@ object RobertRules {
      * [NORMAL_FIRE_MAX_MS] between shots, or exactly [CONTINUOUS_FIRE_MS]
      * while Robert is pressing a defenceless player.
      */
-    val NORMAL_INTERVALS_MS = listOf(2_000L, 2_500L, 3_000L)
+    val NORMAL_INTERVALS_MS = listOf(1_500L, 2_000L)
 
     /** Fastest normal shot: 1.5 seconds after the previous one. */
     const val NORMAL_FIRE_MIN_MS = 1_500L
@@ -112,8 +112,8 @@ object RobertRules {
     /** Slowest normal shot: 2 seconds after the previous one. */
     const val NORMAL_FIRE_MAX_MS = 2_000L
 
-    /** Continuous pressure fire: exactly one shot every second. */
-    const val CONTINUOUS_FIRE_MS = 1_000L
+    /** Continuous pressure fire uses the fastest requested cadence. */
+    const val CONTINUOUS_FIRE_MS = 1_500L
 
     /** Maximum number of shots Robert fires in a row before he pauses. */
     const val MAX_SUCCESSIVE_SHOTS = 2
@@ -368,7 +368,7 @@ object RobertRules {
      * exchange is judged on its own.
      */
     fun shouldFleeFight(robertHitsTaken: Int, robertHitsLanded: Int): Boolean =
-        robertHitsTaken > robertHitsLanded && robertHitsTaken >= 2
+        robertHitsTaken >= 2 && robertHitsTaken > robertHitsLanded
 
     /**
      * True when a one-sided exchange must make Robert run as fast as
@@ -522,35 +522,27 @@ object RobertRules {
             playerHpFraction <= EXTREMELY_WEAK_FRACTION
 
     /**
-     * The live firing rhythm of a battle.
-     *
-     *  - normally a random interval between 1.5 s and 2 s, never a fixed
-     *    clock and never a machine gun;
-     *  - exactly 1 s while Robert presses a pinned or defenceless player
-     *    (see [shouldPressFromDefence]).
+     * The live firing rhythm uses a deliberately irregular two-beat cadence:
+     * ordinary shots alternate unpredictably between 1.5 and 2 seconds.
      */
-    /** A single random normal interval: 1.5 s to 2 s, inclusive. */
     fun normalTacticalInterval(random: Random): Long =
-        NORMAL_FIRE_MIN_MS +
-            random.nextLong(0, NORMAL_FIRE_MAX_MS - NORMAL_FIRE_MIN_MS + 1)
+        NORMAL_INTERVALS_MS[random.nextInt(NORMAL_INTERVALS_MS.size)]
 
     fun tacticalFireInterval(
         enemyHasDefence: Boolean,
         playerHasDefence: Boolean,
         playerWeaponDamaged: Boolean,
         playerHpFraction: Float,
-        random: Random
+        random: Random,
+        enemyHasAdvantage: Boolean = true
     ): Long {
-        if (shouldPressFromDefence(
-                enemyHasDefence = enemyHasDefence,
-                playerHasDefence = playerHasDefence,
-                playerWeaponDamaged = playerWeaponDamaged,
-                playerHpFraction = playerHpFraction
-            )
-        ) {
-            return CONTINUOUS_FIRE_MS
-        }
-        return normalTacticalInterval(random)
+        val mayPress = enemyHasAdvantage && shouldPressFromDefence(
+            enemyHasDefence = enemyHasDefence,
+            playerHasDefence = playerHasDefence,
+            playerWeaponDamaged = playerWeaponDamaged,
+            playerHpFraction = playerHpFraction
+        )
+        return if (mayPress) CONTINUOUS_FIRE_MS else normalTacticalInterval(random)
     }
 
     /**
@@ -829,18 +821,15 @@ object RobertRules {
      * retreating one.
      */
     fun fireIntervalWindow(situation: CombatSituation, fleeing: Boolean): LongRange = when {
-        fleeing -> 2_500L..3_000L
-        situation == CombatSituation.PRESSURE -> 2_000L..2_500L
-        situation == CombatSituation.ADVANTAGE -> 2_000L..2_500L
-        situation == CombatSituation.EVEN -> 2_000L..3_000L
-        else -> 2_500L..3_000L
+        fleeing -> 2_000L..2_000L
+        else -> 1_500L..2_000L
     }
 
     /**
      * The window used while Robert presses a pinned player continuously. It is
      * still human, never a machine gun: 1.2 s to 2 s between the shots.
      */
-    fun continuousFireWindow(): LongRange = 1_200L..2_000L
+    fun continuousFireWindow(): LongRange = 1_500L..2_000L
 
     /** A jittered delay before Robert's next shot, for the situation. */
     fun fireIntervalMs(
@@ -849,16 +838,9 @@ object RobertRules {
         random: Random,
         continuous: Boolean = false
     ): Long {
-        val window = if (continuous && !fleeing) {
-            continuousFireWindow()
-        } else {
-            fireIntervalWindow(situation, fleeing)
-        }
-        return if (window.last <= window.first) {
-            window.first
-        } else {
-            window.first + (random.nextFloat() * (window.last - window.first)).toLong()
-        }
+        if (fleeing) return NORMAL_FIRE_MAX_MS
+        if (continuous) return NORMAL_INTERVALS_MS[random.nextInt(NORMAL_INTERVALS_MS.size)]
+        return normalTacticalInterval(random)
     }
 
     /**
@@ -888,11 +870,6 @@ object RobertRules {
         if (continuous) return fireIntervalMs(situation, fleeing, random, true)
         // Not pinned: the human 2 s / 2.5 s / 3 s rhythm, jittered by the
         // situation so a losing Robert really does shoot more slowly.
-        return when (situation) {
-            CombatSituation.DISADVANTAGE -> 2_500L + (random.nextFloat() * 500f).toLong()
-            CombatSituation.ADVANTAGE, CombatSituation.PRESSURE ->
-                2_000L + (random.nextFloat() * 500f).toLong()
-            CombatSituation.EVEN -> normalFireInterval(random)
-        }
+        return normalTacticalInterval(random)
     }
 }
