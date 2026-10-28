@@ -639,7 +639,7 @@ class AudioManager(private val context: Context) {
      */
     fun playMixed(keys: List<String>, volume: Float = 1.0f, posX: Float = 0f, posY: Float = 0f, posZ: Float = 0f) {
         for (key in keys) {
-            playSound(key, volume = volume, rate = rate, posX = posX, posY = posY, posZ = posZ)
+            playSound(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
         }
     }
 
