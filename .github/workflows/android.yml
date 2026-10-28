@@ -230,17 +230,21 @@ jobs:
             echo "Prepared unsigned APK: $destination_apk"
           done
 
+          # shellcheck source=.github/scripts/ci-helpers.sh
+          source .github/scripts/ci-helpers.sh
+
           # Canonicalize (one consistent set of ZIP headers, stored and aligned
           # sound assets, no Data Descriptors) BEFORE signing: rewriting the ZIP
           # after signing drops the APK Signing Block, which is the "invalid
           # package" failure on the device.
-          python3 .github/scripts/prepare_release_archive.py normalize \
+          run_annotated "canonicalize release APK" \
+            python3 .github/scripts/prepare_release_archive.py normalize \
             --zipalign "$zipalign" \
             "${prepared_apks[@]}"
 
           for prepared_apk in "${prepared_apks[@]}"; do
-            unzip -tq "$prepared_apk"
-            "$zipalign" -c 4 "$prepared_apk"
+            run_annotated "unzip -t $prepared_apk" unzip -tq "$prepared_apk"
+            run_annotated "zipalign -c $prepared_apk" "$zipalign" -c 4 "$prepared_apk"
             if "$apksigner" verify "$prepared_apk" >/dev/null 2>&1; then
               echo "::error::Expected $prepared_apk to remain unsigned after alignment"
               exit 1
@@ -305,11 +309,16 @@ jobs:
         run: |
           set -euo pipefail
 
+          # shellcheck source=.github/scripts/ci-helpers.sh
+          source .github/scripts/ci-helpers.sh
+
           # The installable artifact must be signed with v2+ and verify for API 24..36.
-          scripts/verify-installable-apk.sh --require-signature release-artifacts/open-fire-release.apk
+          run_annotated "verify installable APK" \
+            scripts/verify-installable-apk.sh --require-signature release-artifacts/open-fire-release.apk
 
           # The distributor artifact must stay unsigned, aligned and structurally valid.
-          scripts/verify-installable-apk.sh release-artifacts/open-fire-release-unsigned.apk
+          run_annotated "verify unsigned APK" \
+            scripts/verify-installable-apk.sh release-artifacts/open-fire-release-unsigned.apk
 
           sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           mapfile -t apksigners < <(find "$sdk_root/build-tools" -type f -name apksigner -print | sort -V)
@@ -323,9 +332,10 @@ jobs:
           fi
 
           for apk in release-artifacts/*.apk; do
-            unzip -tq "$apk"
-            "$zipalign" -c 4 "$apk"
-            java .github/scripts/VerifyZipStreams.java "$apk"
+            run_annotated "unzip -t $apk" unzip -tq "$apk"
+            run_annotated "zipalign -c $apk" "$zipalign" -c 4 "$apk"
+            run_annotated "java VerifyZipStreams $apk" \
+              java .github/scripts/VerifyZipStreams.java "$apk"
           done
 
       - name: Round-trip the release APK through apksig
@@ -355,9 +365,13 @@ jobs:
             -validity 1 \
             -dname "CN=Open Fire CI"
 
+          # shellcheck source=.github/scripts/ci-helpers.sh
+          source .github/scripts/ci-helpers.sh
+
           signed="$RUNNER_TEMP/open-fire-release-roundtrip.apk"
           rm -f "$signed"
-          scripts/sign-release-apk.sh \
+          run_annotated "sign round-trip APK" \
+            scripts/sign-release-apk.sh \
             release-artifacts/open-fire-release-unsigned.apk \
             --out "$signed" \
             --ks "$keystore" \
@@ -404,14 +418,19 @@ jobs:
             exit 1
           fi
 
+          # shellcheck source=.github/scripts/ci-helpers.sh
+          source .github/scripts/ci-helpers.sh
+
           # `package` verifies the APKs as they are (it never rewrites a signed
           # package) and stores them without recompression in a seekable ZIP.
-          python3 .github/scripts/prepare_release_archive.py package \
+          run_annotated "prepare_release_archive.py package" \
+            python3 .github/scripts/prepare_release_archive.py package \
             --output "$archive_zip" \
             "${apks[@]}"
 
-          unzip -tq "$archive_zip"
-          java .github/scripts/VerifyZipStreams.java "$archive_zip" "${apks[@]}"
+          run_annotated "unzip -t $archive_zip" unzip -tq "$archive_zip"
+          run_annotated "java VerifyZipStreams $archive_zip" \
+            java .github/scripts/VerifyZipStreams.java "$archive_zip" "${apks[@]}"
 
       - name: Publish release APK summary
         shell: bash
@@ -483,8 +502,12 @@ jobs:
 
           # The bytes a user downloads must contain the same installable APK that was
           # verified above, so extract it again and re-check the signature.
+          # shellcheck source=.github/scripts/ci-helpers.sh
+          source .github/scripts/ci-helpers.sh
+
           rm -rf verified-download/extracted
           mkdir -p verified-download/extracted
           unzip -q "$downloaded_zip" -d verified-download/extracted
-          scripts/verify-installable-apk.sh --require-signature \
+          run_annotated "verify downloaded installable APK" \
+            scripts/verify-installable-apk.sh --require-signature \
             verified-download/extracted/open-fire-release.apk
