@@ -217,7 +217,9 @@ jobs:
             echo "Prepared unsigned APK: $destination_apk"
           done
 
-          # Normalize and align APKs, then store them without recompressing in a seekable ZIP.
+          # Canonicalize the APKs (one consistent set of ZIP headers, stored and aligned
+          # sound assets, no Data Descriptors), then store them without recompressing in
+          # a seekable ZIP.
           python3 .github/scripts/prepare_release_archive.py build \
             --zipalign "$zipalign" \
             --output "$archive_zip" \
@@ -234,6 +236,78 @@ jobs:
 
           unzip -tq "$archive_zip"
           java .github/scripts/VerifyZipStreams.java "$archive_zip" "${prepared_apks[@]}"
+
+      - name: Round-trip the release APKs through apksig
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The reported failure
+          #   W: Malformed ZIP entry: assets/sounds/medkit.mp3
+          #   W: invalid stored block lengths
+          # comes from apksig: it takes an entry's compression method and compressed size
+          # from the Central Directory and inflates that byte range. Signing with the JAR
+          # (v1) scheme forces apksig to inflate every entry, so a header that disagrees
+          # with its payload breaks this step instead of the published artifact.
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          mapfile -t apksigners < <(find "$sdk_root/build-tools" -type f -name apksigner -print | sort -V)
+          if [[ ${#apksigners[@]} -eq 0 ]]; then
+            echo "::error::apksigner was not found in the Android SDK build-tools"
+            exit 1
+          fi
+          apksigner="${apksigners[${#apksigners[@]}-1]}"
+
+          keystore="$RUNNER_TEMP/ci-signing.p12"
+          rm -f "$keystore"
+          keytool -genkeypair \
+            -keystore "$keystore" \
+            -storetype PKCS12 \
+            -storepass android \
+            -keypass android \
+            -alias ci-release \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 1 \
+            -dname "CN=Open Fire CI"
+
+          shopt -s nullglob
+          apks=(release-artifacts/*.apk)
+          if [[ ${#apks[@]} -eq 0 ]]; then
+            echo "::error::No release APKs to sign"
+            exit 1
+          fi
+
+          for apk in "${apks[@]}"; do
+            signed="$RUNNER_TEMP/$(basename "$apk" .apk)-ci-signed.apk"
+            rm -f "$signed"
+            "$apksigner" sign \
+              --ks "$keystore" \
+              --ks-key-alias ci-release \
+              --ks-pass pass:android \
+              --key-pass pass:android \
+              --min-sdk-version 24 \
+              --v1-signing-enabled true \
+              --v2-signing-enabled true \
+              --v3-signing-enabled true \
+              --out "$signed" \
+              "$apk"
+
+            verify_report="$( "$apksigner" verify --verbose --min-sdk-version 24 "$signed" )"
+            printf '%s\n' "$verify_report"
+            for scheme in \
+              'v1 scheme \(JAR signing\)' \
+              'v2 scheme .*' \
+              'v3 scheme .*'; do
+              if ! grep -Eq "$scheme: true" <<< "$verify_report"; then
+                echo "::error::$apk does not verify with ${scheme//\\/} after apksig signing"
+                exit 1
+              fi
+            done
+
+            unzip -tq "$signed"
+            java .github/scripts/VerifyZipStreams.java "$signed"
+            rm -f "$signed"
+          done
 
       - name: Publish release APK summary
         shell: bash
