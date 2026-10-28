@@ -21,3 +21,12 @@ __pycache__/
 /release-artifacts/
 /verified-download/
 
+# Personal signing keys and generated signature files. Never commit an upload
+# key: it is the only thing that lets an attacker publish an update to your app.
+*.jks
+*.keystore
+my-upload-key.*
+*.idsig
+# ...except the intentionally public CI test key (see .github/ci/README.md).
+!/.github/ci/open-fire-test.p12
+
