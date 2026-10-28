@@ -100,6 +100,159 @@ def write_raw_zip(path, entries):
     path.write_bytes(bytes(out))
 
 
+# A v2+ signature lives in an APK Signing Block between the last entry and the
+# Central Directory. These tests build that layout by hand so the packaging code
+# is exercised on signed APKs too (the shape produced by apksigner).
+SIG_PAIR_ID = 0x7109871A  # APK Signature Scheme v2 block ID
+
+
+PADDING_PAIR_ID = 0x42726577  # "werB": what apksig writes to align the block
+
+
+def add_signing_block(
+    apk_path,
+    *,
+    pair_value=b"\x00" * 32,
+    corrupt_sizes=False,
+    broken_pair=False,
+    leading_padding=b"",
+):
+    data = bytearray(apk_path.read_bytes())
+    eocd_pos = data.rfind(b"PK\x05\x06")
+    cd_offset = struct.unpack_from("<I", data, eocd_pos + 16)[0]
+    pair = struct.pack("<QI", 4 + len(pair_value), SIG_PAIR_ID) + pair_value
+    # apksigner pads the block with a second pair whose value is arbitrary bytes;
+    # real apksig output is not zero-filled, so it must not be rejected.
+    padding_value = b"\x00\xff\x7fopen-fire"
+    pair += struct.pack("<QI", 4 + len(padding_value), PADDING_PAIR_ID) + padding_value
+    if broken_pair:
+        pair = struct.pack("<QI", 4096, SIG_PAIR_ID)
+    size = archive.SIG_BLOCK_MAGIC_SIZE + archive.SIG_BLOCK_SIZE_FIELD + len(pair)
+    trailing = size + 8 if corrupt_sizes else size
+    block = struct.pack("<Q", size) + pair + struct.pack("<Q", trailing) + archive.SIG_BLOCK_MAGIC
+    # apksig pads the area in front of the block (it aligns it); the platform
+    # ignores those bytes, so packaging must accept them.
+    block = leading_padding + block
+    data[cd_offset:cd_offset] = block
+    new_eocd = eocd_pos + len(block)
+    struct.pack_into("<I", data, new_eocd + 16, cd_offset + len(block))
+    apk_path.write_bytes(bytes(data))
+    return bytes(data)
+
+
+def signed_apk(path):
+    """An APK layout like apksigner produces: v1 files, entries, signing block, CD."""
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("AndroidManifest.xml", b"manifest" * 50, compress_type=zipfile.ZIP_DEFLATED)
+        zf.writestr("resources.arsc", ARSC_BYTES, compress_type=zipfile.ZIP_STORED)
+        zf.writestr(MP3_NAME, MP3_BYTES, compress_type=zipfile.ZIP_STORED)
+        zf.writestr("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\r\n\r\n", compress_type=zipfile.ZIP_DEFLATED)
+        zf.writestr("META-INF/OPENFIRCI.SF", b"Signature-Version: 1.0\r\n\r\n", compress_type=zipfile.ZIP_DEFLATED)
+        zf.writestr("META-INF/OPENFIRCI.RSA", b"\x30\x82" + b"\x00" * 200, compress_type=zipfile.ZIP_DEFLATED)
+    # Entry data must be 4-byte aligned for the alignment check, which is what
+    # normalize_apk() would normally arrange. Canonicalize first, then sign.
+    entries = archive.parse_and_validate_zip_headers(path)
+    archive.canonicalize_apk(path, entries)
+    return add_signing_block(path)
+
+
+class SignedApkTests(unittest.TestCase):
+    """A signed APK must be validated and packaged verbatim, never rewritten."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.apk = self.root / "open-fire-release.apk"
+        self.signed_bytes = signed_apk(self.apk)
+
+    def test_padding_before_the_signing_block_is_accepted(self):
+        """apksig aligns the block and pads the gap in front of it."""
+        apk = self.root / "padded.apk"
+        signed_apk(apk)
+        data = bytearray(apk.read_bytes())
+        eocd_pos = data.rfind(b"PK\x05\x06")
+        cd_offset = struct.unpack_from("<I", data, eocd_pos + 16)[0]
+        trailing_size = struct.unpack_from("<Q", data, cd_offset - 24)[0]
+        start = cd_offset - 8 - trailing_size
+        padded = data[:start] + b"\x00" * 850 + data[start:]
+        struct.pack_into("<I", padded, eocd_pos + 850 + 16, cd_offset + 850)
+        apk.write_bytes(bytes(padded))
+        archive.verify_apk_entries(apk)
+
+    def test_signing_block_is_detected_and_validated(self):
+        self.assertTrue(archive.apk_has_signing_block(self.apk))
+        entries = archive.verify_apk_entries(self.apk)
+        self.assertIn("META-INF/MANIFEST.MF", {str(entry["name"]) for entry in entries})
+
+    def test_signed_apk_is_not_rewritten_by_build(self):
+        output = self.root / "release.zip"
+        archive.build_release_zip([self.apk], output, None)
+        self.assertEqual(self.apk.read_bytes(), self.signed_bytes)
+        with zipfile.ZipFile(output) as zf:
+            self.assertEqual(zf.read(self.apk.name), self.signed_bytes)
+
+    def test_canonicalizer_refuses_to_strip_a_signature(self):
+        entries = archive.parse_and_validate_zip_headers(self.apk)
+        with self.assertRaises(archive.ZipValidationError) as raised:
+            archive.canonicalize_apk(self.apk, entries)
+        self.assertIn("signed APK", str(raised.exception))
+        self.assertEqual(self.apk.read_bytes(), self.signed_bytes)
+
+    def test_mismatched_signing_block_sizes_are_rejected(self):
+        apk = self.root / "broken.apk"
+        signed_apk(apk)
+        data = bytearray(apk.read_bytes())
+        eocd_pos = data.rfind(b"PK\x05\x06")
+        cd_offset = struct.unpack_from("<I", data, eocd_pos + 16)[0]
+        struct.pack_into("<Q", data, cd_offset - 24, 12345)
+        apk.write_bytes(bytes(data))
+        with self.assertRaises(archive.ZipValidationError) as raised:
+            archive.parse_and_validate_zip_headers(apk)
+        self.assertIn("signing block", str(raised.exception).lower())
+
+    def test_non_zero_padding_pair_is_accepted(self):
+        """apksig's alignment padding pair carries opaque, non-zero bytes."""
+        self.assertTrue(archive.apk_has_signing_block(self.apk))
+        archive.verify_apk_entries(self.apk)
+
+    def test_pairs_that_do_not_fill_the_block_are_rejected(self):
+        apk = self.root / "overrun.apk"
+        signed_apk(apk)
+        data = bytearray(apk.read_bytes())
+        eocd_pos = data.rfind(b"PK\x05\x06")
+        cd_offset = struct.unpack_from("<I", data, eocd_pos + 16)[0]
+        trailing_size = struct.unpack_from("<Q", data, cd_offset - 24)[0]
+        start = cd_offset - 8 - trailing_size
+        # Shrink the first pair's declared length: the pair walk can no longer end
+        # exactly at the end of the block, which is a malformed signing block.
+        struct.pack_into("<Q", data, start + 8, 32)
+        apk.write_bytes(bytes(data))
+        with self.assertRaises(archive.ZipValidationError) as raised:
+            archive.parse_and_validate_zip_headers(apk)
+        self.assertIn("signing block", str(raised.exception).lower())
+
+    def test_broken_pair_inside_signing_block_is_rejected(self):
+        apk = self.root / "broken-pair.apk"
+        signed_apk(apk)
+        data = bytearray(apk.read_bytes())
+        eocd_pos = data.rfind(b"PK\x05\x06")
+        cd_offset = struct.unpack_from("<I", data, eocd_pos + 16)[0]
+        trailing_size = struct.unpack_from("<Q", data, cd_offset - 24)[0]
+        start = cd_offset - 8 - trailing_size
+        struct.pack_into("<Q", data, start + 8, 4096)  # pair length overflowing the block
+        apk.write_bytes(bytes(data))
+        with self.assertRaises(archive.ZipValidationError) as raised:
+            archive.parse_and_validate_zip_headers(apk)
+        self.assertIn("pair", str(raised.exception))
+
+    def test_unsigned_apk_reports_no_signing_block(self):
+        apk = self.root / "unsigned.apk"
+        with zipfile.ZipFile(apk, "w") as zf:
+            zf.writestr("AndroidManifest.xml", b"manifest" * 10)
+        self.assertFalse(archive.apk_has_signing_block(apk))
+
+
 class ReleaseArchiveTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

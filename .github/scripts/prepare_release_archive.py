@@ -41,6 +41,26 @@ Packaging contract (enforced here, in CI, for the archive and for every APK in i
 The outer archive stores the APKs without compression: APKs are already ZIP files, so
 recompressing them saves little and adds another DEFLATE stream to decode.  The upload
 action must upload this file directly (``archive: false``), not wrap it in another ZIP.
+
+Signed APKs (and "the package appears to be invalid")
+=====================================================
+Android does not install unsigned packages, and since Android 11 it refuses
+packages that target API 30+ and are signed with APK Signature Scheme v1 only
+("apps that target Android 11 that are currently only signed using APK Signature
+Scheme v1 must now also be signed using APK Signature Scheme v2 or higher").
+Both failures surface as *"The package appears to be invalid"* on the device,
+with no hint about the cause.
+
+A v2+ signature lives in the **APK Signing Block**, a structure between the last
+ZIP entry and the Central Directory, plus (for v1) ``META-INF/MANIFEST.MF``,
+``META-INF/*.SF`` and ``META-INF/*.RSA`` entries.  Any tool that rewrites the
+archive -- ``zip``, ``zipalign``, this script's canonicalizer -- invalidates it.
+That is why this module:
+
+* validates the signing block (size fields, ID-value pairs) when it is present,
+* never rewrites an APK that already carries one, and
+* is meant to run **before** signing; the signing step is
+  ``scripts/sign-release-apk.sh`` (align, then sign, then verify).
 """
 
 from __future__ import annotations
@@ -60,6 +80,18 @@ from pathlib import Path
 LFH_SIGNATURE = 0x04034B50
 CDH_SIGNATURE = 0x02014B50
 EOCD_SIGNATURE = 0x06054B50
+
+# An APK signed with APK Signature Scheme v2+ carries a signing block between the
+# last ZIP entry and the Central Directory -- the layout is
+#   [uint64 size][ID-value pair...][uint64 size]["APK Sig Block 42"][Central Directory]
+# Android's PackageParser (and apksig) resolve the Central Directory first and
+# then require the block's two size fields to agree.  Rewriting a signed APK with
+# zip/zipalign drops or invalidates this block, which is the "app is not
+# installed / package appears to be invalid" failure for a package that looks
+# perfectly fine to a ZIP extractor.
+SIG_BLOCK_MAGIC = b"APK Sig Block 42"
+SIG_BLOCK_MAGIC_SIZE = len(SIG_BLOCK_MAGIC)
+SIG_BLOCK_SIZE_FIELD = 8
 
 GPB_ENCRYPTED_MASK = 0x0001
 GPB_DATA_DESCRIPTOR_MASK = 0x0008
@@ -156,6 +188,96 @@ def alignment_extra_field(alignment: int, data_start_without_extra: int) -> byte
     return header + b"\x00" * padding
 
 
+def apk_signing_block_range(
+    data: bytes,
+    cd_offset: int,
+    label: object,
+) -> tuple[int, int] | None:
+    """Return ``(start, end)`` of the APK Signing Block that ends at ``cd_offset``.
+
+    ``None`` means the archive has no signing block at all (an unsigned APK, or a
+    plain ZIP).  A block that is present but malformed raises: Android resolves
+    the Central Directory first and then requires both size fields of the block
+    to agree, so a broken block makes the device refuse the package
+    ("The package appears to be invalid") even though every ZIP tool still reads
+    the file happily.
+    """
+    if cd_offset < SIG_BLOCK_MAGIC_SIZE + 2 * SIG_BLOCK_SIZE_FIELD:
+        return None
+    if data[cd_offset - SIG_BLOCK_MAGIC_SIZE : cd_offset] != SIG_BLOCK_MAGIC:
+        return None
+
+    trailing_size_offset = cd_offset - SIG_BLOCK_MAGIC_SIZE - SIG_BLOCK_SIZE_FIELD
+    trailing_size = struct.unpack_from("<Q", data, trailing_size_offset)[0]
+    minimum_size = SIG_BLOCK_MAGIC_SIZE + SIG_BLOCK_SIZE_FIELD
+    if trailing_size < minimum_size:
+        raise ZipValidationError(
+            f"{label}: APK Signing Block declares {trailing_size} bytes, which is smaller "
+            f"than the {minimum_size}-byte minimum"
+        )
+
+    start = cd_offset - SIG_BLOCK_SIZE_FIELD - trailing_size
+    if start < 0:
+        raise ZipValidationError(
+            f"{label}: APK Signing Block declares {trailing_size} bytes, which does not fit "
+            f"in front of the Central Directory at offset {cd_offset}"
+        )
+    leading_size = struct.unpack_from("<Q", data, start)[0]
+    if leading_size != trailing_size:
+        raise ZipValidationError(
+            f"{label}: APK Signing Block size fields disagree ({leading_size} != "
+            f"{trailing_size}); Android rejects an APK with a malformed signing block"
+        )
+
+    # Walk the ID-value pairs exactly like apksig does, so a truncated pair list is
+    # reported here instead of on a user's phone. Pair values are opaque: the v2
+    # padding pair (0x42726577, "werB") that apksig writes to align the block is
+    # not required to be zero-filled, and unknown future schemes must not be
+    # rejected just for being unknown.
+    pos = start + SIG_BLOCK_SIZE_FIELD
+    pair_count = 0
+    while pos < trailing_size_offset:
+        if pos + SIG_BLOCK_SIZE_FIELD > trailing_size_offset:
+            raise ZipValidationError(
+                f"{label}: APK Signing Block has a truncated ID-value pair at offset {pos}"
+            )
+        pair_size = struct.unpack_from("<Q", data, pos)[0]
+        if pair_size < 4 or pos + SIG_BLOCK_SIZE_FIELD + pair_size > trailing_size_offset:
+            raise ZipValidationError(
+                f"{label}: APK Signing Block ID-value pair at offset {pos} declares "
+                f"{pair_size} bytes, which overflows the block"
+            )
+        pos += SIG_BLOCK_SIZE_FIELD + pair_size
+        pair_count += 1
+
+    if pos != trailing_size_offset:
+        raise ZipValidationError(
+            f"{label}: APK Signing Block ID-value pairs overrun the block by "
+            f"{pos - trailing_size_offset} bytes"
+        )
+    if pair_count == 0:
+        raise ZipValidationError(f"{label}: APK Signing Block contains no ID-value pairs")
+
+    return start, cd_offset
+
+
+def _central_directory_offset(data: bytes, label: object) -> int:
+    search_start = max(0, len(data) - (22 + 65535))
+    eocd_pos = data.rfind(b"PK\x05\x06", search_start)
+    if eocd_pos < 0 or eocd_pos + 22 > len(data):
+        raise ZipValidationError(f"{label}: missing End of Central Directory signature")
+    return struct.unpack_from("<I", data, eocd_pos + 16)[0]
+
+
+def apk_has_signing_block(apk_path: Path) -> bool:
+    """True when the APK carries an APK Signing Block (APK Signature Scheme v2+)."""
+    data = apk_path.read_bytes()
+    return (
+        apk_signing_block_range(data, _central_directory_offset(data, apk_path), apk_path)
+        is not None
+    )
+
+
 def _decode_name(raw_name: bytes, path: Path) -> str:
     try:
         return raw_name.decode("utf-8")
@@ -217,6 +339,13 @@ def parse_and_validate_zip_headers(
     if total_entries == 0:
         raise ZipValidationError(f"{archive_path}: archive contains zero entries")
 
+    # A v2+ signed APK stores its signature in an APK Signing Block that sits
+    # between the last entry and the Central Directory, so the last entry ends
+    # *before* the CD.  Resolve (and validate) that block once, then treat the
+    # block as the end of the entry area.
+    signing_block = apk_signing_block_range(data, cd_offset, archive_path)
+    content_end = signing_block[0] if signing_block else cd_offset
+
     entries: list[dict[str, int | str | bytes]] = []
     pos = cd_offset
     for idx in range(total_entries):
@@ -265,7 +394,7 @@ def parse_and_validate_zip_headers(
                 f"(ver_made=0x{ver_made:04x}, ver_need={ver_need_cd})"
             )
 
-        if lfh_offset + 30 > cd_offset:
+        if lfh_offset + 30 > content_end:
             raise ZipValidationError(
                 f"{archive_path}: entry {name!r} LFH offset {lfh_offset} out of bounds"
             )
@@ -337,10 +466,11 @@ def parse_and_validate_zip_headers(
             )
 
         data_end = data_start + csize_cd
-        if data_end > cd_offset:
+        if data_end > content_end:
             raise ZipValidationError(
                 f"{archive_path}: entry {name!r} data range [{data_start}, {data_end}) "
-                f"overflows central directory offset {cd_offset}"
+                f"overlaps the {'APK Signing Block at ' if signing_block else 'Central Directory at '}"
+                f"{content_end}"
             )
 
         # Stream-verify payload directly from the Local File Header offsets
@@ -410,7 +540,9 @@ def parse_and_validate_zip_headers(
         )
 
     if check_contiguous:
-        # Confirm entries are contiguous up to cd_offset (no hidden trailing Data Descriptors or gaps)
+        # Confirm entries are contiguous up to the end of the entry area (no hidden
+        # trailing Data Descriptors or gaps); for a signed APK that area ends where
+        # the APK Signing Block starts.
         entries_sorted = sorted(entries, key=lambda item: int(item["lfh_offset"]))
         if int(entries_sorted[0]["lfh_offset"]) != 0:
             raise ZipValidationError(
@@ -422,10 +554,21 @@ def parse_and_validate_zip_headers(
                     f"{archive_path}: gap/Data Descriptor of "
                     f"{int(nxt['lfh_offset']) - int(cur['data_end'])} bytes after {cur['name']!r}"
                 )
-        if int(entries_sorted[-1]["data_end"]) != cd_offset:
+        last_entry_end = int(entries_sorted[-1]["data_end"])
+        if signing_block:
+            # apksig pads the area in front of the APK Signing Block (it aligns the
+            # block, and those pad bytes are covered by the v2/v3 digest). Any other
+            # writer that pads there is equally fine for the platform, so the region
+            # is accepted as long as it does not overlap an entry.
+            if last_entry_end > content_end:
+                raise ZipValidationError(
+                    f"{archive_path}: last entry {entries_sorted[-1]['name']!r} overlaps the "
+                    f"APK Signing Block at {content_end}"
+                )
+        elif last_entry_end != content_end:
             raise ZipValidationError(
                 f"{archive_path}: gap/Data Descriptor of "
-                f"{cd_offset - int(entries_sorted[-1]['data_end'])} bytes before Central Directory"
+                f"{content_end - last_entry_end} bytes before the Central Directory"
             )
 
     try:
@@ -543,6 +686,13 @@ def canonicalize_apk(apk_path: Path, entries: list[dict[str, int | str | bytes]]
     * STORED payloads aligned with a well-formed 0xD935 alignment extra field.
     """
     source = apk_path.read_bytes()
+    if apk_signing_block_range(source, _central_directory_offset(source, apk_path), apk_path):
+        raise ZipValidationError(
+            f"{apk_path}: refusing to rewrite a signed APK. Rebuilding the ZIP drops the "
+            f"APK Signing Block and every v1 signature file, so the result is an unsigned "
+            f"package that Android rejects ('The package appears to be invalid'). Sign the "
+            f"canonicalized APK instead, after this step."
+        )
     ordered = sorted(entries, key=lambda item: int(item["lfh_offset"]))
 
     out = bytearray()
@@ -728,7 +878,15 @@ def build_release_zip(
     apk_paths: list[Path],
     output_zip: Path,
     zipalign_bin: str | None,
+    *,
+    normalize: bool = True,
 ) -> None:
+    """Package APKs into the release ZIP.
+
+    ``normalize=True`` canonicalizes unsigned inputs first (``build``).  The CI
+    uses ``normalize=False`` (``package``) once the APKs have already been
+    canonicalized and signed, so nothing downstream can rewrite a signed package.
+    """
     if not apk_paths:
         raise ZipValidationError("No APK files provided to package")
 
@@ -737,6 +895,17 @@ def build_release_zip(
         raise ZipValidationError("'zip' CLI utility is required to build standard seekable archives")
 
     for apk in apk_paths:
+        if apk_has_signing_block(apk):
+            # Signed APKs are verified but never rewritten: rebuilding the ZIP would
+            # strip the APK Signing Block and turn an installable package into
+            # "The package appears to be invalid".
+            verify_apk_entries(apk, require_alignment=True)
+            print(f"Verified signed APK {apk.name}: signature block preserved, not rewritten")
+            continue
+        if not normalize:
+            verify_apk_entries(apk, require_alignment=True)
+            print(f"Verified APK {apk.name}: packaged as-is")
+            continue
         normalize_apk(apk, zipalign_bin)
 
     if output_zip.exists():
@@ -815,6 +984,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Expected original .apk file (may be specified multiple times)",
     )
 
+    package_parser = subparsers.add_parser(
+        "package",
+        help="Verify APKs as-is (no rewriting) and package them into the release ZIP",
+    )
+    package_parser.add_argument("--output", type=Path, required=True, help="Output .zip file path")
+    package_parser.add_argument("apks", nargs="+", type=Path, help="Input .apk files")
+
     normalize_parser = subparsers.add_parser(
         "normalize",
         help="Canonicalize an unsigned APK in place without packaging it",
@@ -828,6 +1004,8 @@ def main(argv: list[str] | None = None) -> int:
             build_release_zip(args.apks, args.output, args.zipalign)
         elif args.command == "verify":
             verify_release_zip(args.zip_path, args.expected_apks)
+        elif args.command == "package":
+            build_release_zip(args.apks, args.output, None, normalize=False)
         elif args.command == "normalize":
             for apk in args.apks:
                 normalize_apk(apk, args.zipalign)
