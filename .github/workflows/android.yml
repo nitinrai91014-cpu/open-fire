@@ -38,8 +38,11 @@ jobs:
           packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
           accept-android-sdk-licenses: true
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      - name: Grant execute permissions for scripts
+        shell: bash
+        run: |
+          chmod +x gradlew
+          chmod +x scripts/*.sh scripts/lib/*.sh .github/scripts/*.sh .github/scripts/*.py 2>/dev/null || true
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
@@ -261,7 +264,7 @@ jobs:
 
           # The release artifact must stay unsigned, aligned and structurally valid.
           run_annotated "verify unsigned APK" \
-            scripts/verify-installable-apk.sh release-artifacts/open-fire-release-unsigned.apk
+            bash scripts/verify-installable-apk.sh release-artifacts/open-fire-release-unsigned.apk
 
           sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           mapfile -t apksigners < <(find "$sdk_root/build-tools" -type f -name apksigner -print | sort -V)
@@ -314,7 +317,7 @@ jobs:
           signed="$RUNNER_TEMP/open-fire-release-roundtrip.apk"
           rm -f "$signed"
           run_annotated "sign round-trip APK" \
-            scripts/sign-release-apk.sh \
+            bash scripts/sign-release-apk.sh \
             release-artifacts/open-fire-release-unsigned.apk \
             --out "$signed" \
             --ks "$keystore" \
@@ -469,5 +472,5 @@ jobs:
           mkdir -p verified-download/extracted
           unzip -q "$downloaded_zip" -d verified-download/extracted
           run_annotated "verify downloaded unsigned release APK" \
-            scripts/verify-installable-apk.sh \
+            bash scripts/verify-installable-apk.sh \
             verified-download/extracted/open-fire-release-unsigned.apk

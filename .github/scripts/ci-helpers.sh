@@ -24,7 +24,11 @@ run_annotated() {
     *e*) had_errexit=1 ;;
   esac
   set +e
-  "$@" 2>&1 | tee "$log_file"
+  if [[ "$1" == *.sh && ! -x "$1" ]]; then
+    bash "$@" 2>&1 | tee "$log_file"
+  else
+    "$@" 2>&1 | tee "$log_file"
+  fi
   local status="${PIPESTATUS[0]}"
   if [ "$had_errexit" -eq 1 ]; then
     set -e
