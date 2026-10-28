@@ -251,60 +251,7 @@ jobs:
             fi
           done
 
-      - name: Sign the installable release APK
-        shell: bash
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_TYPE: ${{ secrets.ANDROID_KEYSTORE_TYPE }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-
-          unsigned_apk="release-artifacts/open-fire-release-unsigned.apk"
-          if [[ ! -f "$unsigned_apk" ]]; then
-            echo "::error::$unsigned_apk was not prepared"
-            exit 1
-          fi
-
-          sign_args=()
-          if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
-            keystore_type="${ANDROID_KEYSTORE_TYPE:-}"
-            case "$keystore_type" in
-              [Pp][Kk][Cc][Ss]12|[Pp]12|[Pp][Ff][Xx]) keystore="$RUNNER_TEMP/upload-keystore.p12" ;;
-              [Jj][Kk][Ss]) keystore="$RUNNER_TEMP/upload-keystore.jks" ;;
-              # Unknown type: keep an extension that does not mislead the signer,
-              # which then detects the type (and retries) by itself.
-              *) keystore="$RUNNER_TEMP/upload-keystore.keystore" ;;
-            esac
-            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$keystore"
-            chmod 600 "$keystore"
-            if [[ -z "${ANDROID_STORE_PASSWORD:-}" ]]; then
-              echo "::error::ANDROID_STORE_PASSWORD must be set when ANDROID_KEYSTORE_BASE64 is"
-              exit 1
-            fi
-            sign_args+=(--ks "$keystore")
-            if [[ -n "$keystore_type" ]]; then
-              sign_args+=(--ks-type "$keystore_type")
-            fi
-            sign_args+=(--ks-pass "$ANDROID_STORE_PASSWORD")
-            sign_args+=(--key-pass "${ANDROID_KEY_PASSWORD:-$ANDROID_STORE_PASSWORD}")
-            if [[ -n "${ANDROID_KEY_ALIAS:-}" ]]; then
-              sign_args+=(--ks-alias "$ANDROID_KEY_ALIAS")
-            fi
-            echo "Signing with the upload key from the ANDROID_KEYSTORE_BASE64 secret."
-          else
-            echo "::warning::ANDROID_KEYSTORE_BASE64 is not configured; the installable APK is signed with the public CI test key in .github/ci/open-fire-test.p12. Add the signing secrets to publish a release that can be distributed."
-          fi
-
-          # Align -> sign (v1+v2+v3) -> verify. The script aborts instead of
-          # producing a package that Android would reject.
-          scripts/sign-release-apk.sh "$unsigned_apk" \
-            --out "release-artifacts/open-fire-release.apk" \
-            ${sign_args[@]+"${sign_args[@]}"}
-
-      - name: Verify both release APKs
+      - name: Verify release APK
         shell: bash
         run: |
           set -euo pipefail
@@ -312,11 +259,7 @@ jobs:
           # shellcheck source=.github/scripts/ci-helpers.sh
           source .github/scripts/ci-helpers.sh
 
-          # The installable artifact must be signed with v2+ and verify for API 24..36.
-          run_annotated "verify installable APK" \
-            scripts/verify-installable-apk.sh --require-signature release-artifacts/open-fire-release.apk
-
-          # The distributor artifact must stay unsigned, aligned and structurally valid.
+          # The release artifact must stay unsigned, aligned and structurally valid.
           run_annotated "verify unsigned APK" \
             scripts/verify-installable-apk.sh release-artifacts/open-fire-release-unsigned.apk
 
@@ -462,18 +405,18 @@ jobs:
             for file in "${files[@]}"; do
               filename="$(basename "$file")"
               case "$filename" in
-                open-fire-release-unsigned.apk) purpose='Unsigned package for Play Console / distributor signing' ;;
-                open-fire-release.apk) purpose='Signed (v1+v2+v3) and verified: install this one' ;;
-                *) purpose='Both APKs, stored without recompression' ;;
+                open-fire-release-unsigned.apk) purpose='Unsigned release package for distribution / your signing key' ;;
+                *) purpose='Release archive, stored without recompression' ;;
               esac
               size="$(du -h "$file" | cut -f1)"
               sha="$(sha256sum "$file" | cut -d' ' -f1)"
               printf '| `%s` | %s | %s | `%s` |\n' "$filename" "$purpose" "$size" "$sha"
             done
             echo
-            echo 'Install `open-fire-release.apk` directly (allow installing unknown apps), or:'
+            echo 'Sign `open-fire-release-unsigned.apk` with your release key before installing:'
             echo
             echo '```sh'
+            echo 'scripts/sign-release-apk.sh open-fire-release-unsigned.apk --out open-fire-release.apk --ks my-key.jks'
             echo 'adb install -r open-fire-release.apk'
             echo '```'
             echo
@@ -525,6 +468,6 @@ jobs:
           rm -rf verified-download/extracted
           mkdir -p verified-download/extracted
           unzip -q "$downloaded_zip" -d verified-download/extracted
-          run_annotated "verify downloaded installable APK" \
-            scripts/verify-installable-apk.sh --require-signature \
-            verified-download/extracted/open-fire-release.apk
+          run_annotated "verify downloaded unsigned release APK" \
+            scripts/verify-installable-apk.sh \
+            verified-download/extracted/open-fire-release-unsigned.apk

@@ -133,6 +133,12 @@ if [ -n "$arsc_line" ]; then
   fi
 fi
 
+# 3b. Native libraries (.so) must be stored uncompressed for extractNativeLibs=false
+compressed_so="$(unzip -v "$apk" 2>/dev/null | grep -E '\.so$' | grep -v 'Stored' || true)"
+if [ -n "$compressed_so" ]; then
+  bad "native libraries (.so) are compressed. Android refuses to install packages when native libraries are compressed with extractNativeLibs=false."
+fi
+
 # 4. zipalign ----------------------------------------------------------------
 if "$zipalign_tool" -c 4 "$apk" >/dev/null 2>&1; then
   ok "uncompressed entries are 4-byte aligned (zipalign -c 4)"

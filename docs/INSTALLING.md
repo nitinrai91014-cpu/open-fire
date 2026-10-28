@@ -16,9 +16,7 @@ An unsigned package never installs. `apksigner verify` fails with
 A release build from Gradle is *not* signed unless a signing config is applied, and the
 file is called `app-release-unsigned.apk` for a reason. Renaming it does not sign it.
 
-**Now:** `assembleRelease` always signs (upload key when configured, otherwise the checked-in
-CI test key), and CI publishes a signed `open-fire-release.apk` next to the unsigned
-artifact.
+**Now:** CI publishes the canonicalized, aligned `open-fire-release-unsigned.apk` (testkey signing has been removed to prevent broken double-signed packages). Sign it cleanly with your own key before installing.
 
 ## 2. The APK is signed with the JAR (v1) scheme only
 
@@ -60,15 +58,17 @@ rejected.
 **Now:** the signing script refuses an input that is already signed and tells you to start
 from the `*-unsigned.apk` artifact.
 
-## 5. `resources.arsc` is compressed or not 4-byte aligned
-
+## 5. `resources.arsc` or native libraries (`.so`) are compressed or not aligned
+ 
 For apps targeting Android 11 or higher, the platform refuses to install a package whose
 `resources.arsc` is compressed, or is stored but not 4-byte aligned, because it cannot be
-memory-mapped.
+memory-mapped. Similarly, when `extractNativeLibs="false"`, all native libraries (`.so`)
+must be stored uncompressed (`ZIP_STORED`) and page-aligned (16 KiB boundary for 16 KB page
+devices / Android 15+).
 
-**Now:** CI canonicalizes the APK before signing (stored + aligned), declares the audio
-extensions in `androidResources.noCompress`, and `verify-installable-apk.sh` checks both
-conditions.
+**Now:** CI canonicalizes the APK before signing (resources.arsc and `.so` files stored + aligned),
+declares the audio extensions in `androidResources.noCompress`, configures `useLegacyPackaging = false`,
+and `verify-installable-apk.sh` checks all alignment and storage conditions.
 
 ## 6. The ZIP is damaged
 
@@ -93,10 +93,11 @@ way apksig does, and the workflow runs `unzip -t`, `zipalign -c 4` and a Java
 ## Check any APK yourself
 
 ```sh
+scripts/verify-installable-apk.sh open-fire-release-unsigned.apk
 scripts/verify-installable-apk.sh --require-signature open-fire-release.apk
 ```
 
-It prints one line per check (ZIP integrity, required entries, `resources.arsc`
+It prints one line per check (ZIP integrity, required entries, `resources.arsc` and `.so`
 compression, alignment, v1/v2/v3 schemes, signature verification for API 24..36, signer
 identity) and a verdict. For the raw platform reason of a failed install:
 
@@ -108,7 +109,5 @@ adb install -r open-fire-release.apk
 
 | Artifact | Installable | Use it for |
 | --- | --- | --- |
-| `open-fire-release.apk` | yes | installing on a phone, sharing test builds |
-| `open-fire-release-unsigned.apk` | no — sign it first | Play Console upload, signing with your own key |
-
-Related: the public CI test key lives in [`.github/ci/`](../.github/ci/README.md).
+| `open-fire-release-unsigned.apk` | sign first | Canonical release package: sign with your own key using `scripts/sign-release-apk.sh` |
+| `open-fire-release.apk` | yes (after signing) | Installing on a phone (`adb install -r open-fire-release.apk`) |

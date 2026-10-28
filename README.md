@@ -10,26 +10,18 @@ spoken interface (English, हिन्दी and नेपाली).
 
 ## Install the app
 
-Every successful CI run publishes two APKs:
+Every successful CI run publishes the canonical unsigned release APK:
 
 | File | What it is |
 | --- | --- |
-| `open-fire-release.apk` | Signed with v1 + v2 + v3 and verified. **Install this one.** |
-| `open-fire-release-unsigned.apk` | Pristine unsigned package for the Play Console / your distributor key. |
+| `open-fire-release-unsigned.apk` | Canonical, uncompressed-native-aligned unsigned release package. |
 
 1. Open the **Actions** tab, pick the newest green **Android CI and Release APKs** run.
 2. Download the `open-fire-release-apks.zip` artifact and unzip it.
-3. Copy `open-fire-release.apk` to the device (or run `adb install -r open-fire-release.apk`),
-   tap it, and allow "install unknown apps" for the file manager you use.
+3. Sign `open-fire-release-unsigned.apk` with your release key using `scripts/sign-release-apk.sh` (or `apksigner`).
+4. Install `open-fire-release.apk` on your device (or run `adb install -r open-fire-release.apk`).
 
-Android will refuse the APK with **"The package appears to be invalid"** if you try to
-install the `*-unsigned.apk` file — that file is not installable by design. See
-[docs/INSTALLING.md](docs/INSTALLING.md) for every cause of that message, and for how to
-sign the release APK with your own key.
-
-Without signing secrets the installable APK is signed with the public CI test key
-(`.github/ci/open-fire-test.p12`). It installs everywhere, but it cannot be published and
-it will not update a copy signed with another key.
+Android will refuse an unsigned APK with **"The package appears to be invalid"** if installed directly without signing. Signing an already-signed APK (such as testkey signed) will also corrupt signatures and cause the same error. The unsigned release package is properly aligned and ready for clean signing with your key. See [docs/INSTALLING.md](docs/INSTALLING.md).
 
 ### Signing with your own key
 

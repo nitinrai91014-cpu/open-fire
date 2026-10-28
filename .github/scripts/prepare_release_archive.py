@@ -125,8 +125,10 @@ def sha256_file(path: Path) -> str:
 
 def must_store(name: str) -> bool:
     """Entries the Android runtime must be able to mmap straight out of the APK."""
-    return name == "resources.arsc" or (
-        name.startswith("assets/sounds/") and name.endswith(".mp3")
+    return (
+        name == "resources.arsc"
+        or name.endswith(".so")
+        or (name.startswith("assets/sounds/") and name.endswith(".mp3"))
     )
 
 

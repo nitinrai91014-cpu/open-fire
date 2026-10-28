@@ -323,6 +323,25 @@ class ApkCanonicalizationTests(unittest.TestCase):
             self.assertEqual(zf.read(MP3_NAME), MP3_BYTES)
         subprocess.run(["unzip", "-tq", str(apk)], check=True)
 
+    def test_native_libraries_are_stored_and_16kb_aligned(self):
+        apk = self.apk_path("open-fire-native.apk")
+        so_name = "lib/arm64-v8a/libtest.so"
+        so_bytes = b"\x7fELF" + os.urandom(1024)
+        with zipfile.ZipFile(apk, "w") as zf:
+            zf.writestr("AndroidManifest.xml", b"manifest" * 50, compress_type=zipfile.ZIP_DEFLATED)
+            zf.writestr("resources.arsc", ARSC_BYTES, compress_type=zipfile.ZIP_STORED)
+            zf.writestr(so_name, so_bytes, compress_type=zipfile.ZIP_DEFLATED)
+
+        archive.normalize_apk(apk, None)
+        entries = archive.parse_and_validate_zip_headers(apk)
+        by_name = {str(entry["name"]): entry for entry in entries}
+
+        self.assertEqual(by_name[so_name]["method"], zipfile.ZIP_STORED)
+        self.assertEqual(int(by_name[so_name]["data_start"]) % 16384, 0)
+        with zipfile.ZipFile(apk) as zf:
+            self.assertEqual(zf.read(so_name), so_bytes)
+        subprocess.run(["unzip", "-tq", str(apk)], check=True)
+
     def test_data_descriptor_apk_is_normalized(self):
         apk = self.apk_path()
         sink = io.BytesIO()

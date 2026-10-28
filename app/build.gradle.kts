@@ -165,6 +165,14 @@ android {
     includeInApk = false
     includeInBundle = true
   }
+  packaging {
+    jniLibs {
+      useLegacyPackaging = false
+    }
+    resources {
+      excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
