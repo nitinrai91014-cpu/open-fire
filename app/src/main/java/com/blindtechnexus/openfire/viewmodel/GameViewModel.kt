@@ -861,7 +861,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerY = Arena.PLAYER_START_Y,
             robertX = Arena.ROBERT_START_X,
             robertY = Arena.ROBERT_START_Y,
-            runSpeed = RunSpeed.NORMAL.id,
+            runSpeed = RunSpeed.fromId(_inventory.value.lastRunSpeedId).id,
             coverActive = false,
             coverHits = 0,
             glueWallActive = false,
@@ -1029,6 +1029,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         _gameState.update { it.copy(runSpeed = next.id) }
+        val savedInventory = _inventory.value.copy(lastRunSpeedId = next.id)
+        _inventory.value = savedInventory
+        prefs.saveInventory(savedInventory)
         // Apply the new level to the live footstep loop immediately.
         val held = moveDirection
         if (held != null) {
@@ -1225,6 +1228,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * ground again once he is landing the greater number of hits.
      */
     private fun beginRobertRetreat() {
+        // A retreat is a movement decision, so cut the enemy's long automatic-weapon tail immediately.
+        _gameState.value.robertWeapon?.fireSoundKey?.let(audioManager::stopSound)
+        audioManager.stopSound("mp40")
+        audioManager.stopSound("machineGun")
         _gameState.update {
             it.copy(
                 robertState = "retreat",
@@ -1347,7 +1354,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 var outcomeBlocked = false
                 var flanked = false
                 _gameState.update { current ->
-                    val outcome = runAwayStep(current, metres)
+                    // Mix straight retreats with quick left/right cuts. This keeps
+                    // Robert from becoming an easy, predictable target while he runs.
+                    val outcome = if (RobertRules.shouldStrafe(Random)) {
+                        strafeStep(current, metres, RobertRules.strafeDirection(Random))
+                    } else {
+                        runAwayStep(current, metres)
+                    }
                     outcomeBlocked = outcome.blocked
                     flanked = outcome.state.robertState == "flank"
                     outcome.state
@@ -1638,17 +1651,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             state.robertState == "missileFlee" ||
             state.robertState == "bombFlee" ||
             state.robertState == "avoid"
-        // A running Robert never presses: he keeps the human rhythm. A
-        // standing Robert fires every 1.5 s to 2 s, or exactly once a second
-        // while his own barrier protects him and the player has none (or the
-        // player's weapon is damaged / the player is extremely weak).
         if (fleeing) return RobertRules.normalTacticalInterval(Random)
+        val situation = RobertRules.assessSituation(
+            state.robertHp, state.robertMaxHp, state.playerHp, state.playerMaxHp,
+            isPlayerWeaponLocked(state)
+        )
         return RobertRules.tacticalFireInterval(
             enemyHasDefence = state.robertHasActiveDefence,
             playerHasDefence = state.playerHasActiveDefence,
             playerWeaponDamaged = isPlayerWeaponLocked(state),
             playerHpFraction = playerHpFraction(state),
-            random = Random
+            random = Random,
+            enemyHasAdvantage = situation != RobertRules.CombatSituation.DISADVANTAGE
         )
     }
 
@@ -1735,6 +1749,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerMaxHp = state.playerMaxHp,
             playerWeaponDamaged = isPlayerWeaponLocked(state)
         )
+        // A retreat is movement, not a hidden opportunity to keep shooting.
+        // If a wall forces a turn-back while the player is firing continuously,
+        // Robert may turn and return one counter-shot before the flank/run resumes.
+        if (state.robertState in setOf("retreat", "avoid", "missileFlee", "bombFlee")) return
+        if (state.robertState == "turnBack" &&
+            !RobertRules.isContinuousPlayerFire(state.playerBurstShots)
+        ) return
         val playerWeakFraction = playerHpFraction(state)
         val pressing = robertPressing(state)
 
@@ -1742,8 +1763,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Robert in this exchange (two against one, for example) Robert runs
         // away immediately. A protected Robert is the one exception - he
         // keeps firing from behind his barrier.
-        if (!pressing &&
-            RobertRules.shouldFleeFight(state.fightPlayerHits, state.fightRobertHits)
+        if (!pressing && (
+                RobertRules.shouldFleeFight(state.fightPlayerHits, state.fightRobertHits) ||
+                    (situation == RobertRules.CombatSituation.DISADVANTAGE &&
+                        (state.robertState == "advance" || state.robertState == "flank"))
+            )
         ) {
             beginRobertRetreat()
             return
@@ -1910,7 +1934,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Firearm sounds are exclusive: his shot cuts whatever weapon sound
         // the player still has in the air, so the two never mix.
         if (!chosen.melee) {
-            audioManager.playWeaponSound(chosen.fireSoundKey, volume = 0.9f, posZ = -state.distance)
+            audioManager.playWeaponSound(
+                chosen.fireSoundKey,
+                volume = 0.9f,
+                // The recorded MP40 sample is a long burst; slightly faster
+                // playback gives a distinct, finite shot instead of a near-continuous rumble.
+                rate = if (chosen == Weapon.MP40) 1.8f else 1.0f,
+                posZ = -state.distance
+            )
         }
         _gameState.update { s ->
             val nextAmmo = if (chosen.needsReload && !unlimitedAmmo) {

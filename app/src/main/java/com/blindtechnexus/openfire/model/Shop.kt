@@ -449,6 +449,8 @@ data class Inventory(
     val antiBombs: Int = 0,
     val extensions: Map<String, ExtensionState> = emptyMap(),
     val lastWeaponId: String = Weapon.SHORT_GUN.id,
+    /** Last selected running-speed level, restored at the next battle. */
+    val lastRunSpeedId: String = RunSpeed.NORMAL.id,
     /**
      * Stacked missile powers. Like a defence, every missile launch consumes
      * exactly one, after which another must be bought for the next launch.

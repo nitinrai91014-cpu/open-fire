@@ -149,10 +149,8 @@ class RoundRulesTest {
 
     @Test
     fun theEnemyFiresOneOrTwoShotsOnAHumanRhythm() {
-        // The legacy 2 s / 2.5 s / 3 s helpers are kept for older callers.
-        // The live battle uses the faster 1.5 s - 2 s rhythm covered by
-        // GameplayUpgradeTest, with a 1 s press while Robert is protected.
-        assertEquals(listOf(2_000L, 2_500L, 3_000L), RobertRules.NORMAL_INTERVALS_MS)
+        // Live and helper timing share the deliberately varied 1.5 s / 2 s rhythm.
+        assertEquals(listOf(1_500L, 2_000L), RobertRules.NORMAL_INTERVALS_MS)
         assertEquals(2, RobertRules.MAX_SUCCESSIVE_SHOTS)
 
         val random = Random(17)
@@ -162,17 +160,15 @@ class RoundRulesTest {
             assertFalse(RobertRules.burstFinished(limit - 1, limit))
             assertTrue(RobertRules.burstFinished(limit, limit))
             val interval = RobertRules.normalFireInterval(random)
-            assertTrue(interval in 2_000L..3_000L)
+            assertTrue(interval == 1_500L || interval == 2_000L)
         }
 
-        // Every situation window stays inside the two to three second rhythm.
+        // Every situation uses the 1.5-2 second choice; fleeing holds the 2 second beat.
         for (situation in RobertRules.CombatSituation.entries) {
             val window = RobertRules.fireIntervalWindow(situation, fleeing = false)
-            assertTrue("$situation", window.first >= 2_000L)
-            assertTrue("$situation", window.last <= 3_000L)
+            assertEquals(1_500L..2_000L, window)
             val fleeingWindow = RobertRules.fireIntervalWindow(situation, fleeing = true)
-            assertTrue(fleeingWindow.first >= 2_500L)
-            assertTrue(fleeingWindow.last <= 3_000L)
+            assertEquals(2_000L..2_000L, fleeingWindow)
         }
     }
 

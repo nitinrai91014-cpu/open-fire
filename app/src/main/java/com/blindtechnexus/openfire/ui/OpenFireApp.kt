@@ -119,6 +119,8 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             var maxDelta = 0f
                             var longPressActive = false
                             var longPressCancelled = false
+                            // The delayed hold task must not outlive a quick tap/release.
+                            var touchHeld = true
                             // A held up-swipe with a submachine gun keeps
                             // firing until the finger is lifted again.
                             var holdFireStarted = false
@@ -136,7 +138,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             val longPressJob = if (isRunZone) {
                                 launch {
                                     delay(RunPressure.LONG_PRESS_TIMEOUT_MS)
-                                    if (!longPressCancelled && maxFingers == 1 && maxDelta < TAP_SLOP) {
+                                    if (touchHeld && !longPressCancelled && maxFingers == 1 && maxDelta < TAP_SLOP) {
                                         longPressActive = true
                                         moveDirection?.let { viewModel.startPlayerMove(it) }
                                     }
@@ -204,9 +206,13 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                         longPressActive = false
                                     }
 
-                                    if (event.changes.none { it.pressed }) break
+                                    if (event.changes.none { it.pressed }) {
+                                        touchHeld = false
+                                        break
+                                    }
                                 }
                             } finally {
+                                touchHeld = false
                                 longPressJob?.cancel()
                                 if (isRunZone) {
                                     // Release, cancellation, a second finger, or a swipe

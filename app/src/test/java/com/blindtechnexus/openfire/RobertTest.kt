@@ -394,7 +394,7 @@ class RobertTest {
             )
         )
 
-        // Continuous fire uses the tight answer window.
+        // Continuous fire uses the tactical 1.5 / 2 second sequence.
         val random = Random(3)
         val continuous = (1..60).map {
             RobertRules.fireIntervalMs(
@@ -404,9 +404,8 @@ class RobertTest {
                 continuous = true
             )
         }
-        assertTrue(continuous.all { it in RobertRules.continuousFireWindow() })
-        assertTrue(continuous.max() <= 2_000L)
-        // While fleeing he never answers continuously.
+        assertTrue(continuous.all { it == 1_500L || it == 2_000L })
+        // While fleeing he never answers continuously and stays on the 2 s beat.
         assertTrue(
             (1..30).map {
                 RobertRules.fireIntervalMs(
@@ -415,7 +414,7 @@ class RobertTest {
                     random = random,
                     continuous = true
                 )
-            }.all { it >= 2_500L }
+            }.all { it == 2_000L }
         )
     }
 
@@ -566,37 +565,39 @@ class RobertTest {
     }
 
     @Test
-    fun situationalFireIntervalsAreNeverAFixedClock() {
+    fun situationalFireIntervalsUseUnpredictableOneAndTwoSecondBeats() {
         val random = Random(7)
-        fun samples(situation: RobertRules.CombatSituation, fleeing: Boolean) =
-            (1..60).map { RobertRules.fireIntervalMs(situation, fleeing, random) }
+        for (situation in RobertRules.CombatSituation.entries) {
+            val samples = (1..60).map { RobertRules.fireIntervalMs(situation, false, random) }
+            assertTrue("$situation=$samples", samples.all { it == 1_500L || it == 2_000L })
+            assertEquals(setOf(1_500L, 2_000L), samples.toSet())
+        }
+        val fleeing = (1..30).map {
+            RobertRules.fireIntervalMs(RobertRules.CombatSituation.ADVANTAGE, true, random)
+        }
+        assertTrue(fleeing.all { it == 2_000L })
 
-        // Every situation stays inside the human 2 s to 3 s rhythm.
-        val advantage = samples(RobertRules.CombatSituation.ADVANTAGE, false)
-        assertTrue("advantage=$advantage", advantage.all { it in 2_000L..2_500L })
-        assertTrue("advantage variation $advantage", advantage.distinct().size > 10)
-
-        val pressure = samples(RobertRules.CombatSituation.PRESSURE, false)
-        assertTrue("pressure=$pressure", pressure.all { it in 2_000L..2_500L })
-
-        val even = samples(RobertRules.CombatSituation.EVEN, false)
-        assertTrue("even=$even", even.all { it in 2_000L..3_000L })
-        assertTrue("even variation $even", even.distinct().size > 10)
-
-        val disadvantage = samples(RobertRules.CombatSituation.DISADVANTAGE, false)
-        assertTrue("disadvantage=$disadvantage", disadvantage.all { it in 2_500L..3_000L })
-
-        // Advantage fires faster than a losing Robert, and nothing goes
-        // outside the human rhythm.
-        assertTrue(
-            "advantage max ${advantage.max()} vs disadvantage min ${disadvantage.min()}",
-            advantage.max() <= disadvantage.min()
-        )
-        assertTrue("even max ${even.max()}", even.max() <= 3_000L)
-        assertTrue("even min ${even.min()}", even.min() >= 2_000L)
-        // While fleeing he barely fires at all.
-        val fleeing = samples(RobertRules.CombatSituation.ADVANTAGE, true)
-        assertTrue("fleeing=$fleeing", fleeing.all { it >= 2_500L })
+        val continuous = (1..60).map {
+            RobertRules.tacticalFireInterval(
+                enemyHasDefence = true,
+                playerHasDefence = false,
+                playerWeaponDamaged = false,
+                playerHpFraction = 0.8f,
+                random = random
+            )
+        }
+        assertTrue(continuous.all { it == RobertRules.CONTINUOUS_FIRE_MS })
+        val losing = (1..30).map {
+            RobertRules.tacticalFireInterval(
+                enemyHasDefence = true,
+                playerHasDefence = false,
+                playerWeaponDamaged = false,
+                playerHpFraction = 0.8f,
+                random = random,
+                enemyHasAdvantage = false
+            )
+        }
+        assertTrue(losing.all { it == 1_500L || it == 2_000L })
     }
 
     @Test

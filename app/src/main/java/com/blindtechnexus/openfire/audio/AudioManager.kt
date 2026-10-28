@@ -153,6 +153,9 @@ class AudioManager(private val context: Context) {
      */
     private val audioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** Serializes the shared weapon channel so rapid taps cannot race into overlapping gun streams. */
+    private val weaponAudioLock = Any()
+
     /** True once [release] ran: every later request is ignored. */
     @Volatile
     private var released = false
@@ -560,7 +563,7 @@ class AudioManager(private val context: Context) {
         // slowly loading AWM can never leak into Robert's answering shot.
         enforceWeaponExclusivity(key)
         if (key in LONG_TRACK_KEYS) {
-            playManagedTrack(key, volume, posX, posY, posZ, loop = false)
+            playManagedTrack(key, volume, posX, posY, posZ, loop = false, rate = rate)
             return 1
         }
 
@@ -636,7 +639,7 @@ class AudioManager(private val context: Context) {
      */
     fun playMixed(keys: List<String>, volume: Float = 1.0f, posX: Float = 0f, posY: Float = 0f, posZ: Float = 0f) {
         for (key in keys) {
-            playSound(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
+            playSound(key, volume = volume, rate = rate, posX = posX, posY = posY, posZ = posZ)
         }
     }
 
@@ -717,13 +720,16 @@ class AudioManager(private val context: Context) {
     fun playWeaponSound(
         key: String,
         volume: Float = 1.0f,
+        rate: Float = 1.0f,
         posX: Float = 0f,
         posY: Float = 0f,
         posZ: Float = 0f
     ) {
-        // playSound owns the exclusive channel, so a shot played through this
-        // helper behaves exactly like one played directly.
-        playSound(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
+        // Serialize rapid cross-fighter taps; without this, two callers could
+        // both clear the weapon set and then start different streams together.
+        synchronized(weaponAudioLock) {
+            playSound(key, volume = volume, rate = rate, posX = posX, posY = posY, posZ = posZ)
+        }
     }
 
     /** The looping variant of [playWeaponSound] (held submachine gun bursts). */
@@ -734,7 +740,9 @@ class AudioManager(private val context: Context) {
         posY: Float = 0f,
         posZ: Float = 0f
     ) {
-        playLoop(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
+        synchronized(weaponAudioLock) {
+            playLoop(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
+        }
     }
 
     /** Cuts every weapon sound that is still playing, loops included. */
@@ -933,7 +941,8 @@ class AudioManager(private val context: Context) {
         posX: Float,
         posY: Float,
         posZ: Float,
-        loop: Boolean
+        loop: Boolean,
+        rate: Float = 1.0f
     ) {
         if (released) return
 
@@ -982,7 +991,10 @@ class AudioManager(private val context: Context) {
                 val gains = trackGains[key] ?: Pair(left, right)
                 created.setVolume(gains.first.coerceIn(0f, 1f), gains.second.coerceIn(0f, 1f))
                 created.setOnCompletionListener {
-                    if (!loop) stopManagedTrack(key)
+                    // A released shot may report completion after its replacement
+                    // has started. Only the current player may invalidate the key.
+                    val isCurrent = synchronized(playerLock) { managedPlayers[key] === created }
+                    if (!loop && isCurrent) stopManagedTrack(key)
                 }
                 created.setOnErrorListener { failed, what, extra ->
                     Log.w(TAG, "Managed track $key failed ($what/$extra)")
@@ -1009,6 +1021,11 @@ class AudioManager(private val context: Context) {
                     return@launch
                 }
                 created.start()
+                if (rate != 1.0f) {
+                    try {
+                        created.playbackParams = PlaybackParams().setSpeed(rate.coerceIn(0.5f, 2.0f))
+                    } catch (_: Exception) {}
+                }
                 triggerHapticForSound(key)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed playing managed track $key", e)

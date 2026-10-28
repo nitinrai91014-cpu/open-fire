@@ -15,6 +15,7 @@ import com.blindtechnexus.openfire.model.GameStats
 import com.blindtechnexus.openfire.model.HitZone
 import com.blindtechnexus.openfire.model.Inventory
 import com.blindtechnexus.openfire.model.Progression
+import com.blindtechnexus.openfire.model.RunSpeed
 import com.blindtechnexus.openfire.model.Weapon
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -135,6 +136,7 @@ class ExampleRobolectricTest {
                 Extension.AUTO_COVER.id to ExtensionState.DISABLED
             ),
             lastWeaponId = Weapon.SWORD.id,
+            lastRunSpeedId = RunSpeed.FAST.id,
             missilePowers = 3,
             antiBombs = 2,
             disabledWeapons = setOf(Weapon.SWORD.id)
@@ -150,6 +152,7 @@ class ExampleRobolectricTest {
         assertTrue(loaded.extensionEnabled(Extension.AUTO_RELOAD))
         assertEquals(ExtensionState.DISABLED, loaded.extensionState(Extension.AUTO_COVER))
         assertEquals(Weapon.SWORD.id, loaded.lastWeaponId)
+        assertEquals(RunSpeed.FAST.id, loaded.lastRunSpeedId)
         // The missile is a real battle weapon and its powers persist.
         assertTrue(loaded.ownsWeapon(Weapon.MISSILE))
         assertEquals(3, loaded.missilePowers)
