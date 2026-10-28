@@ -230,8 +230,12 @@ def apk_signing_block_range(
         )
 
     # Walk the ID-value pairs exactly like apksig does, so a truncated pair list is
-    # reported here instead of on a user's phone.
+    # reported here instead of on a user's phone. Pair values are opaque: the v2
+    # padding pair (0x42726577, "werB") that apksig writes to align the block is
+    # not required to be zero-filled, and unknown future schemes must not be
+    # rejected just for being unknown.
     pos = start + SIG_BLOCK_SIZE_FIELD
+    pair_count = 0
     while pos < trailing_size_offset:
         if pos + SIG_BLOCK_SIZE_FIELD > trailing_size_offset:
             raise ZipValidationError(
@@ -243,13 +247,16 @@ def apk_signing_block_range(
                 f"{label}: APK Signing Block ID-value pair at offset {pos} declares "
                 f"{pair_size} bytes, which overflows the block"
             )
-        pair_id = struct.unpack_from("<I", data, pos + SIG_BLOCK_SIZE_FIELD)[0]
-        if pair_id == 0x42726577:  # "werB" -- APK Signature Scheme v2 padding pair
-            if set(data[pos + SIG_BLOCK_SIZE_FIELD + 4 : pos + SIG_BLOCK_SIZE_FIELD + pair_size]):
-                raise ZipValidationError(
-                    f"{label}: APK Signing Block padding pair is not zero-filled"
-                )
         pos += SIG_BLOCK_SIZE_FIELD + pair_size
+        pair_count += 1
+
+    if pos != trailing_size_offset:
+        raise ZipValidationError(
+            f"{label}: APK Signing Block ID-value pairs overrun the block by "
+            f"{pos - trailing_size_offset} bytes"
+        )
+    if pair_count == 0:
+        raise ZipValidationError(f"{label}: APK Signing Block contains no ID-value pairs")
 
     return start, cd_offset
 

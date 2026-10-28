@@ -106,11 +106,18 @@ def write_raw_zip(path, entries):
 SIG_PAIR_ID = 0x7109871A  # APK Signature Scheme v2 block ID
 
 
+PADDING_PAIR_ID = 0x42726577  # "werB": what apksig writes to align the block
+
+
 def add_signing_block(apk_path, *, pair_value=b"\x00" * 32, corrupt_sizes=False, broken_pair=False):
     data = bytearray(apk_path.read_bytes())
     eocd_pos = data.rfind(b"PK\x05\x06")
     cd_offset = struct.unpack_from("<I", data, eocd_pos + 16)[0]
     pair = struct.pack("<QI", 4 + len(pair_value), SIG_PAIR_ID) + pair_value
+    # apksigner pads the block with a second pair whose value is arbitrary bytes;
+    # real apksig output is not zero-filled, so it must not be rejected.
+    padding_value = b"\x00\xff\x7fopen-fire"
+    pair += struct.pack("<QI", 4 + len(padding_value), PADDING_PAIR_ID) + padding_value
     if broken_pair:
         pair = struct.pack("<QI", 4096, SIG_PAIR_ID)
     size = archive.SIG_BLOCK_MAGIC_SIZE + archive.SIG_BLOCK_SIZE_FIELD + len(pair)
@@ -175,6 +182,27 @@ class SignedApkTests(unittest.TestCase):
         eocd_pos = data.rfind(b"PK\x05\x06")
         cd_offset = struct.unpack_from("<I", data, eocd_pos + 16)[0]
         struct.pack_into("<Q", data, cd_offset - 24, 12345)
+        apk.write_bytes(bytes(data))
+        with self.assertRaises(archive.ZipValidationError) as raised:
+            archive.parse_and_validate_zip_headers(apk)
+        self.assertIn("signing block", str(raised.exception).lower())
+
+    def test_non_zero_padding_pair_is_accepted(self):
+        """apksig's alignment padding pair carries opaque, non-zero bytes."""
+        self.assertTrue(archive.apk_has_signing_block(self.apk))
+        archive.verify_apk_entries(self.apk)
+
+    def test_pairs_that_do_not_fill_the_block_are_rejected(self):
+        apk = self.root / "overrun.apk"
+        signed_apk(apk)
+        data = bytearray(apk.read_bytes())
+        eocd_pos = data.rfind(b"PK\x05\x06")
+        cd_offset = struct.unpack_from("<I", data, eocd_pos + 16)[0]
+        trailing_size = struct.unpack_from("<Q", data, cd_offset - 24)[0]
+        start = cd_offset - 8 - trailing_size
+        # Shrink the first pair's declared length: the pair walk can no longer end
+        # exactly at the end of the block, which is a malformed signing block.
+        struct.pack_into("<Q", data, start + 8, 32)
         apk.write_bytes(bytes(data))
         with self.assertRaises(archive.ZipValidationError) as raised:
             archive.parse_and_validate_zip_headers(apk)
