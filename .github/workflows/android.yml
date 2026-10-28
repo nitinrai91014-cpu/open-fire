@@ -48,6 +48,9 @@ jobs:
         shell: bash
         run: python3 .github/scripts/check_sound_and_string_consistency.py
 
+      - name: Test release archive handling
+        run: python3 -m unittest discover -s .github/scripts/tests -v
+
       - name: Run unit tests
         shell: bash
         run: |
@@ -214,8 +217,7 @@ jobs:
             echo "Prepared unsigned APK: $destination_apk"
           done
 
-          # Normalize/align APKs (eliminating any GPB bit-3 Data Descriptors or gaps) and build a
-          # standard seekable Info-ZIP archive so extractors never hit 'W: invalid stored block lengths'
+          # Normalize and align APKs, then store them without recompressing in a seekable ZIP.
           python3 .github/scripts/prepare_release_archive.py build \
             --zipalign "$zipalign" \
             --output "$archive_zip" \
@@ -284,6 +286,7 @@ jobs:
           for apk in release-artifacts/*.apk; do
             expected_args+=(--expected-apk "$apk")
           done
+          cmp release-artifacts/open-fire-release-apks.zip "$downloaded_zip"
           unzip -tq "$downloaded_zip"
           python3 .github/scripts/prepare_release_archive.py verify "$downloaded_zip" "${expected_args[@]}"
           java .github/scripts/VerifyZipStreams.java "$downloaded_zip"
