@@ -72,11 +72,29 @@ object RobertRules {
     const val FLEE_STEP_M = 6f
     const val FLEE_TICK_MS = 160L
 
+    /**
+     * How much faster Robert sprints than the player can ever run.
+     *
+     * The player's fastest three-finger level is defined to match
+     * [enemyFastSpeedMps] exactly, so every retreat of the enemy covers
+     * ground at twice that speed: he breaks contact, crosses the zone and
+     * comes back from an unexpected angle before the player can follow.
+     */
+    const val FLEE_SPEED_MULTIPLIER = 2.0f
+
     /** How often Robert strafes sideways instead of walking straight. */
     const val STRAFE_CHANCE = 0.20f
 
     /** Metres covered by one sideways strafe step. */
     const val STRAFE_STEP_M = 6f
+
+    /**
+     * Flee ticks one sprint always lasts. At [FLEE_TICK_MS] per tick and
+     * [enemyFleeSpeedMps] metres per second this carries Robert right across
+     * the 100 m zone in every round: once he decides to run he is really
+     * gone, and the player has to hunt him down again.
+     */
+    const val SPRINT_TICKS = 8
 
     /** Ticks Robert spends turning back after he detected a wall. */
     const val TURN_BACK_TICKS = 3
@@ -86,6 +104,36 @@ object RobertRules {
 
     /** Player shots inside one burst window that count as continuous fire. */
     const val COUNTER_FIRE_BURST_SHOTS = 3
+
+    /**
+     * The moment Robert answers a hit with a shot of his own: one hit and he
+     * fires straight back, so trading single shots with him is never free.
+     */
+    const val RETALIATE_AFTER_HITS = 1
+
+    /**
+     * Player hits in a row (or unanswered hits) that make Robert sprint far
+     * away instead of trading shots: the player fired twice, or is simply
+     * out-firing him, so he breaks contact at twice the player's speed.
+     */
+    const val FLEE_AFTER_PLAYER_HITS = 2
+
+    /**
+     * How many more hits the player may have landed than Robert before he
+     * decides the exchange is lost and runs for the far edge of the zone.
+     */
+    const val OUTGUNNED_HIT_GAP = 1
+
+    /** Delay before the answering shot of a retaliation really leaves. */
+    const val RETALIATION_DELAY_MS = 220L
+
+    /**
+     * Shortest gap between two answering shots. The first hit is always
+     * answered at once; a held submachine gun that lands hit after hit then
+     * gets one answering shot per window instead of an endless exchange,
+     * which keeps the retaliation human and the fight readable.
+     */
+    const val RETALIATION_COOLDOWN_MS = 700L
 
     /** Window in which player shots are counted as one continuous burst. */
     const val PLAYER_BURST_WINDOW_MS = 2_500L
@@ -158,13 +206,25 @@ object RobertRules {
     /**
      * Robert's fast running speed in metres per second. The player's fast
      * three-finger speed level is defined to match exactly this value, so a
-     * sprinting player and a fleeing enemy cover ground at the same rate.
+     * sprinting player and a repositioning enemy cover ground at the same
+     * rate.
      */
     fun enemyFastSpeedMps(round: Int): Float =
         FLEE_STEP_M * movementSpeedMultiplier(round) / (FLEE_TICK_MS / 1000f)
 
-    /** Metres Robert covers in one flee tick. */
-    fun fleeStep(round: Int): Float = FLEE_STEP_M * movementSpeedMultiplier(round)
+    /**
+     * Robert's sprinting speed in metres per second: exactly
+     * [FLEE_SPEED_MULTIPLIER] times the fastest speed the player can run
+     * (the player's fast level, which is [enemyFastSpeedMps]). He uses it
+     * for every retreat, so losing him once he breaks contact is genuinely
+     * hard.
+     */
+    fun enemyFleeSpeedMps(round: Int): Float =
+        enemyFastSpeedMps(round) * FLEE_SPEED_MULTIPLIER
+
+    /** Metres Robert covers in one flee tick while he is sprinting away. */
+    fun fleeStep(round: Int): Float =
+        FLEE_STEP_M * movementSpeedMultiplier(round) * FLEE_SPEED_MULTIPLIER
 
     /**
      * The health Robert must fall under before he starts spending his
@@ -358,6 +418,29 @@ object RobertRules {
     /** True when Robert has taken enough hits in a row to run far away. */
     fun shouldFlee(consecutiveHits: Int, fleeAfterHits: Int): Boolean =
         fleeAfterHits > 0 && consecutiveHits >= fleeAfterHits
+
+    /**
+     * True when Robert must sprint far away because the player out-fires him:
+     * two hits landed in a row, or clearly more hits landed than he managed
+     * to answer inside the same exchange. This is the "the player fired
+     * twice, so I am gone" decision.
+     */
+    fun shouldFleeFromPlayerFire(
+        hitsTakenInRow: Int,
+        playerHits: Int,
+        robertHits: Int
+    ): Boolean {
+        if (hitsTakenInRow >= FLEE_AFTER_PLAYER_HITS) return true
+        return playerHits - robertHits > OUTGUNNED_HIT_GAP
+    }
+
+    /**
+     * True when Robert must answer a hit with a shot of his own instead of
+     * only running: a single hit is always answered at once, so the enemy
+     * never looks passive while he is being shot at.
+     */
+    fun shouldRetaliate(hitsTakenInRow: Int): Boolean =
+        hitsTakenInRow in RETALIATE_AFTER_HITS until FLEE_AFTER_PLAYER_HITS
 
     /**
      * Hit-exchange retreat rule. Robert compares the hits he has taken with

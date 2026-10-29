@@ -310,10 +310,11 @@ class AudioManager(private val context: Context) {
         "glueSound" to listOf("glue-sound.mp3"),
         "glueHit" to listOf("glue-hit.mp3"),
         "glueWallCrack" to listOf("glue-wall-crack.mp3"),
-        // Hitting one of the four boundaries of the 100 m zone: the wall
-        // impact sound. There is no separate wall asset in the game, so the
-        // recorded wall crack is the wall sound.
-        "wall" to listOf("glue-wall-crack.mp3"),
+        // Hitting one of the four boundaries of the 100 m zone: the dedicated
+        // wall impact sound. It belongs to the player alone — only a manually
+        // controlled fighter can ever run into a boundary, because Robert
+        // detects the wall before he reaches it and changes heading instead.
+        "wall" to listOf("wall-sound.mp3"),
         "cover" to listOf("cover.mp3"),
         "coverHit" to listOf("cover-hit.mp3"),
         "coverCrack" to listOf("cover-crack.mp3"),
