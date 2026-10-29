@@ -1,8 +1,10 @@
 package com.blindtechnexus.openfire.model
 
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.sin
 
 /**
  * One movement attempt inside the 100 m battle zone.
@@ -48,6 +50,18 @@ object Arena {
     /** A coordinate this close to a bound counts as touching the wall. */
     const val WALL_EPSILON = 0.05f
 
+    /**
+     * Room Robert always keeps from a boundary.
+     *
+     * He is a computer-controlled fighter, so he is never allowed to bump
+     * into a wall: every step is tested against the perimeter *before* it is
+     * taken and, whenever his heading would bring him this close to a
+     * boundary, he silently picks a new one. Only the player, who is
+     * controlled by hand, can ever really touch a wall - and only the player
+     * therefore hears the wall impact sound.
+     */
+    const val ROBERT_WALL_MARGIN_M = 2.0f
+
     /** Both fighters start on the centre line, at opposite edges. */
     val PLAYER_START_X = SIZE / 2f
     val PLAYER_START_Y = MIN
@@ -83,6 +97,116 @@ object Arena {
         val sy = clampY(y)
         return sx <= MIN + WALL_EPSILON || sx >= MAX - WALL_EPSILON ||
             sy <= MIN + WALL_EPSILON || sy >= MAX - WALL_EPSILON
+    }
+
+    /** True while the position is within [margin] metres of any boundary. */
+    fun nearWall(x: Float, y: Float, margin: Float): Boolean {
+        if (margin <= 0f) return false
+        val sx = clampX(x)
+        val sy = clampY(y)
+        return sx <= MIN + margin || sx >= MAX - margin ||
+            sy <= MIN + margin || sy >= MAX - margin
+    }
+
+    /**
+     * True when a step of [metres] along (dx, dy) starting at (fromX, fromY)
+     * would be stopped or shortened by a boundary, or would end within
+     * [margin] metres of one.
+     *
+     * This is the whole wall-detection mechanism of the enemy AI: the step is
+     * simulated before it is taken, so Robert changes heading while there is
+     * still open ground in front of him instead of colliding and being
+     * clamped against the perimeter.
+     */
+    fun stepHitsWall(
+        fromX: Float,
+        fromY: Float,
+        dx: Float,
+        dy: Float,
+        metres: Float,
+        margin: Float = 0f
+    ): Boolean {
+        val move = moveBy(fromX, fromY, dx, dy, metres)
+        if (move.blockedByWall || move.touchedWall) return true
+        return nearWall(move.x, move.y, margin)
+    }
+
+    /**
+     * The alternative headings Robert tries, in order, when his preferred one
+     * would run him into a boundary: a 90 degree cut to either side, a 135
+     * degree diagonal, the exact reverse and finally a run at the open middle
+     * of the zone. The first one that is still clear is the one he takes, so
+     * he curves away from a wall instead of grinding along it.
+     */
+    fun escapeHeadings(dx: Float, dy: Float): List<Pair<Float, Float>> {
+        val length = hypot(dx, dy)
+        if (length <= 0.0001f || length.isNaN()) {
+            return listOf(Pair(0f, 1f), Pair(0f, -1f), Pair(1f, 0f), Pair(-1f, 0f))
+        }
+        val ux = dx / length
+        val uy = dy / length
+        val cos45 = 0.70710678f
+        return listOf(
+            // 90 degrees left
+            Pair(-uy, ux),
+            // 90 degrees right
+            Pair(uy, -ux),
+            // 135 degrees left
+            Pair(-uy * cos45 - ux * cos45, ux * cos45 - uy * cos45),
+            // 135 degrees right
+            Pair(uy * cos45 - ux * cos45, -ux * cos45 - uy * cos45),
+            // straight back
+            Pair(-ux, -uy)
+        )
+    }
+
+    /**
+     * The heading Robert should really use for a step of [metres]: his
+     * preferred one when it stays clear of the perimeter, otherwise the first
+     * clear alternative from [escapeHeadings], otherwise a run at the middle
+     * of the zone. It never returns a heading that ends in a wall, so an
+     * automated fighter can keep running forever without a single collision.
+     */
+    fun safeHeading(
+        fromX: Float,
+        fromY: Float,
+        dx: Float,
+        dy: Float,
+        metres: Float,
+        margin: Float = ROBERT_WALL_MARGIN_M
+    ): Pair<Float, Float> {
+        if (dx.isNaN() || dy.isNaN() || metres <= 0f) return Pair(dx, dy)
+        val length = hypot(dx, dy)
+        if (length <= 0.0001f) return Pair(dx, dy)
+        if (!stepHitsWall(fromX, fromY, dx, dy, metres, margin)) return Pair(dx, dy)
+        for (heading in escapeHeadings(dx, dy)) {
+            if (!stepHitsWall(fromX, fromY, heading.first, heading.second, metres, margin)) {
+                return heading
+            }
+        }
+        // No manoeuvre keeps the safety margin - the target is standing close
+        // to a boundary, or the step is huge. Fall back to the heading that
+        // still carries him closest to where he wanted to go without being
+        // stopped by the perimeter, so closing in on a player who camps in a
+        // corner is never abandoned: he walks around the wall instead.
+        val ux = dx / length
+        val uy = dy / length
+        val samples = 16
+        var best: Pair<Float, Float>? = null
+        var bestScore = Float.NEGATIVE_INFINITY
+        for (index in 0 until samples) {
+            val angle = (2.0 * Math.PI * index / samples).toFloat()
+            val heading = Pair(cos(angle), sin(angle))
+            if (stepHitsWall(fromX, fromY, heading.first, heading.second, metres)) continue
+            val score = heading.first * ux + heading.second * uy
+            if (score > bestScore) {
+                bestScore = score
+                best = heading
+            }
+        }
+        // Completely boxed in (only possible with an absurd step): head for
+        // the open middle of the zone, which is always reachable.
+        return best ?: Pair(SIZE / 2f - clampX(fromX), SIZE / 2f - clampY(fromY))
     }
 
     /**
@@ -272,5 +396,26 @@ fun GameState.moveRobert(dx: Float, dy: Float, metres: Float): FighterMove {
         state = withPositions(robertX = move.x, robertY = move.y),
         blockedByWall = move.blockedByWall,
         touchedWall = move.touchedWall
+    )
+}
+
+/**
+ * Moves Robert along an explicit direction, never into a wall.
+ *
+ * The heading is corrected with [Arena.safeHeading] before the step is taken,
+ * so the enemy AI can hold any intention it likes ("run away", "strafe
+ * left", "close in") and still stays inside the zone: the moment the
+ * intention would end against a boundary he cuts sideways, turns back or
+ * runs for the open middle instead. [FighterMove.blockedByWall] and
+ * [FighterMove.touchedWall] therefore stay false for every automated step,
+ * which is what keeps the enemy side completely silent about walls.
+ */
+fun GameState.moveRobertSafely(dx: Float, dy: Float, metres: Float): FighterMove {
+    val heading = Arena.safeHeading(robertX, robertY, dx, dy, metres)
+    val move = Arena.moveBy(robertX, robertY, heading.first, heading.second, metres)
+    return FighterMove(
+        state = withPositions(robertX = move.x, robertY = move.y),
+        blockedByWall = false,
+        touchedWall = false
     )
 }

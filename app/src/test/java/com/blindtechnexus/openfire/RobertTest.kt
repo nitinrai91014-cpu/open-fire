@@ -4,10 +4,13 @@ import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.MissileRules
+import com.blindtechnexus.openfire.model.Arena
 import com.blindtechnexus.openfire.model.BombKind
 import com.blindtechnexus.openfire.model.FireRange
 import com.blindtechnexus.openfire.model.Progression
 import com.blindtechnexus.openfire.model.RobertRules
+import com.blindtechnexus.openfire.model.RunPressure
+import com.blindtechnexus.openfire.model.RunSpeed
 import com.blindtechnexus.openfire.model.Weapon
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -439,18 +442,55 @@ class RobertTest {
     }
 
     @Test
-    fun hisFastSpeedIsExactlyWhatThePlayerFastLevelReaches() {
+    fun hisSprintIsTwiceTheFastestSpeedThePlayerCanRun() {
         for (round in 1..5) {
             val fast = RobertRules.enemyFastSpeedMps(round)
+            val sprint = RobertRules.enemyFleeSpeedMps(round)
+            // The player's fast level reaches exactly Robert's fast speed ...
             assertEquals(
-                RobertRules.fleeStep(round) / (RobertRules.FLEE_TICK_MS / 1000f),
                 fast,
+                RunSpeed.FAST.speedMps(RunPressure.DEFAULT_SPEED_FACTOR, fast),
+                0.01f
+            )
+            // ... and his sprint is twice that: twice the player's top speed.
+            assertEquals(
+                fast * RobertRules.FLEE_SPEED_MULTIPLIER,
+                sprint,
                 0.0001f
             )
-            assertTrue("Round $round must sprint", fast > 10f)
+            assertEquals(
+                sprint,
+                RobertRules.fleeStep(round) / (RobertRules.FLEE_TICK_MS / 1000f),
+                0.0001f
+            )
+            assertTrue("Round $round must sprint", sprint > fast)
+            assertTrue("Round $round sprint must be real", sprint > 10f)
         }
         assertTrue(
             RobertRules.enemyFastSpeedMps(5) > RobertRules.enemyFastSpeedMps(1)
+        )
+    }
+
+    @Test
+    fun oneHitIsAnsweredAndTwoHitsMakeHimRunFarAway() {
+        // A single hit: he fires straight back.
+        assertFalse(RobertRules.shouldFleeFromPlayerFire(1, 1, 0))
+        assertTrue(RobertRules.shouldRetaliate(1))
+        // The second hit in a row: he is out-fired and sprints away.
+        assertTrue(RobertRules.shouldFleeFromPlayerFire(2, 2, 0))
+        assertTrue(RobertRules.shouldFleeFromPlayerFire(2, 2, 1))
+        assertFalse(RobertRules.shouldRetaliate(2))
+        // Out-firing him inside one exchange runs him off as well.
+        assertTrue(RobertRules.shouldFleeFromPlayerFire(1, 3, 1))
+        // Answering properly keeps him in the fight.
+        assertFalse(RobertRules.shouldFleeFromPlayerFire(1, 3, 3))
+        assertFalse(RobertRules.shouldFleeFromPlayerFire(1, 2, 2))
+        // Nothing happens before the first hit, and a sprint always lasts
+        // long enough to really cross the zone.
+        assertFalse(RobertRules.shouldRetaliate(0))
+        assertTrue(RobertRules.SPRINT_TICKS >= 3)
+        assertTrue(
+            RobertRules.fleeStep(1) * RobertRules.SPRINT_TICKS >= Arena.SIZE
         )
     }
 

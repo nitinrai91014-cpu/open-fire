@@ -40,8 +40,8 @@ object SoundDurations {
     /** round-complete.mp3 */
     const val ROUND_COMPLETE_MS = 28_200L
 
-    /** glue-wall-crack.mp3, reused as the boundary wall impact */
-    const val WALL_MS = 2_800L
+    /** wall-sound.mp3, the boundary wall impact */
+    const val WALL_MS = 1_700L
 
     /** walk.mp3 */
     const val WALK_MS = 9_800L

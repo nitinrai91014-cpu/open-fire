@@ -40,8 +40,7 @@ import com.blindtechnexus.openfire.model.ShopResult
 import com.blindtechnexus.openfire.model.Weapon
 import com.blindtechnexus.openfire.model.movePlayer
 import com.blindtechnexus.openfire.model.movePlayerLateral
-import com.blindtechnexus.openfire.model.moveRobert
-import com.blindtechnexus.openfire.model.placeRobertAt
+import com.blindtechnexus.openfire.model.moveRobertSafely
 import com.blindtechnexus.openfire.model.SoundDurations
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -98,6 +97,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var matchLimitJob: Job? = null
     private var foreground = true
 
+    /**
+     * Flee ticks left of Robert's current sprint. A sprint always runs for
+     * [RobertRules.SPRINT_TICKS] ticks at [RobertRules.enemyFleeSpeedMps] -
+     * twice the fastest speed the player can run - before he turns it into a
+     * flanking re-approach, so "running far away" really means crossing the
+     * zone instead of stepping back a couple of metres.
+     */
+    private var robertSprintTicks = 0
+
+    /** Wall-clock moment of Robert's last answering (retaliation) shot. */
+    private var robertRetaliationAtMs = 0L
+
     /** Wall-clock moment the round five seven minute limit expires (0 = none). */
     private var matchDeadlineMs: Long = 0L
 
@@ -118,6 +129,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Last time the boundary wall was announced, so it never spams. */
     private var lastWallAnnounceAtMs: Long = 0L
+
+    /** True while the player's current run is already stopped by a boundary. */
+    private var playerAtWall = false
 
     /** Wall-clock moment the quick-menu hit protection expires. */
     private var menuProtectUntilMs: Long = 0L
@@ -168,8 +182,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         /** Advance tick length. */
         const val ADVANCE_TICK_MS = 550L
 
-        /** Chance that a hit provokes an immediate counter shot. */
-        const val COUNTER_FIRE_CHANCE = 0.25f
+        /** How long Robert holds the far edge while he avoids a glue wall. */
+        const val AVOID_HOLD_MS = 700L
+
+        /** Pause before a finished sprint turns into the flanking re-approach. */
+        const val FLANK_DELAY_MS = 600L
 
         /** Result screen lock-out before another game may start. */
         const val RESULT_LOCK_MS = 4000L
@@ -825,6 +842,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         bombBlastAtMs = 0L
         matchDeadlineMs = 0L
         lastWallAnnounceAtMs = 0L
+        playerAtWall = false
         menuProtectUntilMs = 0L
         playerBurstStartedAtMs = 0L
         lastFireAt = 0L
@@ -1089,9 +1107,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     // A boundary of the 100 m zone: no movement, wall sound.
                     audioManager.stopSound("playerWalk")
                     announceWall()
+                    playerAtWall = true
                     delay(tickMs)
                     continue
                 }
+                playerAtWall = false
 
                 // Our own footsteps are centred at the speech level, follow the
                 // running speed and get louder or quieter with the speed level.
@@ -1106,15 +1126,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * The boundary announcement: the wall impact sound, the word "Wall" spoken
-     * aloud, and a hint on screen. It is rate-limited, so holding a finger
-     * against a wall never turns into a machine-gun of announcements.
+     * aloud, and a hint on screen.
+     *
+     * One impact is one sound. The clip is cut and started at most once per
+     * [WALL_ANNOUNCE_COOLDOWN_MS], which is what stops a finger held against
+     * a boundary from retriggering it on every movement tick - that retrigger
+     * is exactly what used to smear the impact into a continuous, stretched
+     * wall noise. The spoken word is repeated even less often: only when the
+     * run is *newly* stopped, so a long hold stays quiet.
      */
     private fun announceWall() {
         val now = System.currentTimeMillis()
-        val repeat = now - lastWallAnnounceAtMs < WALL_ANNOUNCE_COOLDOWN_MS
+        if (now - lastWallAnnounceAtMs < WALL_ANNOUNCE_COOLDOWN_MS) return
         lastWallAnnounceAtMs = now
+        audioManager.stopSound("wall")
         playSound("wall", volume = WALL_VOLUME)
-        if (repeat) return
+        if (playerAtWall) return
         setLog(t("wallBlocked"))
         speak(t("wallSpeech"), interrupt = true)
     }
@@ -1124,6 +1151,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         playerMoveJob = null
         moveDirection = null
         movePressure = 0f
+        playerAtWall = false
         audioManager.stopSound("playerWalk")
     }
 
@@ -1222,13 +1250,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Starts one of Robert's fast retreats. Every retreat clears the current
-     * hit exchange, so the next fight is judged on its own: two player hits
-     * against one of Robert's always make him run, and he only stands his
-     * ground again once he is landing the greater number of hits.
+     * Starts one of Robert's sprints: [RobertRules.SPRINT_TICKS] ticks of
+     * running at twice the player's top speed, far away from the fight.
+     *
+     * Every sprint clears the current hit exchange, so the next fight is
+     * judged on its own: two player hits against one of Robert's always make
+     * him run, and he only stands his ground again once he is landing the
+     * greater number of hits.
      */
-    private fun beginRobertRetreat() {
-        // A retreat is a movement decision, so cut the enemy's long automatic-weapon tail immediately.
+    private fun beginRobertSprint() {
+        // A sprint is a movement decision, so cut the enemy's long
+        // automatic-weapon tail immediately.
         _gameState.value.robertWeapon?.fireSoundKey?.let(audioManager::stopSound)
         audioManager.stopSound("mp40")
         audioManager.stopSound("machineGun")
@@ -1242,6 +1274,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 robertLateral = 0f
             )
         }
+        robertSprintTicks = RobertRules.SPRINT_TICKS
         rollRobertFireRange(allowDeception = true)
         planRobertStep(120L)
     }
@@ -1250,19 +1283,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private data class StepOutcome(val state: GameState, val blocked: Boolean)
 
     /**
-     * Robert's movement step. He now really walks inside the 100 m zone with
+     * Robert's movement step. He really walks inside the 100 m zone with all
      * four directions available (towards the player, away from him and both
-     * sideways), and every step is checked against the four boundaries:
-     * when he detects a wall he turns back instead of pressing against it.
+     * sideways), and every single step is simulated against the four
+     * boundaries *before* it is taken ([GameState.moveRobertSafely]). The
+     * moment a heading would end on - or even close to - a boundary he
+     * silently cuts sideways, turns back or heads for the open middle of the
+     * zone, so an automated fighter never collides with a wall. Only the
+     * player, who is steered by hand, can ever touch a boundary: that is why
+     * the wall impact sound belongs to the player alone.
      *
      * States:
      *  - "advance":     walk to the distance his current firing band wants;
-     *  - "retreat":     run away at his fast speed after sustained hits;
-     *  - "flank":       re-approach from the side after a retreat hit the edge;
+     *  - "retreat":     sprint far away at twice the player's running speed;
+     *  - "flank":       re-approach from the side after a finished sprint;
      *  - "avoid":       a glue wall he cannot break: keep away until it drops;
      *  - "missileFlee": sprint from a missile in the air;
      *  - "bombFlee":    sprint out of the 50 m blast radius of a bomb;
-     *  - "turnBack":    he detected a wall and walks back into the open zone.
+     *  - "turnBack":    a heading change: he walks back into the open zone.
      */
     private fun robertStep() {
         if (!foreground || _currentScreen.value != Screen.BATTLE) return
@@ -1278,6 +1316,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _gameState.update {
                 it.copy(robertState = "advance", robertTurnBackTicks = 0)
             }
+            robertSprintTicks = 0
         }
 
         // While the player's glue wall is up and Robert has no sniper rifle to
@@ -1336,55 +1375,63 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 // He cannot break the glue wall: stay as far away as possible.
                 val metres = RobertRules.fleeStep(round)
                 val avoiding = runAwayAndUpdate(metres, keepState = "avoid")
-                if (avoiding) {
-                    val after = _gameState.value
+                val after = _gameState.value
+                if (!avoiding) {
+                    audioManager.stopSound("enemyWalk")
+                    ensureRobertPositioned()
+                } else if (after.distance >= Arena.SIZE - BAND_TOLERANCE_M) {
+                    // The far edge is reached: hold it until the wall drops.
+                    audioManager.stopSound("enemyWalk")
+                    planRobertStep(AVOID_HOLD_MS)
+                } else {
                     updateRobertWalkAudio(
                         after.distance,
                         fleeing = true,
-                        speedMps = metres / (FLEE_TICK_MS / 1000f)
+                        speedMps = RobertRules.enemyFleeSpeedMps(round)
                     )
                     planRobertStep(FLEE_TICK_MS)
-                } else {
-                    audioManager.stopSound("enemyWalk")
-                    ensureRobertPositioned()
                 }
             }
             "retreat" -> {
+                // A full sprint: [RobertRules.SPRINT_TICKS] of running at
+                // twice the player's top speed before he comes back around.
                 val metres = RobertRules.fleeStep(round)
-                var outcomeBlocked = false
-                var flanked = false
+                val strafing = RobertRules.shouldStrafe(Random)
+                var blocked = false
                 _gameState.update { current ->
-                    // Mix straight retreats with quick left/right cuts. This keeps
-                    // Robert from becoming an easy, predictable target while he runs.
-                    val outcome = if (RobertRules.shouldStrafe(Random)) {
+                    val outcome = if (strafing) {
                         strafeStep(current, metres, RobertRules.strafeDirection(Random))
                     } else {
                         runAwayStep(current, metres)
                     }
-                    outcomeBlocked = outcome.blocked
-                    flanked = outcome.state.robertState == "flank"
+                    blocked = outcome.blocked
                     outcome.state
                 }
-                when {
-                    outcomeBlocked -> {
-                        startTurnBack(_gameState.value)
-                        audioManager.stopSound("enemyWalk")
-                    }
-                    flanked -> {
-                        // The far edge is reached: he comes around from the side.
-                        audioManager.stopSound("enemyWalk")
-                        playSound("wall", volume = 0.7f, posZ = -_gameState.value.distance)
-                        planRobertStep(900L + Random.nextInt(500))
-                    }
-                    else -> {
-                        val after = _gameState.value
-                        updateRobertWalkAudio(
-                            after.distance,
-                            fleeing = true,
-                            speedMps = metres / (FLEE_TICK_MS / 1000f)
+                if (blocked) {
+                    startRobertRehead()
+                    audioManager.stopSound("enemyWalk")
+                    return
+                }
+                robertSprintTicks = (robertSprintTicks - 1).coerceAtLeast(0)
+                val after = _gameState.value
+                if (robertSprintTicks > 0) {
+                    updateRobertWalkAudio(
+                        after.distance,
+                        fleeing = true,
+                        speedMps = RobertRules.enemyFleeSpeedMps(round)
+                    )
+                    planRobertStep(FLEE_TICK_MS)
+                } else {
+                    // The sprint is over: he comes back from a new angle.
+                    audioManager.stopSound("enemyWalk")
+                    _gameState.update {
+                        it.copy(
+                            robertState = "flank",
+                            robertFlankSide = if (Random.nextBoolean()) 1 else -1
                         )
-                        planRobertStep(FLEE_TICK_MS)
                     }
+                    rollRobertFireRange(allowDeception = true)
+                    planRobertStep(FLANK_DELAY_MS + Random.nextLong(400L))
                 }
             }
             "flank" -> {
@@ -1397,12 +1444,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     val strafed = strafeStep(now, speed * 0.6f, side)
                     val base = if (strafed.blocked) now else strafed.state
                     val wanted = max(target, base.distance - speed * 0.4f)
-                    val placed = base.placeRobertAt(wanted)
-                    blocked = placed.blockedByWall
-                    if (blocked) base else placed.state
+                    val outcome = approachStep(base, max(0f, base.distance - wanted))
+                    blocked = outcome.blocked
+                    if (blocked) base else outcome.state
                 }
                 if (blocked) {
-                    startTurnBack(_gameState.value)
+                    startRobertRehead()
                     audioManager.stopSound("enemyWalk")
                     return
                 }
@@ -1447,7 +1494,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     outcome.state
                 }
                 if (blocked) {
-                    startTurnBack(_gameState.value)
+                    startRobertRehead()
                     return
                 }
                 val after = _gameState.value
@@ -1469,22 +1516,28 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             blocked = outcome.blocked
             outcome.state
         }
-        if (blocked) startTurnBack(_gameState.value)
+        if (blocked) startRobertRehead()
         return !blocked && _gameState.value.robertState == keepState
     }
 
     /**
-     * Robert detected a wall: he announces it with the wall sound, turns around
-     * and walks back into the open zone for a few ticks before fighting on.
+     * Robert detected a wall: he changes heading at once and walks back into
+     * the open zone for a few ticks before fighting on.
+     *
+     * Because every step of his is simulated against the perimeter before it
+     * is taken ([GameState.moveRobertSafely]), this is only ever a safety net
+     * and it is completely silent: the enemy never collides with a boundary,
+     * so the wall impact sound - a sound of the manually steered player -
+     * never plays on the enemy side.
      */
-    private fun startTurnBack(state: GameState) {
+    private fun startRobertRehead() {
         _gameState.update {
             it.copy(
                 robertState = "turnBack",
                 robertTurnBackTicks = RobertRules.TURN_BACK_TICKS
             )
         }
-        playSound("wall", volume = 0.8f, posZ = -state.distance)
+        robertSprintTicks = 0
         setLog(t("robertTurnedBack"))
         planRobertStep(280L)
     }
@@ -1492,7 +1545,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** Walks back towards the middle of the zone until the wall is behind him. */
     private fun turnBackStep(current: GameState, metres: Float): GameState {
         val ticks = (current.robertTurnBackTicks - 1).coerceAtLeast(0)
-        val move = current.moveRobert(
+        val move = current.moveRobertSafely(
             Arena.SIZE / 2f - current.robertX,
             Arena.SIZE / 2f - current.robertY,
             metres
@@ -1507,7 +1560,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /** One step straight towards the player (closing the distance). */
     private fun approachStep(current: GameState, metres: Float): StepOutcome {
-        val move = current.moveRobert(
+        val move = current.moveRobertSafely(
             current.playerX - current.robertX,
             current.playerY - current.robertY,
             metres
@@ -1519,49 +1572,47 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun strafeStep(current: GameState, metres: Float, side: Int): StepOutcome {
         val dx = current.playerX - current.robertX
         val dy = current.playerY - current.robertY
-        val move = current.moveRobert(-dy * side, dx * side, metres)
+        val move = current.moveRobertSafely(-dy * side, dx * side, metres)
         return StepOutcome(if (move.moved) move.state else current, move.blockedByWall)
     }
 
     /**
-     * One step away from the player. When the boundary stops him completely he
-     * turns back; when it only shortens the step he switches to a flank (or
-     * keeps the state he was told to keep, for the avoidance and missile runs).
+     * One step away from the player.
+     *
+     * A wall can never stop him: [GameState.moveRobertSafely] swaps the
+     * heading for a clear one before the step is taken, so the run simply
+     * continues along the open ground - sideways, backwards or into the
+     * middle of the zone - instead of ending in a collision.
      */
     private fun runAwayStep(
         current: GameState,
         metres: Float,
         keepState: String = "retreat"
     ): StepOutcome {
-        val move = current.moveRobert(
+        val move = current.moveRobertSafely(
             current.robertX - current.playerX,
             current.robertY - current.playerY,
             metres
         )
-        return when {
-            move.blockedByWall -> StepOutcome(
+        return if (move.moved) {
+            StepOutcome(move.state.copy(robertState = keepState), blocked = false)
+        } else {
+            StepOutcome(
                 current.copy(
                     robertState = "turnBack",
                     robertTurnBackTicks = RobertRules.TURN_BACK_TICKS
                 ),
                 blocked = true
             )
-            move.touchedWall && keepState == "retreat" -> {
-                // The far edge is reached: come around from the side instead.
-                val side = if (Random.nextBoolean()) 1 else -1
-                StepOutcome(
-                    move.state.copy(robertState = "flank", robertFlankSide = side),
-                    blocked = false
-                )
-            }
-            else -> StepOutcome(move.state.copy(robertState = keepState), blocked = false)
         }
     }
 
     /**
      * Sprint out of a bomb's 50 m blast radius, in whichever direction really
      * increases the distance from the destination. If the bomb explodes before
-     * he crosses the line, the blast kills him.
+     * he crosses the line, the blast kills him. A wall never stops the run:
+     * the heading is corrected before the step, so he keeps looking for open
+     * ground until the blast.
      */
     private fun bombFleeStep(current: GameState, metres: Float): GameState {
         if (!current.bombInFlight) return current.copy(robertState = "advance")
@@ -1571,15 +1622,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val escape = Arena.escapeDirection(
             current.bombX, current.bombY, current.robertX, current.robertY
         )
-        val move = current.moveRobert(escape.first, escape.second, metres)
-        return if (move.blockedByWall) {
-            // Nowhere left to run: he turns back and takes his chances.
+        val move = current.moveRobertSafely(escape.first, escape.second, metres)
+        return if (move.moved) {
+            move.state.copy(robertState = "bombFlee")
+        } else {
+            // Nowhere left to run: he changes heading and takes his chances.
             current.copy(
                 robertState = "turnBack",
                 robertTurnBackTicks = RobertRules.TURN_BACK_TICKS
             )
-        } else {
-            move.state.copy(robertState = "bombFlee")
         }
     }
 
@@ -1703,7 +1754,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (shouldRetreat) {
             val state = _gameState.value
             if (state.robertState == "advance" || state.robertState == "flank") {
-                beginRobertRetreat()
+                beginRobertSprint()
             }
         }
     }
@@ -1726,8 +1777,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * Robert's attack. It picks one of the weapons it is allowed to use right
      * now (switching often to confuse the player), reloads after six shots
      * without paying coins, and obeys the exact same proximity zones.
+     *
+     * [retaliate] marks the answering shot of [robertOnHit]: it bypasses
+     * every "maybe run instead of shooting" roll, because the one thing an
+     * enemy under fire must never do is stand there and take it. Only a
+     * projectile in the air, the timer picker or a gloo wall he cannot break
+     * can still keep him quiet.
      */
-    private fun robertAttack() {
+    private fun robertAttack(retaliate: Boolean = false) {
         if (!foreground || _currentScreen.value != Screen.BATTLE) return
         var state = _gameState.value
         if (state.robertHp <= 0 || state.playerHp <= 0) return
@@ -1749,11 +1806,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerMaxHp = state.playerMaxHp,
             playerWeaponDamaged = isPlayerWeaponLocked(state)
         )
-        // A retreat is movement, not a hidden opportunity to keep shooting.
-        // If a wall forces a turn-back while the player is firing continuously,
-        // Robert may turn and return one counter-shot before the flank/run resumes.
-        if (state.robertState in setOf("retreat", "avoid", "missileFlee", "bombFlee")) return
-        if (state.robertState == "turnBack" &&
+        // A retreat is movement, not a hidden opportunity to keep shooting -
+        // unless the shot is a retaliation: an enemy that is being shot at
+        // answers over his shoulder while he runs.
+        if (!retaliate &&
+            state.robertState in setOf("retreat", "avoid", "missileFlee", "bombFlee")
+        ) return
+        if (!retaliate &&
+            state.robertState == "turnBack" &&
             !RobertRules.isContinuousPlayerFire(state.playerBurstShots)
         ) return
         val playerWeakFraction = playerHpFraction(state)
@@ -1763,20 +1823,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // Robert in this exchange (two against one, for example) Robert runs
         // away immediately. A protected Robert is the one exception - he
         // keeps firing from behind his barrier.
-        if (!pressing && (
+        if (!retaliate && !pressing && (
                 RobertRules.shouldFleeFight(state.fightPlayerHits, state.fightRobertHits) ||
                     (situation == RobertRules.CombatSituation.DISADVANTAGE &&
                         (state.robertState == "advance" || state.robertState == "flank"))
             )
         ) {
-            beginRobertRetreat()
+            beginRobertSprint()
             return
         }
 
         // A finished burst is never extended: he fired one or two shots, so
         // now he pauses and very often repositions instead of shooting again.
         // Only the pressing situations are allowed to fire continuously.
-        if (!pressing &&
+        if (!retaliate && !pressing &&
             RobertRules.burstFinished(state.robertSuccessiveShots, state.robertBurstLimit)
         ) {
             _gameState.update {
@@ -1789,14 +1849,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             if (RobertRules.shouldRunAfterBurst(Random) &&
                 (fresh.robertState == "advance" || fresh.robertState == "flank")
             ) {
-                beginRobertRetreat()
+                beginRobertSprint()
             }
             return
         }
 
         // He runs as readily as he shoots: unless the player is pinned down,
         // a good share of his decisions is a reposition instead of a shot.
-        if (!pressing && RobertRules.shouldRepositionInsteadOfFiring(
+        if (!retaliate && !pressing && RobertRules.shouldRepositionInsteadOfFiring(
                 situation = situation,
                 playerWeaponDamaged = isPlayerWeaponLocked(state),
                 playerHpFraction = playerWeakFraction,
@@ -1804,7 +1864,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             )
         ) {
             if (state.robertState == "advance" || state.robertState == "flank") {
-                beginRobertRetreat()
+                beginRobertSprint()
                 return
             }
         }
@@ -1869,20 +1929,28 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         // Smart weapon selection based on health bands: 40-70%, 90-100%, 20-40%
         // If enemy feels unsafe (low health or heavy damage streak) he retreats.
-        if (RobertRules.shouldRetreatUnsafe(state.robertHp, state.robertMaxHp, state.robertConsecutiveHits, proximityNow)) {
+        if (!retaliate && RobertRules.shouldRetreatUnsafe(
+                state.robertHp,
+                state.robertMaxHp,
+                state.robertConsecutiveHits,
+                proximityNow
+            )
+        ) {
             if (state.robertState == "advance" || state.robertState == "flank") {
-                beginRobertRetreat()
+                beginRobertSprint()
                 return
             }
         }
-        // If player deployed Gloo Wall and enemy lacks sniper, retreat immediately
+        // The player raised a gloo wall and Robert has no sniper rifle to
+        // break it: he does not trade shots, he runs away and stays away
+        // until the wall drops.
         val robertHasSniperNow = RobertRules.hasUsableSniper(allowed, isRobertWeaponDamaged(state, Weapon.SNIPER))
         if (state.glueWallActive && !robertHasSniperNow) {
-            if (state.robertState != "avoid" && state.robertState != "retreat" && state.robertState != "turnBack") {
+            if (state.robertState != "avoid") {
                 _gameState.update { it.copy(robertState = "avoid") }
                 planRobertStep(140L)
-                return
             }
+            return
         }
         // Smart logic: select best weapon for current health band before firing
         val smartChoice = RobertRules.smartWeaponForSituation(
@@ -2136,18 +2204,76 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         return extra
     }
 
-    private fun robertOnHit() {
+    /**
+     * Schedules Robert's answering shot.
+     *
+     * A single hit is always answered: the shot leaves after
+     * [RobertRules.RETALIATION_DELAY_MS], so being shot at is never free and
+     * the enemy is never a passive punching bag.
+     */
+    private fun scheduleRobertRetaliation() {
+        // The first hit of an exchange is always answered; further hits inside
+        // the cooldown window do not stack extra answering shots on top of it.
+        val now = System.currentTimeMillis()
+        if (now - robertRetaliationAtMs < RobertRules.RETALIATION_COOLDOWN_MS) return
+        robertRetaliationAtMs = now
         counterJob?.cancel()
-        if (Random.nextFloat() > COUNTER_FIRE_CHANCE) return
         counterJob = viewModelScope.launch {
-            delay(350L)
+            delay(RobertRules.RETALIATION_DELAY_MS)
             if (foreground &&
                 _currentScreen.value == Screen.BATTLE &&
                 _gameState.value.robertHp > 0 &&
                 _gameState.value.playerHp > 0
             ) {
-                robertAttack()
+                robertRetaliationAtMs = System.currentTimeMillis()
+                robertAttack(retaliate = true)
             }
+        }
+    }
+
+    /**
+     * Robert's reaction to a hit.
+     *
+     * The rule is deliberately simple and human:
+     *  - the player hit him once  -> he fires straight back ([scheduleRobertRetaliation]);
+     *  - the player hit him twice, or is clearly out-firing him -> he sprints
+     *    far away at twice the player's running speed ([beginRobertSprint]);
+     *  - the player hid behind a gloo wall he cannot break -> he runs away and
+     *    stays away until the wall drops.
+     *
+     * [direct] is false for a shot that was stopped by one of his barriers:
+     * those do not count towards the hit streak, but he still answers them.
+     */
+    private fun robertOnHit(direct: Boolean = true) {
+        val state = _gameState.value
+        if (state.robertHp <= 0 || state.playerHp <= 0) return
+        // While the player is choosing a timer bomb duration he holds his fire
+        // completely, and while a projectile is in the air he only runs.
+        if (state.timerSelectActive || state.missileInFlight) return
+        if (state.bombInFlight && state.bombFromPlayer) return
+        if (!direct) {
+            scheduleRobertRetaliation()
+            return
+        }
+        // A gloo wall he cannot break: he refuses the exchange entirely.
+        if (state.glueWallActive && !robertHasUsableSniper(state)) {
+            if (state.robertState != "avoid") {
+                _gameState.update { it.copy(robertState = "avoid") }
+                planRobertStep(140L)
+            }
+            return
+        }
+        if (RobertRules.shouldFleeFromPlayerFire(
+                hitsTakenInRow = state.robertConsecutiveHits,
+                playerHits = state.fightPlayerHits,
+                robertHits = state.fightRobertHits
+            )
+        ) {
+            beginRobertSprint()
+            return
+        }
+        if (RobertRules.shouldRetaliate(state.robertConsecutiveHits)) {
+            scheduleRobertRetaliation()
         }
     }
 
@@ -2249,7 +2375,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if (!protectedPress &&
             RobertRules.shouldFleeFight(state.fightPlayerHits, state.fightRobertHits)
         ) {
-            beginRobertRetreat()
+            beginRobertSprint()
             return " ${t("robertFled")}"
         }
 
@@ -2286,7 +2412,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         if ((state.robertState == "advance" || state.robertState == "flank") &&
             (mustFlee || sustained)
         ) {
-            beginRobertRetreat()
+            beginRobertSprint()
             return " ${t("robertFled")}"
         }
 
@@ -2544,9 +2670,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         playSound("click")
         msg(t("selectTimer"))
+        // The timer instructions are the only thing that is spoken here: the
+        // extra "the enemy holds his fire while you choose" announcement was
+        // removed, because it interrupted the duration itself and said
+        // nothing the player can act on. Robert simply keeps quiet until the
+        // choice is locked in or the picker is dismissed.
         speakTimerSelection(instructions = true)
-        // Robert holds his fire for as long as the picker is open.
-        speak(t("enemyHoldsFire"))
     }
 
     /** Walks the timer picker one duration left (-1) or right (+1). */
@@ -3081,7 +3210,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 msg(t("robertGlueBlocked"))
             }
-            robertOnHit()
+            robertOnHit(direct = false)
             return
         }
 
@@ -3097,7 +3226,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 playSound("coverHit", volume = 0.8f)
                 msg("${t("coverHitsLeft")} ${Combat.COVER_MAX_HITS - hits}.")
             }
-            robertOnHit()
+            robertOnHit(direct = false)
             return
         }
 
@@ -4075,6 +4204,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         matchLimitJob?.cancel()
         matchLimitJob = null
         matchDeadlineMs = 0L
+        robertSprintTicks = 0
+        robertRetaliationAtMs = 0L
+        playerAtWall = false
         // Stop a missile or a bomb still in the air (their countdown sounds
         // included), but never cut an explosion that has just impacted:
         // screen changes stop that separately. Every weapon stream and every
