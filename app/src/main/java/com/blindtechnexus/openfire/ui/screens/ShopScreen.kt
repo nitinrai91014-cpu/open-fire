@@ -31,6 +31,7 @@ import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
 import com.blindtechnexus.openfire.model.Inventory
+import com.blindtechnexus.openfire.model.Loans
 import com.blindtechnexus.openfire.model.MissileRules
 import com.blindtechnexus.openfire.model.Progression
 import com.blindtechnexus.openfire.model.Screen
@@ -109,6 +110,38 @@ fun ShopScreen(viewModel: GameViewModel) {
         Spacer(modifier = Modifier.height(16.dp))
 
         // ------------------------------------------------------------------
+        // Loans are an accessible heading, with status and all three choices.
+        GameCard {
+            Text(
+                text = viewModel.t("loans"),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                modifier = Modifier.semantics { heading() }.testTag("shop_loans_heading")
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = if (stats.loanBalance > 0) {
+                    "${viewModel.t("loanActive")} ${viewModel.t("loanRemaining")}: ${stats.loanBalance} ${viewModel.t("coins")}."
+                } else viewModel.t("loanNone"),
+                color = Color.White,
+                modifier = Modifier.testTag("shop_loan_status")
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(text = viewModel.t("loanRules"), color = TextMuted, lineHeight = 20.sp)
+            Spacer(modifier = Modifier.height(10.dp))
+            Loans.AMOUNTS.forEach { amount ->
+                GameButton(
+                    text = "${viewModel.t("takeLoan")} $amount ${viewModel.t("coins")}",
+                    onClick = { viewModel.takeLoan(amount) },
+                    enabled = stats.loanBalance == 0 && stats.coins < Loans.ELIGIBILITY_LIMIT,
+                    testTag = "shop_loan_$amount"
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Weapons
         // ------------------------------------------------------------------
         GameCard {
@@ -148,8 +181,8 @@ fun ShopScreen(viewModel: GameViewModel) {
                         viewModel.t("missileLocked")
                     }
                 } else if (weapon.bomb) {
-                    // Bombs are lethal, not "100 HP" weapons.
-                    "${viewModel.t("explosiveLethal")} " +
+                    // Show the capped flat damage for each tracking bomb.
+                    "${viewModel.t("explosiveLethal")} ${weapon.powerPercent} ${viewModel.t("hp")}. " +
                         "${viewModel.t("ammo")}: ${weapon.magazine}."
                 } else {
                     // Damage is flat health points, never a percentage of the
@@ -224,7 +257,7 @@ fun ShopScreen(viewModel: GameViewModel) {
         Spacer(modifier = Modifier.height(16.dp))
 
         // ------------------------------------------------------------------
-        // Bomb powers: stackable consumables for grenades/atom/timer — 1500 coins each.
+        // Bomb powers: stackable consumables for atom/timer bombs — 850 coins each.
         // 1 Bomb Power = 1 use of any bomb type, tracking like missiles.
         // ------------------------------------------------------------------
         GameCard {
@@ -281,7 +314,7 @@ fun ShopScreen(viewModel: GameViewModel) {
             )
             Spacer(modifier = Modifier.height(12.dp))
 
-            DefenceItem.entries.forEach { item ->
+            DefenceItem.entries.sortedBy { it.price }.forEach { item ->
                 val unlocked = stats.completedRounds >= item.requiredCompletedRounds
                 DefenceRow(
                     viewModel = viewModel,
@@ -314,7 +347,7 @@ fun ShopScreen(viewModel: GameViewModel) {
             )
             Spacer(modifier = Modifier.height(12.dp))
 
-            Extension.entries.forEach { extension ->
+            Extension.entries.sortedBy { it.price }.forEach { extension ->
                 val state = inventory.extensionState(extension)
                 val owned = state != com.blindtechnexus.openfire.model.ExtensionState.NOT_OWNED
                 val enabled = state == com.blindtechnexus.openfire.model.ExtensionState.ENABLED

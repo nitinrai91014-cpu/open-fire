@@ -16,12 +16,12 @@ class MissileRulesTest {
 
     @Test
     fun pricesAndUnlockMatchTheRequest() {
-        // Every missile price dropped by 200 coins.
-        assertEquals(3300, MissileRules.MISSILE_PRICE)
-        assertEquals(1600, MissileRules.MISSILE_POWER_PRICE)
-        assertEquals(2800, MissileRules.ANTI_MISSILE_PRICE)
+        // Prices respect the new cap.
+        assertEquals(2200, MissileRules.MISSILE_PRICE)
+        assertEquals(1000, MissileRules.MISSILE_POWER_PRICE)
+        assertEquals(1800, MissileRules.ANTI_MISSILE_PRICE)
         assertEquals(2, Progression.MISSILE_UNLOCK_COMPLETED_ROUNDS)
-        assertEquals(3300, Weapon.MISSILE.price)
+        assertEquals(2200, Weapon.MISSILE.price)
         // The flight sound is about fourteen seconds long.
         assertTrue(MissileRules.SOUND_DURATION_MS in 13_000L..16_000L)
         assertEquals(SoundDurations.MISSILE_MS, MissileRules.SOUND_DURATION_MS)

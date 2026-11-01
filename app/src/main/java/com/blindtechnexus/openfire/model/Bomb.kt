@@ -123,7 +123,7 @@ enum class BombKind(
  *  - from round three Robert carries anti-bomb explosives per the round
  *    table: twice in round 3, three times in round 4 and five times in round 5;
  *    the player's anti-bomb explosive is free and always usable from round 3;
- *  - bomb power: each Bomb Power upgrade costs 1500 coins and allows one atom
+ *  - bomb power: each Bomb Power upgrade costs 850 coins and allows one atom
  *    bomb or one timer bomb throw. The grenade is free for both fighters, so
  *    it never spends a Bomb Power;
  *  - an intercepted, disposed or destroyed bomb always plays the explosion
@@ -131,10 +131,10 @@ enum class BombKind(
  */
 object BombRules {
     /** Shop price of one anti-bomb explosive defence. */
-    const val ANTI_BOMB_PRICE = 2600
+    const val ANTI_BOMB_PRICE = 1700
 
     /** Shop price of one Bomb Power (allows one bomb use). */
-    const val BOMB_POWER_PRICE = 1500
+    const val BOMB_POWER_PRICE = 850
 
     /** First round that carries bombs and anti-bomb explosives. */
     const val FIRST_BOMB_ROUND = 3
@@ -254,12 +254,12 @@ object BombRules {
 
     /**
      * Bombs now track their target like missiles: they always kill the enemy at any cost.
-     * This returns true unless intercepted, guaranteeing the blast destroys the target.
+     * This returns true unless intercepted, guaranteeing the blast reaches the target.
      */
     fun trackingKillGuaranteed(): Boolean = true
 
     /**
-     * True when the timer bomb also destroys its own thrower: the thrower did
+     * True when the timer bomb also hits its own thrower: the thrower did
      * not keep the [SAFE_DISTANCE] metre safety distance.
      */
     fun timerBombKillsThrower(throwerDistanceFromBomb: Float): Boolean =

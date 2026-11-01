@@ -18,6 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -46,13 +48,14 @@ import kotlin.math.roundToInt
  *
  * One-finger swipes fire, reload and switch weapons, two-finger swipes move
  * the menu and read the status, and three-finger swipes step the running
- * speed slower or faster.
+ * speed and pause or resume the battle.
  */
 @Composable
 fun BattleScreen(viewModel: GameViewModel) {
     val stats by viewModel.stats.collectAsState()
     val inventory by viewModel.inventory.collectAsState()
     val gameState by viewModel.gameState.collectAsState()
+    val paused by viewModel.battlePaused.collectAsState()
 
     val weapon = gameState.activeWeapon
     val enemyHp = maxOf(0, gameState.robertHp)
@@ -109,6 +112,17 @@ fun BattleScreen(viewModel: GameViewModel) {
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
+        if (paused) {
+            Text(
+                text = viewModel.t("battlePaused"),
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().background(Color(0xFF563800))
+                    .padding(8.dp).testTag("battle_paused")
+                    .semantics { liveRegion = LiveRegionMode.Polite }
+            )
+        }
         // --------------------------------------------------------------
         // Top third: long press to run toward Robert.
         // --------------------------------------------------------------

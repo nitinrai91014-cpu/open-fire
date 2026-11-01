@@ -77,6 +77,8 @@ data class GameStats(
     val wins: Int = 0,
     val kills: Int = 0,
     val coins: Int = 100,
+    /** Unpaid principal; zero means no loan is active. */
+    val loanBalance: Int = 0,
     val round: Int = 1,
     val level: Int = 1,
     /** Wins collected inside the current level. Five wins promote a level. */
@@ -427,6 +429,10 @@ data class ResultData(
     val rewardWeapons: List<String> = emptyList(),
     /** Coins deducted for a defeat (0 when the player had none). */
     val coinsLost: Int = 0,
+    /** Portion of gross winnings applied to the loan, and principal still owed. */
+    val loanDeducted: Int = 0,
+    val loanRemaining: Int = 0,
+    val loanWasActive: Boolean = false,
     /** True when the round five time limit ran out: Robert survived. */
     val timeUp: Boolean = false
 ) {

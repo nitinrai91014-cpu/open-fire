@@ -132,27 +132,28 @@ class EncryptedStore(
         return values
     }
 
-    /** Encrypts and atomically persists a profile file. */
-    fun write(name: String, values: Map<String, String>) {
+    /** Encrypts and atomically replaces a profile file. Failed writes leave the old
+     * file and cache intact so a loan and its coins cannot get out of sync. */
+    fun write(name: String, values: Map<String, String>): Boolean = synchronized(memory) {
         val file = fileFor(name)
+        val temp = File(directory, "$name.tmp")
         try {
-            if (!directory.exists()) directory.mkdirs()
-            val payload = encodeValues(values)
-            val text = encryptToText(payload)
-            val temp = File(directory, "$name.tmp")
-            temp.writeText(text, Charsets.UTF_8)
-            if (file.exists() && !file.delete()) {
-                Log.w(TAG, "Could not replace $name")
+            if (!directory.exists() && !directory.mkdirs()) return@synchronized false
+            val text = encryptToText(encodeValues(values))
+            java.io.FileOutputStream(temp).use { output ->
+                output.write(text.toByteArray(Charsets.UTF_8))
+                output.fd.sync()
             }
-            if (!temp.renameTo(file)) {
-                // Renaming can fail on some external storages; fall back to a copy.
-                file.writeText(text, Charsets.UTF_8)
-                temp.delete()
-            }
+            // Both files are in the same directory; rename replaces the old file
+            // atomically on Android. Never delete the old profile first.
+            if (!temp.renameTo(file)) throw java.io.IOException("Could not replace $name")
+            memory[name] = values.toMap()
+            true
         } catch (t: Throwable) {
             Log.e(TAG, "Unable to save encrypted file $name", t)
+            temp.delete()
+            false
         }
-        synchronized(memory) { memory[name] = values.toMap() }
     }
 
     /** Deletes a stored file and forgets its cached copy. */

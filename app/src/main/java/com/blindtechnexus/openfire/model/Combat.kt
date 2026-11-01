@@ -97,9 +97,8 @@ enum class Facing(val id: String, val dx: Float, val dy: Float, val nameKey: Str
  *
  * The exact health-point values per weapon and per zone live in one single
  * place, [DamageTable], and both fighters read their damage from it. Normal
- * weapons are flat HP values capped at 40 health points per hit - they never
- * scale with the victim's maximum health - while bombs and the missile are
- * lethal. The AWM is the one long-range exception: inside the 20% to 40% band
+ * weapons and explosives are flat HP values capped at 60 health points per
+ * hit; they never scale with the victim's maximum health. The AWM is the one long-range exception: inside the 20% to 40% band
  * it still lands a precision hit.
  *
  * There is no preset where a combatant loses after a fixed number of hits:
@@ -157,7 +156,7 @@ object Combat {
     const val GLUE_WALL_BREAK_PROXIMITY = 90f
 
     /** Close-range shotgun power retained as a named combat constant. */
-    const val SHORT_GUN_CLOSE_POWER_PERCENT = 16
+    const val SHORT_GUN_CLOSE_POWER_PERCENT = 30
 
     /** Converts a distance (50 = far edge, 0 = point-blank) into 0..100% proximity. */
     fun proximityOf(distance: Float): Float =
@@ -209,7 +208,7 @@ object Combat {
     fun damageForDirectPower(powerPercent: Int, proximityPercent: Float, maxHp: Int): Int {
         if (maxHp <= 0 || powerPercent <= 0) return 0
         if (zoneFor(proximityPercent) == HitZone.MISS) return 0
-        return powerPercent.coerceAtMost(maxHp)
+        return powerPercent.coerceAtMost(maxHp).coerceAtMost(DamageTable.MAX_WEAPON_DAMAGE_HP)
     }
 
     /**

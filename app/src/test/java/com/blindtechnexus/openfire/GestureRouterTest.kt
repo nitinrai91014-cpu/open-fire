@@ -17,7 +17,7 @@ import org.junit.Test
  * Locks down the battle gesture contract:
  *  - One finger: up fire, down reload, right/left switch weapon.
  *  - Two fingers: up/down move the quick menu, right/left speak the status.
- *  - Three or more fingers: right runs faster, left runs slower.
+ *  - Three or more fingers: right cycles speed, left pauses or resumes.
  *  - A single tap activates the highlighted quick-menu item.
  *  - Holding a zone runs in one of the four directions of the 100 m zone.
  */
@@ -42,9 +42,9 @@ class GestureRouterTest {
     @Test
     fun threeFingerSwipesCycleTheRunningSpeed() {
         assertEquals(GameAction.SPEED_FASTER, GestureRouter.route(Screen.BATTLE, "right", 3))
-        assertEquals(GameAction.SPEED_SLOWER, GestureRouter.route(Screen.BATTLE, "left", 3))
+        assertEquals(GameAction.TOGGLE_PAUSE, GestureRouter.route(Screen.BATTLE, "left", 3))
         assertEquals(GameAction.SPEED_FASTER, GestureRouter.route(Screen.BATTLE, "right", 4))
-        assertEquals(GameAction.SPEED_SLOWER, GestureRouter.route(Screen.BATTLE, "left", 5))
+        assertEquals(GameAction.TOGGLE_PAUSE, GestureRouter.route(Screen.BATTLE, "left", 5))
         // Up and down stay reserved for firing and reloading.
         assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "up", 3))
         assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "down", 3))

@@ -62,6 +62,7 @@ class EnemyBattleIntegrationTest {
             assertTrue(state.value.robertGlueWallActive)
             assertEquals(0, state.value.robertGlueWalls)
         } finally {
+            invoke(vm, "stopTimers")
             vm.onAppPaused()
             vm.audioManager.release()
             vm.ttsManager.shutdown()
@@ -82,6 +83,7 @@ class EnemyBattleIntegrationTest {
             assertEquals(1, state.value.robertGlueBreakers)
             assertTrue(state.value.robertBreakerArmed)
         } finally {
+            invoke(vm, "stopTimers")
             vm.onAppPaused()
             vm.audioManager.release()
             vm.ttsManager.shutdown()
@@ -106,6 +108,7 @@ class EnemyBattleIntegrationTest {
                 assertEquals(index + 1, state.value.robertShots)
             }
         } finally {
+            invoke(vm, "stopTimers")
             vm.onAppPaused()
             vm.audioManager.release()
             vm.ttsManager.shutdown()
@@ -121,14 +124,34 @@ class EnemyBattleIntegrationTest {
             val initial = GameState(distance = 5f, robertHp = 180, fightPlayerHits = 2,
                 fightRobertHits = 1, robertConsecutiveHits = 1)
             state.value = initial
-            invoke(vm, "robertAfterHit")
+            invoke(vm, "robertAfterHit", 21)
             assertEquals("retreat", state.value.robertState)
             for (wall in listOf(false, true)) {
                 state.value = initial.copy(robertCoverActive = !wall, robertGlueWallActive = wall)
-                invoke(vm, "robertAfterHit")
+                invoke(vm, "robertAfterHit", 0)
                 assertEquals("advance", state.value.robertState)
             }
         } finally {
+            invoke(vm, "stopTimers")
+            vm.onAppPaused()
+            vm.audioManager.release()
+            vm.ttsManager.shutdown()
+        }
+    }
+
+    @Test
+    fun sustainedHitsRetreatBeforePanicDefenceResetsCountersEvenInAnEvenExchange() {
+        val vm = GameViewModel(ApplicationProvider.getApplicationContext<Application>())
+        try {
+            flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+            val state = flow<GameState>(vm, "_gameState")
+            state.value = GameState(distance = 5f, robertHp = 100, robertMaxHp = 200,
+                fightPlayerHits = 2, fightRobertHits = 2, robertConsecutiveHits = 2,
+                playerBurstShots = 2, playerBurstRobertHp = 150, robertMedkits = 1)
+            invoke(vm, "robertAfterHit", 21)
+            assertEquals("retreat", state.value.robertState)
+        } finally {
+            invoke(vm, "stopTimers")
             vm.onAppPaused()
             vm.audioManager.release()
             vm.ttsManager.shutdown()

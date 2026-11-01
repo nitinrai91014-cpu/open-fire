@@ -308,8 +308,8 @@ class RobertTest {
     @Test
     fun actualShotCadenceDependsOnGlooWall() {
         val random = Random(61)
-        assertEquals(setOf(1500L), (1..100).map { RobertRules.shotInterval(true, random) }.toSet())
-        assertEquals(setOf(1500L, 2000L), (1..100).map { RobertRules.shotInterval(false, random) }.toSet())
+        assertEquals(setOf(1000L), (1..100).map { RobertRules.shotInterval(true, random) }.toSet())
+        assertEquals(setOf(1500L), (1..100).map { RobertRules.shotInterval(false, random) }.toSet())
     }
 
     @Test
@@ -416,7 +416,7 @@ class RobertTest {
             )
         )
 
-        // Continuous fire uses the tactical 1.5 / 2 second sequence.
+        // Continuous fire uses the one-second beat.
         val random = Random(3)
         val continuous = (1..60).map {
             RobertRules.fireIntervalMs(
@@ -426,8 +426,8 @@ class RobertTest {
                 continuous = true
             )
         }
-        assertTrue(continuous.all { it == 1_500L || it == 2_000L })
-        // The same two random beats apply to any shot while fleeing.
+        assertTrue(continuous.all { it == 1_000L })
+        // Continuous firing remains one second apart while fleeing.
         assertTrue(
             (1..30).map {
                 RobertRules.fireIntervalMs(
@@ -436,7 +436,7 @@ class RobertTest {
                     random = random,
                     continuous = true
                 )
-            }.all { it == 1_500L || it == 2_000L }
+            }.all { it == 1_000L }
         )
     }
 
@@ -635,17 +635,17 @@ class RobertTest {
     }
 
     @Test
-    fun situationalFireIntervalsUseUnpredictableOneAndTwoSecondBeats() {
+    fun situationalFireIntervalsRespectTheSharedCadence() {
         val random = Random(7)
         for (situation in RobertRules.CombatSituation.entries) {
             val samples = (1..60).map { RobertRules.fireIntervalMs(situation, false, random) }
-            assertTrue("$situation=$samples", samples.all { it == 1_500L || it == 2_000L })
-            assertEquals(setOf(1_500L, 2_000L), samples.toSet())
+            assertTrue("$situation=$samples", samples.all { it == 1_500L })
+            assertEquals(setOf(1_500L), samples.toSet())
         }
         val fleeing = (1..30).map {
             RobertRules.fireIntervalMs(RobertRules.CombatSituation.ADVANTAGE, true, random)
         }
-        assertEquals(setOf(1_500L, 2_000L), fleeing.toSet())
+        assertEquals(setOf(1_500L), fleeing.toSet())
 
         val continuous = (1..60).map {
             RobertRules.tacticalFireInterval(
@@ -656,7 +656,7 @@ class RobertTest {
                 random = random
             )
         }
-        assertEquals(setOf(1_500L, 2_000L), continuous.toSet())
+        assertEquals(setOf(1_500L), continuous.toSet())
         val losing = (1..30).map {
             RobertRules.tacticalFireInterval(
                 enemyHasDefence = true,
@@ -667,7 +667,7 @@ class RobertTest {
                 enemyHasAdvantage = false
             )
         }
-        assertTrue(losing.all { it == 1_500L || it == 2_000L })
+        assertTrue(losing.all { it == 1_500L })
     }
 
     @Test

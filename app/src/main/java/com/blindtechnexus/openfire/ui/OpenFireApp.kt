@@ -160,6 +160,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                                 viewModel.stopPlayerMove()
                                                 longPressActive = false
                                             }
+                                            if (holdFireStarted) viewModel.stopHoldFire()
                                         }
                                     }
 
@@ -229,8 +230,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
 
                             // The burst already fired every bullet it had, so
                             // the same swipe must not fire another one.
-                            if (holdFireStarted) {
-                                holdFireStarted = false
+                            if (holdFireStarted && maxFingers == 1) {
                                 return@awaitEachGesture
                             }
 
