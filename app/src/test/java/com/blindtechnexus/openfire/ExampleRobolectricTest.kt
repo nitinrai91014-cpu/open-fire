@@ -42,7 +42,7 @@ class ExampleRobolectricTest {
         assertEquals("ओपन फायर", Strings.get("title", "hi"))
         assertEquals("ओपन फायर", Strings.get("title", "ne"))
 
-        assertEquals("Version 2.4", Strings.get("version", "en"))
+        assertEquals("Version 2.5", Strings.get("version", "en"))
         assertEquals("Changelog", Strings.get("changelog", "en"))
         assertEquals("Join Telegram Channel", Strings.get("joinTelegram", "en"))
         assertEquals("Contact on WhatsApp", Strings.get("contactWhatsApp", "en"))
@@ -66,14 +66,13 @@ class ExampleRobolectricTest {
         val pistol = Weapon.entries.find { it.id == "pistol" }
         org.junit.Assert.assertNotNull(pistol)
         assertEquals(6, pistol?.magazine)
-        // The pistol power comes from the shared damage table: light 9 health
-        // points and heavy 20 health points, never a share of maximum health.
-        assertEquals(9, pistol?.powerPercent)
-        assertEquals(20, pistol?.closeRangePowerPercent)
+        // Pistol damage is fixed HP, never a share of maximum health.
+        assertEquals(18, pistol?.powerPercent)
+        assertEquals(36, pistol?.closeRangePowerPercent)
         assertEquals(0, DamageTable.percentOf(pistol!!, HitZone.MISS))
-        assertEquals(9, DamageTable.percentOf(pistol, HitZone.LIGHT))
-        assertEquals(14, DamageTable.percentOf(pistol, HitZone.STRONG))
-        assertEquals(20, DamageTable.percentOf(pistol, HitZone.HEAVY))
+        assertEquals(18, DamageTable.percentOf(pistol, HitZone.LIGHT))
+        assertEquals(28, DamageTable.percentOf(pistol, HitZone.STRONG))
+        assertEquals(36, DamageTable.percentOf(pistol, HitZone.HEAVY))
     }
 
     @Test
@@ -98,6 +97,7 @@ class ExampleRobolectricTest {
             wins = 3,
             kills = 3,
             coins = 240,
+            loanBalance = 400,
             round = 2,
             level = 4,
             levelWins = 4,
@@ -110,6 +110,7 @@ class ExampleRobolectricTest {
         assertEquals(2, loadedStats.round)
         assertEquals(4, loadedStats.level)
         assertEquals(240, loadedStats.coins)
+        assertEquals(400, PreferencesManager(context).loadStats().loanBalance)
         assertEquals(4, loadedStats.levelWins)
         assertEquals(2, loadedStats.completedRounds)
         // Five wins complete a level, so four wins leave exactly one to go.

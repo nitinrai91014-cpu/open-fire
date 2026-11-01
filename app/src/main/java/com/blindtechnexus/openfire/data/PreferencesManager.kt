@@ -31,7 +31,7 @@ class PreferencesManager(context: Context) {
         const val FILE_SETTINGS = "settings"
         const val FILE_PROFILE = "profile"
         const val FILE_INVENTORY = "inventory"
-        const val SCHEMA_VERSION = 5
+        const val SCHEMA_VERSION = 6
 
         const val KEY_SCHEMA = "schema"
 
@@ -110,6 +110,7 @@ class PreferencesManager(context: Context) {
                 wins = wins,
                 kills = map["kills"]?.toIntOrNull() ?: 0,
                 coins = map["coins"]?.toIntOrNull() ?: 100,
+                loanBalance = map["loanBalance"]?.toIntOrNull() ?: 0,
                 round = round,
                 level = map["level"]?.toIntOrNull() ?: 1,
                 levelWins = map["levelWins"]?.toIntOrNull() ?: migratedLevelWins,
@@ -121,9 +122,9 @@ class PreferencesManager(context: Context) {
         )
     }
 
-    fun saveStats(s: GameStats) {
+    fun saveStats(s: GameStats): Boolean {
         val normalized = Progression.normalize(s)
-        store.write(
+        return store.write(
             FILE_PROFILE,
             mapOf(
                 KEY_SCHEMA to SCHEMA_VERSION.toString(),
@@ -131,6 +132,7 @@ class PreferencesManager(context: Context) {
                 "wins" to normalized.wins.toString(),
                 "kills" to normalized.kills.toString(),
                 "coins" to normalized.coins.toString(),
+                "loanBalance" to normalized.loanBalance.toString(),
                 "round" to normalized.round.toString(),
                 "level" to normalized.level.toString(),
                 "levelWins" to normalized.levelWins.toString(),

@@ -24,6 +24,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.atomic.AtomicLong
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
@@ -118,16 +119,7 @@ class AudioManager(private val context: Context) {
         /** Max load attempts (asset retry + synthetic fallback) per sound key. */
         private const val MAX_LOAD_ATTEMPTS = 3
 
-        /**
-         * Every sound that belongs to a weapon being fired or swung.
-         *
-         * Firing the SAME weapon again interrupts that weapon's own previous
-         * tail (a second pistol shot cuts the first, exactly as before), while
-         * a DIFFERENT weapon mixes with whatever is still ringing: a sniper
-         * shot fired right after a pistol plays together with it, and a sword
-         * and a knife striking each other are heard at the same time. The
-         * sounds are mixed on independent SoundPool streams.
-         */
+        /** Weapon keys used for explicit screen-change cleanup, never for exclusivity. */
         val WEAPON_SOUND_KEYS: Set<String> = setOf(
             "assault",
             "pistol",
@@ -149,12 +141,6 @@ class AudioManager(private val context: Context) {
             "swordGlide",
             "swordMiss"
         )
-
-        /** Footsteps are ducked for this long while a weapon sounds. */
-        private const val WALK_DUCK_MS = 450L
-
-        /** Footstep gain multiplier during that window. */
-        const val WALK_DUCK_FACTOR = 0.25f
 
         /** Delay before a refused stream is retried once. */
         private const val STREAM_RETRY_DELAY_MS = 90L
@@ -190,7 +176,7 @@ class AudioManager(private val context: Context) {
      */
     private val audioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** Serializes the shared weapon channel so rapid taps cannot race into overlapping gun streams. */
+    /** Serialize positional request setup; playback itself is independent and overlapping. */
     private val weaponAudioLock = Any()
 
     /** True once [release] ran: every later request is ignored. */
@@ -232,8 +218,15 @@ class AudioManager(private val context: Context) {
     )
 
     // Managed MediaPlayers for long / streaming audio
+    // Loops are keyed by sound; each one-shot has its own independent player.
     private val managedPlayers = ConcurrentHashMap<String, MediaPlayer>()
+    private data class ManagedShot(val key: String, val player: MediaPlayer)
+    private val managedShots = ConcurrentHashMap<Long, ManagedShot>()
+    private val shotIds = AtomicLong()
+    private val pausedMedia = ConcurrentHashMap.newKeySet<MediaPlayer>()
     private val playerLock = Any()
+    @Volatile private var soundsPaused = false
+    private var audioPausedAtMs = 0L
 
     /**
      * Reliability bookkeeping for the streamed tracks. Every start request
@@ -307,8 +300,6 @@ class AudioManager(private val context: Context) {
     @Volatile
     var battleActive: Boolean = false
 
-    /** Moment until which footsteps stay ducked under a weapon sound. */
-    private var walkDuckUntilMs: Long = 0L
 
     private val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
@@ -351,7 +342,7 @@ class AudioManager(private val context: Context) {
         // rifle, each with its own recorded shot.
         "mp40" to listOf("mp-40-gun.mp3"),
         // One-shot copies of the two automatic weapons: the same recordings,
-        // played as single shots on the exclusive channel.
+        // played as independently mixed single shots.
         "mp40Shot" to listOf("mp-40-gun.mp3"),
         "machineGunShot" to listOf("machine-gun.mp3"),
         "awm" to listOf("AWM-sound.mp3"),
@@ -530,7 +521,7 @@ class AudioManager(private val context: Context) {
     private fun queuePendingPlay(pending: PendingPlay) {
         synchronized(pendingLock) {
             val now = System.currentTimeMillis()
-            pendingPlays.removeAll { now - it.enqueuedAt > PENDING_PLAY_TTL_MS }
+            if (!soundsPaused) pendingPlays.removeAll { now - it.enqueuedAt > PENDING_PLAY_TTL_MS }
             if (pendingPlays.size >= MAX_PENDING_PLAYS) {
                 pendingPlays.removeFirstOrNull()
             }
@@ -540,6 +531,7 @@ class AudioManager(private val context: Context) {
 
     /** Replays (as a simultaneous mix) every queued request for [key]. */
     private fun flushPendingPlays(key: String) {
+        if (soundsPaused) return
         val now = System.currentTimeMillis()
         val ready = synchronized(pendingLock) {
             val matched = pendingPlays.filter { it.key == key }
@@ -659,11 +651,6 @@ class AudioManager(private val context: Context) {
         // one-shot key, never from the looping hold channel: firing one
         // bullet must never cut or restart the burst the player is holding.
         val playKey = AUTO_LOOP_SHOT_KEYS[key] ?: key
-        // One weapon channel: starting any gunshot cuts every other weapon
-        // sound (and any earlier tail of the same gun) before this one is
-        // allowed to start. Queued weapon requests are dropped as well, so a
-        // slowly loading AWM can never leak into Robert's answering shot.
-        enforceWeaponExclusivity(playKey)
         if (playKey in LONG_TRACK_KEYS) {
             playManagedTrack(playKey, volume, posX, posY, posZ, loop = false, rate = rate)
             return 1
@@ -683,9 +670,18 @@ class AudioManager(private val context: Context) {
             else -> rate
         }.coerceIn(0.5f, 2.0f)
 
-        val streamId = try {
-            synchronized(soundPool) { soundPool.play(soundId, left, right, 1, 0, pitch) }
-        } catch (_: Exception) { 0 }
+        // Check pause and start under the same lock used by autoPause. A
+        // request racing with pause is queued rather than leaking audible SFX.
+        val streamId = synchronized(playerLock) {
+            if (soundsPaused) {
+                queuePendingPlay(PendingPlay(playKey, volume, rate, posX, posY, posZ,
+                    loop = false, enqueuedAt = System.currentTimeMillis()))
+                -1
+            } else try {
+                synchronized(soundPool) { soundPool.play(soundId, left, right, 1, 0, pitch) }
+            } catch (_: Exception) { 0 }
+        }
+        if (streamId == -1) return -1
         if (streamId != 0) {
             activeSfxStreams.getOrPut(playKey) { ConcurrentHashMap.newKeySet() }.add(streamId)
         } else {
@@ -767,12 +763,6 @@ class AudioManager(private val context: Context) {
             startWeaponLoop(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
             return
         }
-        // A fresh weapon loop takes the exclusive weapon channel. An already
-        // running loop only refreshes its volume, so a held burst never
-        // restarts itself or leaks a second copy of the same gun.
-        if (key in WEAPON_SOUND_KEYS && !isTrackActive(key)) {
-            enforceWeaponExclusivity(key)
-        }
         if (key in LONG_TRACK_KEYS) {
             // Ensure any previous instance is fully released before re-looping; this is what
             // makes the MP40 loop stable across rapid hold/release cycles without overlapping.
@@ -806,9 +796,16 @@ class AudioManager(private val context: Context) {
         val soundId = soundMap[key] ?: return
         val (left, right) = calculate3dVolume(posX, posY, posZ, volume)
         val pitch = rate.coerceIn(0.5f, 2.0f)
-        val streamId = try {
-            synchronized(soundPool) { soundPool.play(soundId, left, right, 1, -1, pitch) }
-        } catch (_: Exception) { 0 }
+        val streamId = synchronized(playerLock) {
+            if (soundsPaused) {
+                queuePendingPlay(PendingPlay(key, volume, rate, posX, posY, posZ,
+                    loop = true, enqueuedAt = System.currentTimeMillis()))
+                -1
+            } else try {
+                synchronized(soundPool) { soundPool.play(soundId, left, right, 1, -1, pitch) }
+            } catch (_: Exception) { 0 }
+        }
+        if (streamId == -1) return
         if (streamId != 0) {
             activeSfxStreams.getOrPut(key) { ConcurrentHashMap.newKeySet() }.add(streamId)
         } else {
@@ -817,13 +814,7 @@ class AudioManager(private val context: Context) {
         }
     }
 
-    /**
-     * Plays one weapon sound exclusively: every other weapon sound that is
-     * still playing (a looping submachine gun, a long AWM tail, the other
-     * fighter's gunshot) is stopped first, so weapon sounds never mix and
-     * never leak. Footsteps are ducked under it for a moment as well, which
-     * keeps a running enemy from bleeding into the gunfire.
-     */
+    /** Plays an independent weapon sound without interrupting other streams. */
     fun playWeaponSound(
         key: String,
         volume: Float = 1.0f,
@@ -832,8 +823,6 @@ class AudioManager(private val context: Context) {
         posY: Float = 0f,
         posZ: Float = 0f
     ) {
-        // Serialize rapid cross-fighter taps; without this, two callers could
-        // both clear the weapon set and then start different streams together.
         synchronized(weaponAudioLock) {
             playSound(key, volume = volume, rate = rate, posX = posX, posY = posY, posZ = posZ)
         }
@@ -883,24 +872,20 @@ class AudioManager(private val context: Context) {
         val (left, right) = calculate3dVolume(posX, posY, posZ, volume)
         trackGains[key] = Pair(left, right)
         activeWeaponLoops.add(key)
-        // Footsteps step aside under the burst, exactly like every other
-        // weapon sound, without ever stopping the gun itself. The duck window
-        // is renewed on every bullet by [refreshWeaponLoop], so a long hold
-        // never lets a footstep climb back over the gunfire.
-        walkDuckUntilMs = System.currentTimeMillis() + WALK_DUCK_MS
-        duckActiveFootsteps()
-        val existing = synchronized(weaponLoopLock) { weaponLoopPlayers[key] }
-        if (existing != null) {
-            try {
-                existing.setVolume(left, right)
-                if (!existing.isPlaying) existing.start()
-                return
-            } catch (_: Exception) {
-                // A dead player is dropped and rebuilt below.
-                synchronized(weaponLoopLock) {
-                    if (weaponLoopPlayers[key] === existing) weaponLoopPlayers.remove(key)
+        synchronized(playerLock) {
+            val existing = synchronized(weaponLoopLock) { weaponLoopPlayers[key] }
+            if (existing != null) {
+                try {
+                    existing.setVolume(left, right)
+                    if (soundsPaused) pausedMedia.add(existing)
+                    else if (!existing.isPlaying) existing.start()
+                    return
+                } catch (_: Exception) {
+                    synchronized(weaponLoopLock) {
+                        if (weaponLoopPlayers[key] === existing) weaponLoopPlayers.remove(key)
+                    }
+                    safeRelease(existing)
                 }
-                safeRelease(existing)
             }
         }
         if (preparingWeaponLoops.contains(key)) return
@@ -917,15 +902,18 @@ class AudioManager(private val context: Context) {
             stopSound(key)
             return
         }
-        activeWeaponLoops.remove(key)
-        val player = synchronized(weaponLoopLock) { weaponLoopPlayers[key] } ?: return
-        try {
-            if (player.isPlaying) player.pause()
-        } catch (_: Exception) {
-            synchronized(weaponLoopLock) {
-                if (weaponLoopPlayers[key] === player) weaponLoopPlayers.remove(key)
+        synchronized(playerLock) {
+            activeWeaponLoops.remove(key)
+            val player = synchronized(weaponLoopLock) { weaponLoopPlayers[key] } ?: return
+            pausedMedia.remove(player)
+            try {
+                if (player.isPlaying) player.pause()
+            } catch (_: Exception) {
+                synchronized(weaponLoopLock) {
+                    if (weaponLoopPlayers[key] === player) weaponLoopPlayers.remove(key)
+                }
+                safeRelease(player)
             }
-            safeRelease(player)
         }
     }
 
@@ -955,8 +943,6 @@ class AudioManager(private val context: Context) {
         if (key !in AUTO_LOOP_KEYS) return
         val (left, right) = calculate3dVolume(0f, 0f, posZ, volume)
         trackGains[key] = Pair(left, right)
-        // Keep the footsteps under the gun for the whole hold.
-        walkDuckUntilMs = System.currentTimeMillis() + WALK_DUCK_MS
         val player = synchronized(weaponLoopLock) { weaponLoopPlayers[key] } ?: return
         try {
             player.setVolume(left.coerceIn(0f, 1f), right.coerceIn(0f, 1f))
@@ -1003,16 +989,18 @@ class AudioManager(private val context: Context) {
                     true
                 }
                 player.prepare()
-                synchronized(weaponLoopLock) {
-                    if (released || weaponLoopPlayers.containsKey(key)) {
-                        safeRelease(player)
-                        return@launch
+                synchronized(playerLock) {
+                    synchronized(weaponLoopLock) {
+                        if (released || weaponLoopPlayers.containsKey(key)) {
+                            safeRelease(player)
+                            return@launch
+                        }
+                        weaponLoopPlayers[key] = player
+                        if (key in activeWeaponLoops && !released) {
+                            if (soundsPaused) pausedMedia.add(player) else player.start()
+                        }
                     }
-                    weaponLoopPlayers[key] = player
                 }
-                // The trigger may still be down (or the player was pre-warmed
-                // and simply waits, paused, for the next hold).
-                if (key in activeWeaponLoops && !released) player.start()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed preparing weapon loop $key", e)
                 created?.let { safeRelease(it) }
@@ -1053,49 +1041,6 @@ class AudioManager(private val context: Context) {
             stopSound(weaponKey)
         }
     }
-
-    /**
-     * Weapon mixing rule.
-     *
-     *  - The same weapon fired again interrupts its own previous shot (and
-     *    its queued requests), so a pistol fired twice in a row sounds like
-     *    two pistol shots, not like a growing stack of them.
-     *  - A different weapon is NOT cut: the new shot starts on its own
-     *    stream and the two really mix together, so a sniper rifle fired
-     *    right after a pistol is heard over the pistol's tail, and a sword
-     *    and a knife that strike each other are both audible.
-     *
-     * The two automatic weapons keep their dedicated gapless hold channel and
-     * are never stopped here: a held burst must not go silent between two
-     * bullets.
-     */
-    private fun enforceWeaponExclusivity(key: String) {
-        if (released || key !in WEAPON_SOUND_KEYS) return
-        if (key in AUTO_LOOP_KEYS) return
-        // Only this key's own tail (and its queued requests) is cut.
-        stopSoundInternal(key)
-        walkDuckUntilMs = System.currentTimeMillis() + WALK_DUCK_MS
-        duckActiveFootsteps()
-    }
-
-    /** Lowers live footstep tracks the instant a weapon sound starts. */
-    private fun duckActiveFootsteps() {
-        for (key in listOf("walk", "playerWalk", "enemyWalk")) {
-            val player = managedPlayers[key] ?: continue
-            val gains = walkCurrentGains[key] ?: continue
-            try {
-                player.setVolume(
-                    (gains.first * WALK_DUCK_FACTOR).coerceIn(0f, 1f),
-                    (gains.second * WALK_DUCK_FACTOR).coerceIn(0f, 1f)
-                )
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    /** Current footstep ducking multiplier. */
-    private fun walkDuckFactor(): Float =
-        if (System.currentTimeMillis() < walkDuckUntilMs) WALK_DUCK_FACTOR else 1f
 
     /**
      * Dedicated stable start/stop for the MP40 submachine gun loop.
@@ -1174,9 +1119,8 @@ class AudioManager(private val context: Context) {
     private fun updateWalkingTrack(key: String, left: Float, right: Float, speedMps: Float) {
         if (released) return
         val player = managedPlayers[key]
-        val duck = walkDuckFactor()
-        val duckedLeft = (left * duck).coerceIn(0f, 1f)
-        val duckedRight = (right * duck).coerceIn(0f, 1f)
+        val targetLeft = left.coerceIn(0f, 1f)
+        val targetRight = right.coerceIn(0f, 1f)
         if (player == null || !player.isPlaying) {
             // The track is prepared on a background thread: ask for it once
             // with the gains it should start at, then let the next ticks
@@ -1184,7 +1128,7 @@ class AudioManager(private val context: Context) {
             if (!preparingTracks.contains(key)) {
                 walkLastApplyAt.remove(key)
                 walkCurrentGains.remove(key)
-                trackGains[key] = Pair(duckedLeft, duckedRight)
+                trackGains[key] = Pair(targetLeft, targetRight)
                 playManagedTrack(key, volume = 1.0f, posX = 0f, posY = 0f, posZ = 0f, loop = true)
             }
             return
@@ -1201,11 +1145,11 @@ class AudioManager(private val context: Context) {
             // continuous approach / retreat, never like volume steps.
             val current = walkCurrentGains[key]
             val smoothed = if (current == null) {
-                Pair(duckedLeft, duckedRight)
+                Pair(targetLeft, targetRight)
             } else {
                 Pair(
-                    current.first + (duckedLeft - current.first) * 0.6f,
-                    current.second + (duckedRight - current.second) * 0.6f
+                    current.first + (targetLeft - current.first) * 0.6f,
+                    current.second + (targetRight - current.second) * 0.6f
                 )
             }
             try {
@@ -1252,6 +1196,10 @@ class AudioManager(private val context: Context) {
         rate: Float = 1.0f
     ) {
         if (released) return
+        if (!loop) {
+            playManagedOneShot(key, volume, posX, posY, posZ, rate)
+            return
+        }
 
         // Music is not spatialised and does not use the SFX slider: the caller
         // passes the already mixed absolute volume (setting * background gain).
@@ -1319,6 +1267,7 @@ class AudioManager(private val context: Context) {
                         true
                     } else {
                         managedPlayers[key] = created
+                        if (soundsPaused) pausedMedia.add(created) else created.start()
                         false
                     }
                 }
@@ -1327,13 +1276,12 @@ class AudioManager(private val context: Context) {
                     player = null
                     return@launch
                 }
-                created.start()
-                if (rate != 1.0f) {
+                if (rate != 1.0f && !soundsPaused) {
                     try {
                         created.playbackParams = PlaybackParams().setSpeed(rate.coerceIn(0.5f, 2.0f))
                     } catch (_: Exception) {}
                 }
-                triggerHapticForSound(key)
+                if (!soundsPaused) triggerHapticForSound(key)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed playing managed track $key", e)
                 player?.let { safeRelease(it) }
@@ -1347,8 +1295,115 @@ class AudioManager(private val context: Context) {
         }
     }
 
+    /** Independent long one-shots, including overlapping copies of the same key. */
+    private fun playManagedOneShot(
+        key: String, volume: Float, posX: Float, posY: Float, posZ: Float, rate: Float
+    ) {
+        val id = shotIds.incrementAndGet()
+        val generation = synchronized(playerLock) { playerGeneration[key] ?: 0 }
+        val (left, right) = calculate3dVolume(posX, posY, posZ, volume)
+        audioScope.launch {
+            var player: MediaPlayer? = null
+            try {
+                val created = MediaPlayer()
+                player = created
+                val afd = getAssetFd(key)
+                if (afd != null) {
+                    afd.use { created.setDataSource(it.fileDescriptor, it.startOffset, it.length) }
+                } else {
+                    val synth = generateSyntheticSoundFile(key)
+                    if (synth == null) {
+                        safeRelease(created)
+                        player = null
+                        return@launch
+                    }
+                    created.setDataSource(synth.absolutePath)
+                }
+                created.setAudioAttributes(
+                    AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_GAME)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
+                )
+                created.isLooping = false
+                created.setVolume(left, right)
+                created.setOnCompletionListener {
+                    synchronized(playerLock) { managedShots.remove(id) }
+                    safeRelease(created)
+                }
+                created.setOnErrorListener { _, what, extra ->
+                    Log.w(TAG, "Managed shot $key failed ($what/$extra)")
+                    synchronized(playerLock) { managedShots.remove(id) }
+                    safeRelease(created)
+                    true
+                }
+                created.prepare()
+                val accepted = synchronized(playerLock) {
+                    if (released || (playerGeneration[key] ?: 0) != generation) false
+                    else {
+                        managedShots[id] = ManagedShot(key, created)
+                        if (soundsPaused) pausedMedia.add(created) else created.start()
+                        true
+                    }
+                }
+                if (!accepted) {
+                    safeRelease(created)
+                    player = null
+                    return@launch
+                }
+                if (rate != 1.0f && !soundsPaused) {
+                    try { created.playbackParams = PlaybackParams().setSpeed(rate.coerceIn(0.5f, 2.0f)) }
+                    catch (_: Exception) {}
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed playing managed shot $key", e)
+                synchronized(playerLock) { managedShots.remove(id) }
+                player?.let { safeRelease(it) }
+            }
+        }
+    }
+
+    /** Freeze every active stream and any in-flight preparation without releasing it. */
+    fun pauseAllSounds() {
+        synchronized(playerLock) {
+            if (soundsPaused) return
+            soundsPaused = true
+            audioPausedAtMs = System.currentTimeMillis()
+            try { soundPool.autoPause() } catch (_: Exception) {}
+            (managedPlayers.values + managedShots.values.map { it.player }).forEach { player ->
+                try { if (player.isPlaying) { player.pause(); pausedMedia.add(player) } } catch (_: Exception) {}
+            }
+            synchronized(weaponLoopLock) {
+                weaponLoopPlayers.values.forEach { player ->
+                    try { if (player.isPlaying) { player.pause(); pausedMedia.add(player) } } catch (_: Exception) {}
+                }
+            }
+        }
+    }
+
+    /** Resume only streams that were playing (or preparing) at the pause. */
+    fun resumeAllSounds() {
+        val keys: Set<String>
+        synchronized(playerLock) {
+            if (!soundsPaused) return
+            val pauseDuration = (System.currentTimeMillis() - audioPausedAtMs).coerceAtLeast(0L)
+            synchronized(pendingLock) {
+                val adjusted = pendingPlays.map { it.copy(enqueuedAt = it.enqueuedAt + pauseDuration) }
+                pendingPlays.clear()
+                pendingPlays.addAll(adjusted)
+                keys = adjusted.map { it.key }.toSet()
+            }
+            soundsPaused = false
+            try { soundPool.autoResume() } catch (_: Exception) {}
+            pausedMedia.toList().forEach { player ->
+                pausedMedia.remove(player)
+                try { player.start() } catch (_: Exception) {}
+            }
+        }
+        keys.forEach { if (isReady(it)) flushPendingPlays(it) }
+    }
+
     /** Releases a player without ever throwing into the audio pipeline. */
     private fun safeRelease(player: MediaPlayer) {
+        pausedMedia.remove(player)
         try {
             if (player.isPlaying) player.stop()
         } catch (_: Exception) {}
@@ -1372,7 +1427,7 @@ class AudioManager(private val context: Context) {
         val player = managedPlayers[key]
         if (player != null) {
             try {
-                if (player.isPlaying) return true
+                if (player.isPlaying || player in pausedMedia) return true
             } catch (_: Exception) {}
         }
         return preparingTracks.contains(key)
@@ -1431,8 +1486,15 @@ class AudioManager(private val context: Context) {
      * a sound that is stopped while still loading can never start afterwards.
      */
     private fun stopManagedTrack(key: String) {
-        nextGeneration(key)
-        releaseManagedTrack(key)
+        synchronized(playerLock) {
+            nextGeneration(key)
+            releaseManagedTrack(key)
+            val matching = managedShots.filterValues { it.key == key }
+            matching.forEach { (id, shot) ->
+                managedShots.remove(id)
+                safeRelease(shot.player)
+            }
+        }
     }
 
     private fun releaseManagedTrack(key: String) {
@@ -1501,6 +1563,13 @@ class AudioManager(private val context: Context) {
     fun stopAllSounds() {
         stopAllLoops()
         stopMusic()
+        synchronized(playerLock) {
+            // Invalidate every pending one-shot preparation as well as active shots.
+            (LONG_TRACK_KEYS + managedShots.values.map { it.key }).forEach { key ->
+                stopManagedTrack(key)
+            }
+        }
+        synchronized(pendingLock) { pendingPlays.clear() }
     }
 
     /**

@@ -149,8 +149,8 @@ class RoundRulesTest {
 
     @Test
     fun theEnemyFiresOneOrTwoShotsOnAHumanRhythm() {
-        // Live and helper timing share the deliberately varied 1.5 s / 2 s rhythm.
-        assertEquals(listOf(1_500L, 2_000L), RobertRules.NORMAL_INTERVALS_MS)
+        // Live and helper timing share the 1.5 s normal-shot rhythm.
+        assertEquals(listOf(1_500L), RobertRules.NORMAL_INTERVALS_MS)
         assertEquals(2, RobertRules.MAX_SUCCESSIVE_SHOTS)
 
         val random = Random(17)
@@ -160,15 +160,15 @@ class RoundRulesTest {
             assertFalse(RobertRules.burstFinished(limit - 1, limit))
             assertTrue(RobertRules.burstFinished(limit, limit))
             val interval = RobertRules.normalFireInterval(random)
-            assertTrue(interval == 1_500L || interval == 2_000L)
+            assertTrue(interval == 1_500L)
         }
 
-        // Every situation uses the 1.5-2 second choice; fleeing holds the 2 second beat.
+        // Every situation and fleeing use the normal 1.5-second interval.
         for (situation in RobertRules.CombatSituation.entries) {
             val window = RobertRules.fireIntervalWindow(situation, fleeing = false)
-            assertEquals(1_500L..2_000L, window)
+            assertEquals(1_500L..1_500L, window)
             val fleeingWindow = RobertRules.fireIntervalWindow(situation, fleeing = true)
-            assertEquals(2_000L..2_000L, fleeingWindow)
+            assertEquals(1_500L..1_500L, fleeingWindow)
         }
     }
 

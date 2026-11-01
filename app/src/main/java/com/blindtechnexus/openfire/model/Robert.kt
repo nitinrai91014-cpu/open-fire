@@ -206,7 +206,7 @@ object RobertRules {
     const val RETALIATION_COOLDOWN_MS = 700L
 
     /** Window in which player shots are counted as one continuous burst. */
-    const val PLAYER_BURST_WINDOW_MS = 2_500L
+    const val PLAYER_BURST_WINDOW_MS = 3_500L
 
     /**
      * How long after his last shot the player still counts as firing. The
@@ -230,16 +230,16 @@ object RobertRules {
      * [NORMAL_FIRE_MAX_MS] between shots, or exactly [CONTINUOUS_FIRE_MS]
      * while Robert is pressing a defenceless player.
      */
-    val NORMAL_INTERVALS_MS = listOf(1_500L, 2_000L)
+    val NORMAL_INTERVALS_MS = listOf(FireCadence.NORMAL_MS)
 
     /** Fastest normal shot: 1.5 seconds after the previous one. */
-    const val NORMAL_FIRE_MIN_MS = 1_500L
+    const val NORMAL_FIRE_MIN_MS = FireCadence.NORMAL_MS
 
     /** Slowest normal shot: 2 seconds after the previous one. */
-    const val NORMAL_FIRE_MAX_MS = 2_000L
+    const val NORMAL_FIRE_MAX_MS = FireCadence.NORMAL_MS
 
     /** Continuous pressure fire uses the fastest requested cadence. */
-    const val CONTINUOUS_FIRE_MS = 1_500L
+    const val CONTINUOUS_FIRE_MS = FireCadence.CONTINUOUS_MS
 
     /** Maximum number of shots Robert fires in a row before he pauses. */
     const val MAX_SUCCESSIVE_SHOTS = 2
@@ -614,12 +614,13 @@ object RobertRules {
         playerHits: Int, enemyHits: Int, consecutiveHits: Int,
         playerBurstShots: Int, enemyHealthDropping: Boolean,
         enemyWall: Boolean, playerWall: Boolean, playerHasBreaker: Boolean,
-        proximityPercent: Float
+        proximityPercent: Float, damageFromLastHit: Int = 0
     ): Boolean {
-        if (enemyWall) return false
-        return (playerHits >= 2 && playerHits > enemyHits) ||
+        if (enemyWall && damageFromLastHit <= 0) return false // no damage passed the barrier
+        return damageFromLastHit >= RetreatRules.HEAVY_HIT_HP ||
+            (playerHits >= 2 && playerHits > enemyHits) ||
             consecutiveHits >= FLEE_AFTER_PLAYER_HITS ||
-            (enemyHealthDropping && playerBurstShots >= COUNTER_FIRE_BURST_SHOTS)
+            (enemyHealthDropping && playerBurstShots >= 2)
     }
 
     /** One deadline shared by normal and breaker shots. */
@@ -1020,30 +1021,24 @@ object RobertRules {
     }
 
     /**
-     * The inclusive delay window (ms) before Robert's next shot. Every window
-     * stays inside the 2 s - 3 s rhythm of the new behaviour, with the faster
-     * end reserved for an aggressive situation and the slower end for a
-     * retreating one.
+     * The inclusive delay window (ms) before Robert's next normal shot.
      */
-    fun fireIntervalWindow(situation: CombatSituation, fleeing: Boolean): LongRange = when {
-        fleeing -> 2_000L..2_000L
-        else -> 1_500L..2_000L
-    }
+    fun fireIntervalWindow(situation: CombatSituation, fleeing: Boolean): LongRange =
+        FireCadence.NORMAL_MS..FireCadence.NORMAL_MS
 
     /**
-     * The window used while Robert presses a pinned player continuously. It is
-     * still human, never a machine gun: 1.2 s to 2 s between the shots.
+     * The interval used while Robert fires continuously.
      */
-    fun continuousFireWindow(): LongRange = 1_500L..2_000L
+    fun continuousFireWindow(): LongRange = FireCadence.CONTINUOUS_MS..FireCadence.CONTINUOUS_MS
 
-    /** A jittered delay before Robert's next shot, for the situation. */
+    /** Shared normal and continuous fire intervals. */
     fun fireIntervalMs(
         situation: CombatSituation,
         fleeing: Boolean,
         random: Random,
         continuous: Boolean = false
     ): Long {
-        return normalTacticalInterval(random)
+        return if (continuous) FireCadence.CONTINUOUS_MS else FireCadence.NORMAL_MS
     }
 
     /**

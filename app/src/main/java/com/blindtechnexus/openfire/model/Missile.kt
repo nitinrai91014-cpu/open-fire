@@ -3,21 +3,19 @@ package com.blindtechnexus.openfire.model
 /**
  * Pure missile rules, shared by the shop, the battle engine and Robert.
  *
- * A missile is a guided, guaranteed kill:
+ * A missile is a guided attack:
  *  - it unlocks after round two has been completed and costs
  *    [MISSILE_PRICE] coins, appearing in the normal weapon inventory;
  *  - every launch consumes exactly one missile power ([MISSILE_POWER_PRICE]
  *    coins each). Powers stack like defences and must be bought again once
  *    used;
- *  - once launched it tracks its target with 100% accuracy and reduces the
- *    target directly to zero health, no matter whether the target runs,
- *    hides behind a glue wall or hides behind a cover. Even the player's
- *    second chance cannot save against a direct missile hit;
- *  - the target still tries to run as far away as possible inside the 100 m
+ *  - once launched it tracks its target through ordinary barriers and deals
+ *    up to 60 flat HP. A lethal missile hit bypasses the second chance;
+ *  - the target still tries to run as far away as possible inside the 25 m
  *    arena while the missile sound plays. If the target can run, the sound
  *    loops and is cut the moment the missile impacts; if the target has
  *    nowhere left to run, the sound plays once and the missile impacts as
- *    it ends. The explosion (and the hit sound of the destroyed fighter)
+ *    it ends. The explosion (and the target hit sound)
  *    always plays at impact, mixed together, and the battle only ends once
  *    the explosion sound has really finished ([EXPLOSION_MS]);
  *  - in round three Robert has no anti-missile system at all, so a launched
@@ -32,14 +30,14 @@ package com.blindtechnexus.openfire.model
  *    clearly losing.
  */
 object MissileRules {
-    /** Shop price of the missile launcher itself (200 coins cheaper). */
-    const val MISSILE_PRICE = 3300
+    /** Shop price of the missile launcher itself (rebalanced). */
+    const val MISSILE_PRICE = 2200
 
-    /** Shop price of one consumable missile power (200 coins cheaper). */
-    const val MISSILE_POWER_PRICE = 1600
+    /** Shop price of one consumable missile power (rebalanced). */
+    const val MISSILE_POWER_PRICE = 1000
 
-    /** Shop price of one anti-missile defence system (200 coins cheaper). */
-    const val ANTI_MISSILE_PRICE = 2800
+    /** Shop price of one anti-missile defence system (rebalanced). */
+    const val ANTI_MISSILE_PRICE = 1800
 
     /**
      * Length of `missile-sound.mp3` (about 14 seconds). A direct hit lands

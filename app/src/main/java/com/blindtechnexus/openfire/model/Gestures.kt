@@ -8,8 +8,7 @@ package com.blindtechnexus.openfire.model
  *                 right next weapon, left previous weapon.
  *  - Two fingers: up / down move the quick menu selection, right own status,
  *                 left enemy status.
- *  - Three fingers: right runs faster, left runs slower. The running speed
- *                 cycles slow -> normal -> fast and starts at normal.
+ *  - Three fingers: right cycles running speed; left toggles pause/resume.
  *  - A single tap activates the highlighted quick-menu item (and confirms a
  *                 timer-bomb duration while the timer picker is open).
  */
@@ -33,8 +32,8 @@ enum class GameAction {
     PLAY_AGAIN,
     /** Three-finger swipe right: one running speed step faster. */
     SPEED_FASTER,
-    /** Three-finger swipe left: one running speed step slower. */
-    SPEED_SLOWER
+    /** Three-finger swipe left: freeze or resume the current battle. */
+    TOGGLE_PAUSE
 }
 
 object GestureRouter {
@@ -65,7 +64,7 @@ object GestureRouter {
             // Three (or more) fingers: the running-speed gesture.
             fingers >= 3 -> when (direction) {
                 "right" -> GameAction.SPEED_FASTER
-                "left" -> GameAction.SPEED_SLOWER
+                "left" -> GameAction.TOGGLE_PAUSE
                 else -> GameAction.NONE
             }
             fingers == 2 -> when (direction) {
@@ -176,8 +175,8 @@ object RunPressure {
 /**
  * The three running speed levels toggled by a three-finger swipe.
  *
- * Swiping right with three fingers steps one level faster, swiping left steps
- * one level slower, and the battle always starts at [NORMAL]. The fast level
+ * Swiping right with three fingers cycles through the three levels. The
+ * last selected speed is remembered between battles. The fast level
  * matches Robert's own fast (fleeing) speed for the current round exactly, so
  * a sprinting player and a sprinting enemy cover ground at the same rate; the
  * slow level is half of the player's base walking speed.

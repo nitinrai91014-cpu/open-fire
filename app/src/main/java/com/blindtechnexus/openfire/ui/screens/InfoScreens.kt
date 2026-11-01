@@ -448,7 +448,22 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "Gloo Wall Breaker and the 25 m square update",
+                text = "Version 2.5",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = WarnBright,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            listOf(
+                "release25Audio", "release25Loans", "release25Pause",
+                "release25Balance", "release25Retreat", "release25Guide"
+            ).forEach { key ->
+                Text(text = "• ${viewModel.t(key)}", color = Color.White, modifier = Modifier.padding(vertical = 3.dp))
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+            Text(
+                text = "Gloo Wall Breaker and the 25 m square update (historical)",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = WarnBright
@@ -475,7 +490,7 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "Latest balance and accessibility update",
+                text = "Previous balance and accessibility update (historical)",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = WarnBright
@@ -516,7 +531,7 @@ fun ChangelogScreen(viewModel: GameViewModel) {
             )
             Spacer(modifier = Modifier.height(14.dp))
             Text(
-                text = "Version 2.4 (Current)",
+                text = "Version 2.4 (historical)",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = WarnBright
@@ -822,6 +837,22 @@ fun ResultScreen(viewModel: GameViewModel) {
                 fontWeight = FontWeight.Bold,
                 color = Color.White
             )
+            if (result.won) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "${viewModel.t("loanDeducted")}: ${result.loanDeducted} | " +
+                        "${viewModel.t("loanRemaining")}: ${result.loanRemaining}",
+                    fontSize = 16.sp,
+                    color = Color.White,
+                    modifier = Modifier.testTag("result_loan_repayment")
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "${viewModel.t("loanNetWinnings")}: ${result.coins - result.loanDeducted}",
+                    fontSize = 16.sp,
+                    color = Color.White
+                )
+            }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "${viewModel.t("hits")}: ${result.hits} / ${result.shots}",
