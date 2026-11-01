@@ -720,7 +720,7 @@ def canonicalize_apk(apk_path: Path, entries: list[dict[str, int | str | bytes]]
         crc = zlib.crc32(raw) & 0xFFFFFFFF
         usize = len(raw)
 
-        method = zipfile.ZIP_DEFLATED
+        method = method_in
         if must_store(name) or name.endswith("/"):
             method = zipfile.ZIP_STORED
         body = raw if method == zipfile.ZIP_STORED else deflate_raw(raw)
@@ -788,7 +788,7 @@ def canonicalize_apk(apk_path: Path, entries: list[dict[str, int | str | bytes]]
             int(record["csize"]),
             int(record["usize"]),
             len(bytes(record["name_bytes"])),
-            len(bytes(record["extra"])),
+            0,  # Central Directory extra field length: 0 (alignment extra fields belong exclusively in LFH)
             0,  # file comment length
             0,  # disk number start
             int(record["int_attr"]),
@@ -796,7 +796,6 @@ def canonicalize_apk(apk_path: Path, entries: list[dict[str, int | str | bytes]]
             int(record["lfh_offset"]),
         )
         out += bytes(record["name_bytes"])
-        out += bytes(record["extra"])
     cd_size = len(out) - cd_offset
 
     out += struct.pack(
