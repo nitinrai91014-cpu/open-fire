@@ -449,11 +449,13 @@ class AudioManager(private val context: Context) {
     private fun loadShortSound(key: String, files: List<String>, allowSynthetic: Boolean) {
         for (fileName in files) {
             try {
-                val afd = context.assets.openFd("sounds/$fileName")
-                val soundId = soundPool.load(afd, 1)
+                val soundId = context.assets.openFd("sounds/$fileName").use { soundPool.load(it, 1) }
                 if (soundId != 0) {
                     soundMap[key] = soundId
                     sampleToKey[soundId] = key
+                    // Loading can finish on another thread before the reverse
+                    // lookup is registered; do not strand those requests.
+                    if (soundId in loadedSounds) flushPendingPlays(key)
                     return
                 }
             } catch (_: Exception) {}
@@ -466,6 +468,7 @@ class AudioManager(private val context: Context) {
                     if (soundId != 0) {
                         soundMap[key] = soundId
                         sampleToKey[soundId] = key
+                        if (soundId in loadedSounds) flushPendingPlays(key)
                         return
                     }
                 }
@@ -968,7 +971,11 @@ class AudioManager(private val context: Context) {
                     } catch (_: Exception) {}
                 } else {
                     val synth = generateSyntheticSoundFile(key)
-                    if (synth == null) return@launch
+                    if (synth == null) {
+                        safeRelease(player)
+                        created = null
+                        return@launch
+                    }
                     player.setDataSource(synth.absolutePath)
                 }
                 player.setAudioAttributes(

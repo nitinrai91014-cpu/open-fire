@@ -27,9 +27,9 @@ package com.blindtechnexus.openfire.model
 enum class Weapon(
     val id: String,
     val nameKey: String,
-    /** Damage in percent of maximum health inside the 40%-70% (light) band. */
+    /** Flat health-point damage inside the 40%-70% (light) band. */
     val powerPercent: Int,
-    /** Damage in percent of maximum health at 90%-100% proximity. */
+    /** Flat health-point damage at 90%-100% proximity. */
     val closeRangePowerPercent: Int,
     /** Rounds in a full magazine. Melee weapons, bombs and the missile use 0 or 1. */
     val magazine: Int,

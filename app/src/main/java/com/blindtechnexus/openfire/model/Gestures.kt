@@ -61,7 +61,7 @@ object GestureRouter {
         }
         Screen.BATTLE -> when {
             fingers <= 0 -> GameAction.NONE
-            // Three (or more) fingers: the running-speed gesture.
+            // Three (or more) fingers: pause or cycle running speed.
             fingers >= 3 -> when (direction) {
                 "right" -> GameAction.SPEED_FASTER
                 "left" -> GameAction.TOGGLE_PAUSE
