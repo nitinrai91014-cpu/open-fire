@@ -114,7 +114,7 @@ class LoanPauseAndProjectileIntegrationTest {
         val initial = GameState(playerHp = 180, robertHp = 170, distance = 5f,
             missileInFlight = true, missileFromPlayer = true, battleRemainingMs = 42_000L)
         flow<GameState>(vm, "_gameState").value = initial
-        vm.handleGesture("left", 3)
+        vm.handleGesture("down", 3)
         assertTrue(vm.battlePaused.value)
         vm.fire()
         vm.startHoldFire()
@@ -126,9 +126,18 @@ class LoanPauseAndProjectileIntegrationTest {
         vm.onAppResumed()
         assertTrue(vm.battlePaused.value)
         assertEquals(initial, vm.gameState.value)
-        vm.handleGesture("left", 3)
+        vm.handleGesture("down", 3)
         assertFalse(vm.battlePaused.value)
         assertEquals(initial, vm.gameState.value)
+    }
+
+    @Test
+    fun threeFingersUpExitsBattleToMenu() = withViewModel { _, vm ->
+        flow<Screen>(vm, "_currentScreen").value = Screen.BATTLE
+        val initial = GameState(playerHp = 180, robertHp = 170, distance = 5f)
+        flow<GameState>(vm, "_gameState").value = initial
+        vm.handleGesture("up", 3)
+        assertEquals(Screen.MENU, vm.currentScreen.value)
     }
 
     @Test
