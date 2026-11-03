@@ -108,7 +108,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                 isCenterRight -> MoveDirection.RIGHT
                                 else -> null
                             }
-                            val isRunZone = moveDirection != null
+                            val isRunZone = isBattle && moveDirection != null
 
                             // Every finger is tracked from its own touch-down point,
                             // so a two-finger swipe never reports a bogus direction.

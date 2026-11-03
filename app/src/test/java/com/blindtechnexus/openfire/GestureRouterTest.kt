@@ -42,13 +42,16 @@ class GestureRouterTest {
     @Test
     fun threeFingerSwipesCycleTheRunningSpeed() {
         assertEquals(GameAction.SPEED_FASTER, GestureRouter.route(Screen.BATTLE, "right", 3))
-        assertEquals(GameAction.TOGGLE_PAUSE, GestureRouter.route(Screen.BATTLE, "left", 3))
+        assertEquals(GameAction.SPEED_SLOWER, GestureRouter.route(Screen.BATTLE, "left", 3))
+        assertEquals(GameAction.TOGGLE_PAUSE, GestureRouter.route(Screen.BATTLE, "down", 3))
+        assertEquals(GameAction.EXIT_BATTLE, GestureRouter.route(Screen.BATTLE, "up", 3))
+
         assertEquals(GameAction.SPEED_FASTER, GestureRouter.route(Screen.BATTLE, "right", 4))
-        assertEquals(GameAction.TOGGLE_PAUSE, GestureRouter.route(Screen.BATTLE, "left", 5))
-        // Up and down stay reserved for firing and reloading.
-        assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "up", 3))
-        assertEquals(GameAction.NONE, GestureRouter.route(Screen.BATTLE, "down", 3))
-        // The speed gesture only means something inside a battle.
+        assertEquals(GameAction.SPEED_SLOWER, GestureRouter.route(Screen.BATTLE, "left", 4))
+        assertEquals(GameAction.TOGGLE_PAUSE, GestureRouter.route(Screen.BATTLE, "down", 5))
+        assertEquals(GameAction.EXIT_BATTLE, GestureRouter.route(Screen.BATTLE, "up", 5))
+
+        // The battle gestures only mean something inside a battle.
         assertEquals(GameAction.NONE, GestureRouter.route(Screen.MENU, "right", 3))
         assertEquals(GameAction.NONE, GestureRouter.route(Screen.RESULT, "left", 3))
     }

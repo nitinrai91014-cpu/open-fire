@@ -8,7 +8,8 @@ package com.blindtechnexus.openfire.model
  *                 right next weapon, left previous weapon.
  *  - Two fingers: up / down move the quick menu selection, right own status,
  *                 left enemy status.
- *  - Three fingers: right cycles running speed; left toggles pause/resume.
+ *  - Three fingers: up exits the game; down toggles pause/resume;
+ *                 right / left change running speed.
  *  - A single tap activates the highlighted quick-menu item (and confirms a
  *                 timer-bomb duration while the timer picker is open).
  */
@@ -32,7 +33,9 @@ enum class GameAction {
     PLAY_AGAIN,
     /** Three-finger swipe right: one running speed step faster. */
     SPEED_FASTER,
-    /** Three-finger swipe left: freeze or resume the current battle. */
+    /** Three-finger swipe left: one running speed step slower. */
+    SPEED_SLOWER,
+    /** Three-finger swipe down: freeze or resume the current battle. */
     TOGGLE_PAUSE
 }
 
@@ -61,10 +64,12 @@ object GestureRouter {
         }
         Screen.BATTLE -> when {
             fingers <= 0 -> GameAction.NONE
-            // Three (or more) fingers: pause or cycle running speed.
+            // Three (or more) fingers: up exits, down pauses/resumes, right/left changes speed.
             fingers >= 3 -> when (direction) {
+                "up" -> GameAction.EXIT_BATTLE
+                "down" -> GameAction.TOGGLE_PAUSE
                 "right" -> GameAction.SPEED_FASTER
-                "left" -> GameAction.TOGGLE_PAUSE
+                "left" -> GameAction.SPEED_SLOWER
                 else -> GameAction.NONE
             }
             fingers == 2 -> when (direction) {
@@ -258,8 +263,8 @@ enum class RunSpeed(val id: String, val nameKey: String) {
         const val MAX_FAST_FACTOR = 12.0f
 
         /** Running-sound volume per level. */
-        const val SLOW_VOLUME_GAIN = 0.60f
-        const val NORMAL_VOLUME_GAIN = 0.80f
+        const val SLOW_VOLUME_GAIN = 0.70f
+        const val NORMAL_VOLUME_GAIN = 0.85f
         const val FAST_VOLUME_GAIN = 1.00f
 
         fun fromId(id: String?): RunSpeed =

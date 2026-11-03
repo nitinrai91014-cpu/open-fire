@@ -48,7 +48,7 @@ import kotlin.math.roundToInt
  *
  * One-finger swipes fire, reload and switch weapons, two-finger swipes move
  * the menu and read the status, and three-finger swipes step the running
- * speed and pause or resume the battle.
+ * speed (left/right), pause or resume the battle (down), and exit the game (up).
  */
 @Composable
 fun BattleScreen(viewModel: GameViewModel) {

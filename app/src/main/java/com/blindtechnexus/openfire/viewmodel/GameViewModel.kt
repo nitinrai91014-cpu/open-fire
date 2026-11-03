@@ -1090,9 +1090,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             audioManager.stopSound("enemyWalk")
             return
         }
+        val (lateral, _) = enemyAudioOffsets()
         audioManager.updateEnemyWalk3dAudio(
             distance = distance,
-            lateralOffset = _gameState.value.robertLateral,
+            lateralOffset = lateral,
             speedMps = speedMps,
             fleeing = fleeing
         )
@@ -1187,7 +1188,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val current = _gameState.value.runSpeedLevel
         val next = if (direction >= 0) {
             if (current == RunSpeed.FAST) RunSpeed.SLOW else current.faster()
-        } else current.slower()
+        } else {
+            if (current == RunSpeed.SLOW) RunSpeed.FAST else current.slower()
+        }
         playSound("click")
         if (next == current) {
             msg("${t("runSpeed")}: ${t(next.nameKey)}. ${t("runSpeedLimit")}")
@@ -1418,7 +1421,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * greater number of hits.
      */
     private fun beginRobertSprint() {
-        if (_gameState.value.robertState == "retreat") return
         _gameState.update {
             it.copy(
                 robertState = "retreat",
@@ -1431,7 +1433,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         robertSprintTicks = RobertRules.SPRINT_TICKS
         rollRobertFireRange(allowDeception = true)
-        planRobertStep(120L)
+        planRobertStep(FLEE_TICK_MS)
     }
 
     /** Result of one of Robert's movement steps. */
@@ -1552,14 +1554,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 // A full sprint: [RobertRules.SPRINT_TICKS] of running at
                 // twice the player's top speed before he comes back around.
                 val metres = RobertRules.fleeStep(round)
-                val strafing = RobertRules.shouldStrafe(Random)
                 var blocked = false
                 _gameState.update { current ->
-                    val outcome = if (strafing) {
-                        strafeStep(current, metres, RobertRules.strafeDirection(Random))
-                    } else {
-                        runAwayStep(current, metres)
-                    }
+                    val outcome = runAwayStep(current, metres)
                     blocked = outcome.blocked
                     outcome.state
                 }
@@ -2428,9 +2425,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val retreat = shouldRobertRetreat(state, damageFromLastHit)
         val defence = robertPanicDefence(_gameState.value)?.let { deployRobertDefence(it) }.orEmpty()
         val after = _gameState.value
-        if (retreat && after.robertState in setOf("advance", "flank")) beginRobertSprint()
+        var fledText = ""
+        if (retreat) {
+            if (after.robertState == "retreat") {
+                robertSprintTicks = RobertRules.SPRINT_TICKS
+                planRobertStep(FLEE_TICK_MS)
+            } else if (after.robertState in setOf("advance", "flank", "turnBack")) {
+                beginRobertSprint()
+                fledText = " ${t("robertFled")}"
+            }
+        }
         ensureGlueWallAvoidance()
-        return (if (retreat && after.robertState != "retreat") " ${t("robertFled")}" else "") + defence
+        return fledText + defence
     }
 
     // ---------------------------------------------------------------------
@@ -3060,9 +3066,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         markExplicitAction()
 
         val now = battleClock.nowMs()
-        if (now < nextPlayerShotAtMs) return
         lastFireAt = now
-        nextPlayerShotAtMs = now + if (fromAutomatic) FireCadence.CONTINUOUS_MS else FireCadence.NORMAL_MS
 
         var state = _gameState.value
         if (state.playerHp <= 0 || state.robertHp <= 0) return
@@ -3317,9 +3321,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         autoFireJob?.cancel()
         autoFireJob = viewModelScope.launch {
             while (holdFireAllowed()) {
-                val remaining = (nextPlayerShotAtMs - battleClock.nowMs()).coerceAtLeast(0L)
-                if (remaining > 0) battleClock.awaitDelay(remaining)
-                if (!holdFireAllowed()) break
                 fireOneAutomaticShot()
                 battleClock.awaitDelay(weapon.burstIntervalMs)
             }
@@ -4156,7 +4157,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun handleGesture(direction: String, fingers: Int) {
         val action = GestureRouter.route(_currentScreen.value, direction, fingers)
-        if (_currentScreen.value == Screen.BATTLE && battlePaused.value && action != GameAction.TOGGLE_PAUSE) return
+        if (_currentScreen.value == Screen.BATTLE && battlePaused.value && action != GameAction.TOGGLE_PAUSE && action != GameAction.EXIT_BATTLE) return
         when (action) {
             GameAction.CONTINUE -> continueToJump()
             GameAction.BACK_TO_MENU -> navigateTo(Screen.MENU)
@@ -4174,8 +4175,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             GameAction.STATUS_ENEMY -> speakStatus(own = false)
             GameAction.EXIT_BATTLE -> exitBattle()
             GameAction.PLAY_AGAIN -> playAgain()
-            // Right cycles speed; left pauses or resumes the unchanged battle.
+            // Right cycles speed faster; left cycles speed slower; down toggles pause; up exits.
             GameAction.SPEED_FASTER -> cycleRunSpeed(1)
+            GameAction.SPEED_SLOWER -> cycleRunSpeed(-1)
             GameAction.TOGGLE_PAUSE -> toggleBattlePause()
             GameAction.NONE -> {}
         }

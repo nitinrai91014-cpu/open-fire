@@ -89,7 +89,7 @@ object VolumeMixer {
     fun walkDistanceGain(distance: Float, maxRange: Float): Float {
         val safeRange = maxRange.coerceAtLeast(1f)
         val proximity = (1f - clamp(distance / safeRange)).coerceIn(0f, 1f)
-        return (0.05f + proximity * proximity * 0.95f).coerceIn(0.05f, 1f)
+        return (0.15f + proximity * proximity * 0.85f).coerceIn(0.15f, 1f)
     }
 
     /**
