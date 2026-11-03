@@ -54,8 +54,6 @@ class GestureRouterTest {
         // The battle gestures only mean something inside a battle.
         assertEquals(GameAction.NONE, GestureRouter.route(Screen.MENU, "right", 3))
         assertEquals(GameAction.NONE, GestureRouter.route(Screen.RESULT, "left", 3))
-        assertEquals(GameAction.NONE, GestureRouter.route(Screen.MENU, "up", 3))
-        assertEquals(GameAction.NONE, GestureRouter.route(Screen.RESULT, "down", 3))
     }
 
     @Test

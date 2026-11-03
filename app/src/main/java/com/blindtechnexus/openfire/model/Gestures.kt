@@ -263,8 +263,8 @@ enum class RunSpeed(val id: String, val nameKey: String) {
         const val MAX_FAST_FACTOR = 12.0f
 
         /** Running-sound volume per level. */
-        const val SLOW_VOLUME_GAIN = 0.80f
-        const val NORMAL_VOLUME_GAIN = 1.00f
+        const val SLOW_VOLUME_GAIN = 0.70f
+        const val NORMAL_VOLUME_GAIN = 0.85f
         const val FAST_VOLUME_GAIN = 1.00f
 
         fun fromId(id: String?): RunSpeed =
