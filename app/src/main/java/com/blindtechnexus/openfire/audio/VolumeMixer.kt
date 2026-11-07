@@ -29,7 +29,7 @@ object VolumeMixer {
     const val PAN_DEAD_ZONE = 0.12f
 
     /** Only part of the geometric pan is used, so sides stay gentle. */
-    const val PAN_STRENGTH = 0.65f
+    const val PAN_STRENGTH = 0.85f
 
     /** Movement at (or above) this speed counts as fast running. */
     const val FAST_RUN_SPEED_MPS = 8f
@@ -89,7 +89,7 @@ object VolumeMixer {
     fun walkDistanceGain(distance: Float, maxRange: Float): Float {
         val safeRange = maxRange.coerceAtLeast(1f)
         val proximity = (1f - clamp(distance / safeRange)).coerceIn(0f, 1f)
-        return (0.05f + proximity * proximity * 0.95f).coerceIn(0.05f, 1f)
+        return (0.15f + proximity * proximity * 0.85f).coerceIn(0.15f, 1f)
     }
 
     /**
@@ -102,13 +102,18 @@ object VolumeMixer {
 
     /**
      * Footstep playback rate for a movement speed in metres per second.
-     * Slow movement stretches the steps out; a full sprint almost doubles
-     * their rate.
+     *
+     * Slow movement stretches the steps out; a fast run speeds them up; and
+     * the Max Speed extension on the fast level pushes the rate to the top of
+     * the range, so an extremely fast run really sounds extremely fast.
      */
     fun walkRate(speedMps: Float): Float {
         val safeSpeed = if (speedMps.isNaN()) 0f else speedMps.coerceAtLeast(0f)
-        return (0.55f + safeSpeed * 0.09f).coerceIn(0.6f, 1.9f)
+        return (0.55f + safeSpeed * 0.16f).coerceIn(0.6f, 2.0f)
     }
+
+    /** Highest playback rate a footstep loop may ever reach. */
+    const val MAX_WALK_RATE = 2.0f
 
     /** True when [speedMps] counts as fast running. */
     fun isFastRun(speedMps: Float): Boolean =

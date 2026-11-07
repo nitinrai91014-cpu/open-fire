@@ -1,6 +1,5 @@
 package com.blindtechnexus.openfire.model
 
-import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
@@ -55,12 +54,8 @@ data class RobertProfile(
 )
 
 object RobertRules {
-    /**
-     * Legacy absolute defence trigger. The real trigger is round aware: see
-     * [defenceThresholdHp]. Robert starts far earlier now, which is what makes
-     * him actually use the medkits, covers and glue walls he carries.
-     */
-    const val DEFENCE_THRESHOLD_HP = 60
+    /** Defensive assets become available strictly below this health. */
+    const val DEFENCE_THRESHOLD_HP = 150
 
     /** Robert's sniper is usable under this health while it is locked. */
     const val LOCKED_SNIPER_MAX_HP = 100
@@ -71,11 +66,22 @@ object RobertRules {
     /** From round two every game gives him two gloo walls. */
     const val ENEMY_GLUE_WALLS_FROM_ROUND_TWO = 2
 
+    /**
+     * How many times the enemy may use the Gloo Wall Breaker in a match.
+     *
+     * Round one allows a single use, round two raises it to two, and the
+     * later rounds keep the round-two limit. The breaker is only ever handed
+     * to him when the player raises a gloo wall, and he then uses it
+     * automatically.
+     */
+    fun glueWallBreakerLimitForRound(round: Int): Int =
+        if (round.coerceIn(1, Progression.ROUNDS_PER_MATCH) == 1) 1 else 2
+
     /** Chance that a relocation is a deception trip into the miss band. */
     const val DECEPTION_CHANCE = 0.22f
 
     /** Fast retreat: metres gained per flee tick, and the tick length. */
-    const val FLEE_STEP_M = 6f
+    const val FLEE_STEP_M = 0.9f
     const val FLEE_TICK_MS = 160L
 
     /**
@@ -92,12 +98,12 @@ object RobertRules {
     const val STRAFE_CHANCE = 0.20f
 
     /** Metres covered by one sideways strafe step. */
-    const val STRAFE_STEP_M = 6f
+    const val STRAFE_STEP_M = 1.2f
 
     /**
      * Flee ticks one sprint always lasts. At [FLEE_TICK_MS] per tick and
      * [enemyFleeSpeedMps] metres per second this carries Robert right across
-     * the 100 m zone in every round: once he decides to run he is really
+     * the 25 m square in every round: once he decides to run he is really
      * gone, and the player has to hunt him down again.
      */
     const val SPRINT_TICKS = 8
@@ -106,7 +112,7 @@ object RobertRules {
     const val TURN_BACK_TICKS = 3
 
     /** Metres covered per turn-back tick. */
-    const val TURN_BACK_STEP_M = 8f
+    const val TURN_BACK_STEP_M = 1.6f
 
     /** Player shots inside one burst window that count as continuous fire. */
     const val COUNTER_FIRE_BURST_SHOTS = 3
@@ -200,7 +206,7 @@ object RobertRules {
     const val RETALIATION_COOLDOWN_MS = 700L
 
     /** Window in which player shots are counted as one continuous burst. */
-    const val PLAYER_BURST_WINDOW_MS = 2_500L
+    const val PLAYER_BURST_WINDOW_MS = 3_500L
 
     /**
      * How long after his last shot the player still counts as firing. The
@@ -224,16 +230,16 @@ object RobertRules {
      * [NORMAL_FIRE_MAX_MS] between shots, or exactly [CONTINUOUS_FIRE_MS]
      * while Robert is pressing a defenceless player.
      */
-    val NORMAL_INTERVALS_MS = listOf(1_500L, 2_000L)
+    val NORMAL_INTERVALS_MS = listOf(FireCadence.NORMAL_MS)
 
     /** Fastest normal shot: 1.5 seconds after the previous one. */
-    const val NORMAL_FIRE_MIN_MS = 1_500L
+    const val NORMAL_FIRE_MIN_MS = FireCadence.NORMAL_MS
 
     /** Slowest normal shot: 2 seconds after the previous one. */
-    const val NORMAL_FIRE_MAX_MS = 2_000L
+    const val NORMAL_FIRE_MAX_MS = FireCadence.NORMAL_MS
 
     /** Continuous pressure fire uses the fastest requested cadence. */
-    const val CONTINUOUS_FIRE_MS = 1_500L
+    const val CONTINUOUS_FIRE_MS = FireCadence.CONTINUOUS_MS
 
     /** Maximum number of shots Robert fires in a row before he pauses. */
     const val MAX_SUCCESSIVE_SHOTS = 2
@@ -248,7 +254,7 @@ object RobertRules {
     const val REPOSITION_AFTER_BURST_CHANCE = 0.75f
 
     /** Minimum distance (metres) he keeps while repositioning. */
-    const val REPOSITION_STEP_M = 8f
+    const val REPOSITION_STEP_M = 1.6f
 
     /**
      * The three damage ranges he shoots from, expressed as proximity percent:
@@ -267,13 +273,30 @@ object RobertRules {
     }
 
     /**
+     * Round from which the enemy runs in his fastest speed mode. From round
+     * three onwards every sprint of his is unlocked at the maximum speed the
+     * arena allows, without any purchase.
+     */
+    const val ENEMY_MAX_SPEED_ROUND = 3
+
+    /** True from round three: the enemy always runs in his fastest mode. */
+    fun enemyMaxSpeedUnlocked(round: Int): Boolean =
+        round.coerceIn(1, Progression.ROUNDS_PER_MATCH) >= ENEMY_MAX_SPEED_ROUND
+
+    /**
      * Round-by-round movement multiplier. Round one is 20% faster than the
-     * old movement, and every following round adds another 20% of base speed.
+     * old movement and round two adds another 20%. From round three the
+     * enemy's fastest speed mode is unlocked automatically, so he runs at
+     * the maximum multiplier for the rest of the match.
      */
     fun movementSpeedMultiplier(round: Int): Float {
         val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
+        if (enemyMaxSpeedUnlocked(safeRound)) return MAX_SPEED_MULTIPLIER
         return 1.2f + (safeRound - 1) * 0.2f
     }
+
+    /** The multiplier of the enemy's maximum speed mode (round five). */
+    const val MAX_SPEED_MULTIPLIER = 2.0f
 
     /**
      * Robert's fast running speed in metres per second. The player's fast
@@ -298,25 +321,14 @@ object RobertRules {
     fun fleeStep(round: Int): Float =
         FLEE_STEP_M * movementSpeedMultiplier(round) * FLEE_SPEED_MULTIPLIER
 
-    /**
-     * The health Robert must fall under before he starts spending his
-     * defences. Rounds one and two trigger below 60% of maximum health or
-     * below 100 health (whichever is higher); round three triggers below 200;
-     * rounds four and five trigger below 300.
-     */
-    fun defenceThresholdHp(round: Int, maxHp: Int): Int {
-        val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
-        val safeMax = maxHp.coerceAtLeast(1)
-        return when (safeRound) {
-            1, 2 -> maxOf(100, (safeMax * 0.60f).roundToInt())
-            3 -> 200
-            else -> 300
-        }
-    }
+    /** Defensive assets may only be used while alive and below 150 HP, in every round. */
+    fun defenceThresholdHp(round: Int, maxHp: Int): Int = DEFENCE_THRESHOLD_HP
 
     /** Every standard battle weapon (bombs and the missile are separate). */
     val ALL_STANDARD_WEAPONS: List<Weapon> =
-        Weapon.entries.filter { !it.missileLauncher && !it.bomb }
+        Weapon.entries.filter {
+            !it.missileLauncher && !it.bomb && it != Weapon.GLUE_BREAKER
+        }
 
     /**
      * Robert's weapon rotation for a round. He receives the MP40 in round two,
@@ -353,29 +365,42 @@ object RobertRules {
         }
     }
 
+    /**
+     * Robert's weapons for a round with the player's pistol mirrored in: as
+     * soon as the player owns a pistol, Robert owns one as well. He never
+     * receives the Gloo Wall Breaker this way - his breaker is a separate,
+     * limited charge that only reacts to a player gloo wall.
+     */
+    fun mirroredWeapons(round: Int, playerOwnsPistol: Boolean): List<Weapon> {
+        val base = weaponsForRound(round)
+        if (!playerOwnsPistol || base.contains(Weapon.PISTOL)) return base
+        return base + Weapon.PISTOL
+    }
+
     fun profile(
         round: Int,
         level: Int = 1,
         /**
-         * True when the player owns the sniper rifle. Round one mirrors it:
-         * buying a sniper rifle hands Robert one too, unlocked, so he never
-         * fights a scoped player with a locked rifle.
+         * True when the player owns the pistol. The pistol is mirrored: the
+         * moment the player buys one, Robert carries one too. The sniper
+         * rifle is no longer mirrored in round one - the Gloo Wall Breaker
+         * replaced it as the answer to a gloo wall.
          */
-        playerOwnsSniper: Boolean = false,
+        playerOwnsPistol: Boolean = false,
         /** Gloo walls the player carries; round one mirrors one of them. */
         playerGlueWalls: Int = 0
     ): RobertProfile {
         val safeRound = round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
         val safeLevel = level.coerceIn(1, Progression.LEVELS_PER_ROUND)
         val maxHp = Progression.hpFor(safeRound, safeLevel)
-        val weapons = weaponsForRound(safeRound)
+        val weapons = mirroredWeapons(safeRound, playerOwnsPistol)
         return when (safeRound) {
             1 -> {
-                // Round one: the sniper rifle is locked unless the player
-                // bought one - then Robert carries it unlocked as well - and
-                // he may answer the player's gloo wall with one of his own.
+                // Round one: the sniper rifle always stays locked (only the
+                // Gloo Wall Breaker destroys walls now), and he may answer
+                // the player's gloo wall with one of his own.
                 val roundOneWalls = if (playerGlueWalls > 0) ENEMY_GLUE_WALLS_ROUND_ONE else 0
-                val sniperLocked = !playerOwnsSniper
+                val sniperLocked = true
                 if (safeLevel <= 2) {
                     // Levels 1 and 2: two medkits and one cover.
                     RobertProfile(1, maxHp, 2, roundOneWalls, 1, weapons, sniperLocked, fleeAfterHits(1))
@@ -453,42 +478,38 @@ object RobertRules {
         stored: FireRange,
         playerWeaponDamaged: Boolean,
         playerGlueWallActive: Boolean,
-        robertHasSniper: Boolean = true
+        robertHasBreaker: Boolean = true
     ): FireRange = when {
         playerWeaponDamaged -> FireRange.CLOSE
-        playerGlueWallActive && robertHasSniper -> FireRange.CLOSE
+        playerGlueWallActive && robertHasBreaker -> FireRange.CLOSE
         playerGlueWallActive -> FireRange.FAR
         else -> stored
     }
 
     /**
-     * True when the player's glue wall is up and Robert has no way to break
-     * it. He then refuses to approach: he runs away and keeps away until the
-     * glue wall is deactivated or broken, and the player has to hunt him down.
+     * True when the player's glue wall is up and Robert has no Gloo Wall
+     * Breaker charge left to break it. He then refuses to approach: he runs
+     * away and keeps away until the wall is deactivated or broken, and the
+     * player has to hunt him down.
      */
-    fun shouldAvoidGlueWall(playerGlueWallActive: Boolean, robertHasSniper: Boolean): Boolean =
-        playerGlueWallActive && !robertHasSniper
+    fun shouldAvoidGlueWall(playerGlueWallActive: Boolean, robertHasBreaker: Boolean): Boolean =
+        playerGlueWallActive && !robertHasBreaker
 
     /**
-     * True when Robert owns a sniper rifle he can actually use right now:
-     * it must be in the allowed list for this round and situation, and it must
-     * not be damaged.
+     * True when Robert can destroy a gloo wall right now: he needs at least
+     * one Gloo Wall Breaker charge, and the player must have raised a wall.
      */
-    fun hasUsableSniper(allowedWeapons: List<Weapon>, sniperDamaged: Boolean): Boolean =
-        allowedWeapons.contains(Weapon.SNIPER) && !sniperDamaged
+    fun hasUsableGlueBreaker(playerGlueWallActive: Boolean, breakerCharges: Int): Boolean =
+        playerGlueWallActive && breakerCharges > 0
 
     /**
-     * The sniper rifle is locked in rounds one and two, and round one
-     * unlocks it completely as soon as the player owns one himself. While it
-     * is still locked it is used anyway the moment the player raises a gloo
-     * wall: a gloo wall is always detected and always answered with the
-     * sniper rifle. [robertHp] is kept for the callers that used to gate the
-     * locked rifle on health.
+     * The sniper rifle is locked until round three. A gloo wall no longer
+     * unlocks it: only the Gloo Wall Breaker can destroy a wall now, and that
+     * is a separate charge ([glueWallBreakerLimitForRound]). [playerGlueWallActive]
+     * and [robertHp] are kept so the call sites stay readable.
      */
     fun sniperAllowed(profile: RobertProfile, playerGlueWallActive: Boolean, robertHp: Int): Boolean =
-        // A raised gloo wall is always detected and always answered with the
-        // sniper rifle, even in the rounds where it is otherwise locked.
-        !profile.sniperLocked || playerGlueWallActive
+        !profile.sniperLocked
 
     /** Every weapon Robert may use right now. */
     fun allowedWeapons(
@@ -546,7 +567,7 @@ object RobertRules {
      * exchange is judged on its own.
      */
     fun shouldFleeFight(robertHitsTaken: Int, robertHitsLanded: Int): Boolean =
-        robertHitsTaken >= 2 && robertHitsTaken > robertHitsLanded
+        robertHitsTaken > 0 && robertHitsTaken > robertHitsLanded
 
     /**
      * True when a one-sided exchange must make Robert run as fast as
@@ -583,16 +604,29 @@ object RobertRules {
         isContinuousPlayerFire(playerBurstShots)
 
     /** True when health dropped below panic thresholds (150 or 200 HP or fraction). */
-    fun shouldPanic(robertHp: Int, robertMaxHp: Int, previousHp: Int = robertMaxHp): Boolean {
-        if (robertMaxHp <= 0) return false
-        val fraction = robertHp.toFloat() / robertMaxHp.toFloat()
-        // Even 1% drop below fraction thresholds triggers panic
-        if (fraction < PANIC_FRACTION || fraction < PANIC_FRACTION_SEVERE) return true
-        if (robertHp < PANIC_HP_200 || robertHp < PANIC_HP_150) return true
-        // Any drop below previous (even 1%) when already below 95% triggers panic
-        if (previousHp > robertHp && fraction < 0.95f) return true
-        return false
+    fun shouldPanic(robertHp: Int, robertMaxHp: Int, previousHp: Int = robertMaxHp): Boolean =
+        robertMaxHp > 0 && shouldUseDefence(robertHp, true)
+
+    /** Evaluate actual hits, not trigger pulls. A single hit is answered;
+     * two hits ahead, or sustained damaging fire, trigger a quick retreat.
+     * A barrier always takes priority over ordinary gunfire retreat. */
+    fun shouldRetreatFromFight(
+        playerHits: Int, enemyHits: Int, consecutiveHits: Int,
+        playerBurstShots: Int, enemyHealthDropping: Boolean,
+        enemyWall: Boolean, playerWall: Boolean, playerHasBreaker: Boolean,
+        proximityPercent: Float, damageFromLastHit: Int = 0
+    ): Boolean {
+        if (enemyWall && damageFromLastHit <= 0) return false // no damage passed the barrier
+        return damageFromLastHit >= RetreatRules.HEAVY_HIT_HP ||
+            (playerHits >= 2 && playerHits > enemyHits) ||
+            consecutiveHits >= FLEE_AFTER_PLAYER_HITS ||
+            (enemyHealthDropping && playerBurstShots >= 2)
     }
+
+    /** One deadline shared by normal and breaker shots. */
+    fun shotInterval(enemyHasGlooWall: Boolean, random: Random): Long =
+        if (enemyHasGlooWall) CONTINUOUS_FIRE_MS else normalTacticalInterval(random)
+
 
     /** True when the player is vulnerable (damaged, trapped, locked, hindered). */
     fun isPlayerVulnerable(
@@ -631,8 +665,8 @@ object RobertRules {
         hasSniper: Boolean
     ): Weapon? {
         if (allowed.isEmpty()) return null
-        // If glue wall up and has sniper, sniper is best regardless of health
-        if (playerGlueWallActive && hasSniper && allowed.contains(Weapon.SNIPER)) return Weapon.SNIPER
+        // A gloo wall is no longer answered with a weapon: only the dedicated
+        // Gloo Wall Breaker destroys one (see [hasUsableGlueBreaker]).
         val fraction = if (robertMaxHp > 0) robertHp.toFloat() / robertMaxHp.toFloat() else 1f
         return when {
             fraction >= 0.9f -> {
@@ -714,13 +748,7 @@ object RobertRules {
         random: Random,
         enemyHasAdvantage: Boolean = true
     ): Long {
-        val mayPress = enemyHasAdvantage && shouldPressFromDefence(
-            enemyHasDefence = enemyHasDefence,
-            playerHasDefence = playerHasDefence,
-            playerWeaponDamaged = playerWeaponDamaged,
-            playerHpFraction = playerHpFraction
-        )
-        return if (mayPress) CONTINUOUS_FIRE_MS else normalTacticalInterval(random)
+        return normalTacticalInterval(random)
     }
 
     /**
@@ -962,11 +990,11 @@ object RobertRules {
         playerHp: Int,
         playerMaxHp: Int,
         deceptionShotsLeft: Int,
-        robertHasSniper: Boolean = true,
+        robertHasBreaker: Boolean = true,
         playerWeapon: Weapon? = null
     ): FireRange {
         if (playerWeaponDamaged) return FireRange.CLOSE
-        if (playerGlueWallActive) return if (robertHasSniper) FireRange.CLOSE else FireRange.FAR
+        if (playerGlueWallActive) return if (robertHasBreaker) FireRange.CLOSE else FireRange.FAR
         if (stored == FireRange.FAR && deceptionShotsLeft > 0) return FireRange.FAR
         val gap = advantageGap(robertHp, robertMaxHp, playerHp, playerMaxHp)
         // Round 5 strategic: even when advantaged, prefer STRONG over CLOSE for
@@ -993,32 +1021,24 @@ object RobertRules {
     }
 
     /**
-     * The inclusive delay window (ms) before Robert's next shot. Every window
-     * stays inside the 2 s - 3 s rhythm of the new behaviour, with the faster
-     * end reserved for an aggressive situation and the slower end for a
-     * retreating one.
+     * The inclusive delay window (ms) before Robert's next normal shot.
      */
-    fun fireIntervalWindow(situation: CombatSituation, fleeing: Boolean): LongRange = when {
-        fleeing -> 2_000L..2_000L
-        else -> 1_500L..2_000L
-    }
+    fun fireIntervalWindow(situation: CombatSituation, fleeing: Boolean): LongRange =
+        FireCadence.NORMAL_MS..FireCadence.NORMAL_MS
 
     /**
-     * The window used while Robert presses a pinned player continuously. It is
-     * still human, never a machine gun: 1.2 s to 2 s between the shots.
+     * The interval used while Robert fires continuously.
      */
-    fun continuousFireWindow(): LongRange = 1_500L..2_000L
+    fun continuousFireWindow(): LongRange = FireCadence.CONTINUOUS_MS..FireCadence.CONTINUOUS_MS
 
-    /** A jittered delay before Robert's next shot, for the situation. */
+    /** Shared normal and continuous fire intervals. */
     fun fireIntervalMs(
         situation: CombatSituation,
         fleeing: Boolean,
         random: Random,
         continuous: Boolean = false
     ): Long {
-        if (fleeing) return NORMAL_FIRE_MAX_MS
-        if (continuous) return NORMAL_INTERVALS_MS[random.nextInt(NORMAL_INTERVALS_MS.size)]
-        return normalTacticalInterval(random)
+        return if (continuous) FireCadence.CONTINUOUS_MS else FireCadence.NORMAL_MS
     }
 
     /**

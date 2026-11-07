@@ -96,7 +96,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
                             val isCenter = isBattle && !isTop && !isBottom
                             // The center portion is split in two halves: the
                             // left half runs left, the right half runs right,
-                            // so all four directions of the 100 m zone are
+                            // so all four directions of the 25 m square zone are
                             // reachable. A tap in the center still activates
                             // the quick menu (or confirms a timer bomb).
                             val isCenterLeft = isCenter && firstDown.position.x < screenWidth / 2f
@@ -108,7 +108,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                 isCenterRight -> MoveDirection.RIGHT
                                 else -> null
                             }
-                            val isRunZone = moveDirection != null
+                            val isRunZone = isBattle && moveDirection != null
 
                             // Every finger is tracked from its own touch-down point,
                             // so a two-finger swipe never reports a bogus direction.
@@ -160,6 +160,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
                                                 viewModel.stopPlayerMove()
                                                 longPressActive = false
                                             }
+                                            if (holdFireStarted) viewModel.stopHoldFire()
                                         }
                                     }
 
@@ -229,8 +230,7 @@ fun OpenFireApp(viewModel: GameViewModel) {
 
                             // The burst already fired every bullet it had, so
                             // the same swipe must not fire another one.
-                            if (holdFireStarted) {
-                                holdFireStarted = false
+                            if (holdFireStarted && maxFingers == 1) {
                                 return@awaitEachGesture
                             }
 

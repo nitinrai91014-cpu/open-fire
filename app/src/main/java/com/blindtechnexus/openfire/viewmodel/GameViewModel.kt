@@ -10,13 +10,16 @@ import com.blindtechnexus.openfire.data.PreferencesManager
 import com.blindtechnexus.openfire.data.Strings
 import com.blindtechnexus.openfire.model.Arena
 import com.blindtechnexus.openfire.model.BattleMenuItem
+import com.blindtechnexus.openfire.model.BattleClock
 import com.blindtechnexus.openfire.model.BombKind
 import com.blindtechnexus.openfire.model.BombRules
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DamageTable
 import com.blindtechnexus.openfire.model.DefenceItem
 import com.blindtechnexus.openfire.model.Extension
+import com.blindtechnexus.openfire.model.Facing
 import com.blindtechnexus.openfire.model.FireRange
+import com.blindtechnexus.openfire.model.FireCadence
 import com.blindtechnexus.openfire.model.GameAction
 import com.blindtechnexus.openfire.model.GameSettings
 import com.blindtechnexus.openfire.model.GameState
@@ -24,11 +27,13 @@ import com.blindtechnexus.openfire.model.GameStats
 import com.blindtechnexus.openfire.model.GestureRouter
 import com.blindtechnexus.openfire.model.HitZone
 import com.blindtechnexus.openfire.model.Inventory
+import com.blindtechnexus.openfire.model.Loans
 import com.blindtechnexus.openfire.model.MissileRules
 import com.blindtechnexus.openfire.model.MoveDirection
 import com.blindtechnexus.openfire.model.Progression
 import com.blindtechnexus.openfire.model.ResultData
 import com.blindtechnexus.openfire.model.RewardBundle
+import com.blindtechnexus.openfire.model.RetreatRules
 import com.blindtechnexus.openfire.model.Rewards
 import com.blindtechnexus.openfire.model.RobertProfile
 import com.blindtechnexus.openfire.model.RobertRules
@@ -85,7 +90,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     val resultReady: StateFlow<Boolean> = _resultReady.asStateFlow()
 
     private var stepJob: Job? = null
-    private var counterJob: Job? = null
     private var robertFireJob: Job? = null
     private var resultJob: Job? = null
     private var playerMoveJob: Job? = null
@@ -96,6 +100,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var endingJob: Job? = null
     private var matchLimitJob: Job? = null
     private var foreground = true
+    private val battleClock = BattleClock { android.os.SystemClock.elapsedRealtime() }
+    val battlePaused: StateFlow<Boolean> = battleClock.paused
+    private var manuallyPaused = false
 
     /**
      * Flee ticks left of Robert's current sprint. A sprint always runs for
@@ -106,8 +113,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      */
     private var robertSprintTicks = 0
 
-    /** Wall-clock moment of Robert's last answering (retaliation) shot. */
-    private var robertRetaliationAtMs = 0L
+    /** Monotonic deadline shared by all enemy gun and breaker shots. */
+    private var robertNextShotAtMs = 0L
 
     /** Wall-clock moment the round five seven minute limit expires (0 = none). */
     private var matchDeadlineMs: Long = 0L
@@ -145,18 +152,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /** Last time the enemy hit report was spoken out loud. */
     private var lastHitSpeechAtMs = 0L
 
-    /**
-     * The player's own firing rhythm, in milliseconds, averaged over the
-     * shots of the current exchange. Robert fires at exactly this cadence
-     * whenever the two fighters are trading shots.
-     */
-    private var playerShotIntervalMs = RobertRules.DEFAULT_PLAYER_INTERVAL_MS
-
     /** Last voice-related settings applied, to avoid resetting TTS while dragging volume. */
     private var syncedVoiceSignature: String? = null
 
     /** Debounce so one physical tap / swipe can never fire (and spend) more than one bullet. */
     private var lastFireAt = 0L
+    private var nextPlayerShotAtMs = 0L
+    private var lastIncomingHitAtMs = -1L
+    private var recentIncomingHits = 0
+    private var lastIncomingDamage = 0
 
     /**
      * Timestamp of the last explicit button / gesture action. A tap that
@@ -169,9 +173,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         get() = RobertRules.profile(
             round = _stats.value.round,
             level = _stats.value.level,
-            // Round one mirrors the player's sniper rifle, and the enemy may
-            // answer a player gloo wall with one of his own.
-            playerOwnsSniper = _inventory.value.ownsWeapon(Weapon.SNIPER),
+            // The pistol is mirrored: the moment the player owns one, the
+            // enemy carries one too. The sniper rifle is never mirrored any
+            // more - a gloo wall is destroyed by the Gloo Wall Breaker, not
+            // by a sniper rifle.
+            playerOwnsPistol = _inventory.value.ownsWeapon(Weapon.PISTOL),
             playerGlueWalls = _inventory.value.glueWalls
         )
 
@@ -318,9 +324,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         volume: Float = 1.0f,
         posX: Float = 0f,
         posY: Float = 0f,
-        posZ: Float = 0f
+        posZ: Float = 0f,
+        rate: Float = 1.0f
     ) {
-        audioManager.playSound(key, volume = volume, posX = posX, posY = posY, posZ = posZ)
+        audioManager.playSound(
+            key,
+            volume = volume,
+            rate = rate,
+            posX = posX,
+            posY = posY,
+            posZ = posZ
+        )
     }
 
     private fun toast(text: String) {
@@ -493,39 +507,31 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         audioManager.stopSound("airplaneEngine")
     }
 
+    /** The three-finger gesture toggles a real, in-place pause. */
+    fun toggleBattlePause() {
+        if (_currentScreen.value != Screen.BATTLE || !foreground) return
+        manuallyPaused = !manuallyPaused
+        if (manuallyPaused) {
+            battleClock.pause()
+            audioManager.pauseAllSounds()
+            ttsManager.stop()
+            speak(t("battlePaused"))
+        } else {
+            battleClock.resume()
+            audioManager.resumeAllSounds()
+            speak(t("battleResumed"))
+        }
+    }
+
     fun onAppResumed() {
         foreground = true
         when (_currentScreen.value) {
             Screen.WELCOME, Screen.MENU, Screen.SETTINGS, Screen.GUIDE, Screen.PROFILE,
             Screen.SHOP, Screen.ABOUT, Screen.CHANGELOG, Screen.READER -> audioManager.startMusic()
             Screen.JUMP -> startAirplaneAudio()
-            Screen.BATTLE -> {
-                val state = _gameState.value
-                audioManager.stopFootsteps()
-                if (state.playerHp > 0 && state.robertHp > 0) {
-                    startRobertFireLoop(1200L)
-                    if (state.missileInFlight) {
-                        // A paused missile resumes its flight: restart the
-                        // sound and the remaining time to impact.
-                        if (MissileRules.soundLoops(state.distance)) {
-                            audioManager.playLoop("missile")
-                        } else {
-                            playSound("missile")
-                        }
-                        val remaining = missileImpactAtMs - System.currentTimeMillis()
-                        scheduleMissileImpact(remaining.coerceIn(800L, MissileRules.MAX_FLIGHT_MS))
-                    }
-                    val needsMovement = state.robertState == "retreat" ||
-                        state.robertState == "flank" ||
-                        state.robertState == "missileFlee" ||
-                        (
-                            state.robertState == "advance" &&
-                                abs(state.distance - robertTargetDistance(state)) > BAND_TOLERANCE_M
-                            )
-                    if (needsMovement) {
-                        planRobertStep(400L)
-                    }
-                }
+            Screen.BATTLE -> if (!manuallyPaused && battleClock.paused.value) {
+                battleClock.resume()
+                audioManager.resumeAllSounds()
             }
             else -> {}
         }
@@ -533,14 +539,38 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onAppPaused() {
         foreground = false
-        stopTimers()
-        audioManager.stopAllSounds()
+        if (_currentScreen.value == Screen.BATTLE) {
+            // Backgrounding uses the same frozen clock; a manually paused
+            // battle remains paused when the app returns to the foreground.
+            battleClock.pause()
+            audioManager.pauseAllSounds()
+        } else {
+            stopTimers()
+            audioManager.stopAllSounds()
+        }
         ttsManager.stop()
     }
 
     // ---------------------------------------------------------------------
     // Shop
     // ---------------------------------------------------------------------
+
+    /** Issue and persist principal and coins as one profile transaction. */
+    fun takeLoan(amount: Int) {
+        if (_currentScreen.value != Screen.SHOP) return
+        val result = Loans.issue(_stats.value, amount)
+        if (!result.success) {
+            msg(t(result.reasonKey ?: "loanInvalidAmount"))
+            return
+        }
+        if (!prefs.saveStats(result.stats)) {
+            msg(t("profileSaveFailed"))
+            return
+        }
+        _stats.value = result.stats
+        playSound("spend")
+        msg("${t("loanIssued")} $amount ${t("coins")}. ${t("loanRemaining")}: $amount.")
+    }
 
     private fun applyPurchase(result: ShopResult, nameKey: String, successKey: String) {
         if (!result.success) {
@@ -817,7 +847,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             matchDeadlineMs = 0L
             return
         }
-        matchDeadlineMs = System.currentTimeMillis() + limit
+        matchDeadlineMs = battleClock.nowMs() + limit
         _gameState.update {
             it.copy(battleLimitMs = limit, battleRemainingMs = limit)
         }
@@ -826,11 +856,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             var warnedOneMinute = false
             var warnedThirtySeconds = false
             while (true) {
-                delay(1_000L)
+                battleClock.awaitDelay(1_000L)
                 if (!foreground || _currentScreen.value != Screen.BATTLE) break
                 val current = _gameState.value
                 if (current.playerHp <= 0 || current.robertHp <= 0 || endingJob != null) break
-                val remaining = (matchDeadlineMs - System.currentTimeMillis()).coerceAtLeast(0L)
+                val remaining = (matchDeadlineMs - battleClock.nowMs()).coerceAtLeast(0L)
                 _gameState.update { it.copy(battleRemainingMs = remaining) }
                 if (remaining <= 0L) {
                     matchDeadlineMs = 0L
@@ -874,16 +904,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         menuProtectUntilMs = 0L
         playerBurstStartedAtMs = 0L
         lastPlayerShotAtMs = 0L
-        playerShotIntervalMs = RobertRules.DEFAULT_PLAYER_INTERVAL_MS
         lastHitSpeechAtMs = 0L
+        robertNextShotAtMs = 0L
         lastFireAt = 0L
+        nextPlayerShotAtMs = 0L
+        lastIncomingHitAtMs = -1L
+        recentIncomingHits = 0
+        lastIncomingDamage = 0
 
         val round = _stats.value.round.coerceIn(1, Progression.ROUNDS_PER_MATCH)
         val level = _stats.value.level.coerceIn(1, Progression.LEVELS_PER_ROUND)
         val profile = RobertRules.profile(
             round = round,
             level = level,
-            playerOwnsSniper = _inventory.value.ownsWeapon(Weapon.SNIPER),
+            playerOwnsPistol = _inventory.value.ownsWeapon(Weapon.PISTOL),
             playerGlueWalls = _inventory.value.glueWalls
         )
         val hp = Progression.hpFor(round, level)
@@ -910,12 +944,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             damaged = owned.map { false },
             distance = Combat.MAX_RANGE,
             // Both fighters start on the centre line at opposite edges of the
-            // 100 m zone, exactly one full range apart.
+            // 25 m square, exactly one full side apart.
             playerX = Arena.PLAYER_START_X,
             playerY = Arena.PLAYER_START_Y,
             robertX = Arena.ROBERT_START_X,
             robertY = Arena.ROBERT_START_Y,
             runSpeed = RunSpeed.fromId(_inventory.value.lastRunSpeedId).id,
+            // The player starts aiming into the arena, towards Robert.
+            playerFacing = Facing.FORWARD.id,
             coverActive = false,
             coverHits = 0,
             glueWallActive = false,
@@ -924,6 +960,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertCoverHits = 0,
             robertGlueWallActive = false,
             robertGlueWallProgress = 0,
+            // The enemy always carries his Gloo Wall Breaker charges: round
+            // one allows one use, round two and later two uses. He only ever
+            // spends one when the player raises a gloo wall.
+            robertGlueBreakers = RobertRules.glueWallBreakerLimitForRound(round),
+            robertBreakerArmed = false,
+            robertBreakerHits = 0,
             robertWeapons = profile.weapons.map { it.id },
             robertWeaponIndex = 0,
             robertAmmo = profile.weapons.map { it.magazine },
@@ -1048,9 +1090,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             audioManager.stopSound("enemyWalk")
             return
         }
+        val (lateral, _) = enemyAudioOffsets()
         audioManager.updateEnemyWalk3dAudio(
             distance = distance,
-            lateralOffset = _gameState.value.robertLateral,
+            lateralOffset = lateral,
             speedMps = speedMps,
             fleeing = fleeing
         )
@@ -1058,6 +1101,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Stores the live touch pressure of the running hold. */
     fun updateMovePressure(pressure: Float) {
+        if (battlePaused.value) return
         movePressure = pressure
     }
 
@@ -1066,18 +1110,69 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         RobertRules.enemyFastSpeedMps(_gameState.value.round)
 
     /**
-     * The Max Speed extension: while it is owned and enabled every running
-     * direction is 30 percent faster than the level chosen with the
-     * three-finger gesture. It is exactly 1.0 while it is missing, disabled
-     * or removed, so the three running levels stay untouched for everybody
-     * who does not own it.
+     * Robert's real 3D offsets from the player, in metres: the sideways
+     * (lateral) offset first, then the depth offset along the forward axis.
+     * Everything he does is mixed from these two numbers, so the stereo image
+     * of the square arena is always the truth.
      */
-    private fun maxSpeedFactor(): Float =
-        if (_inventory.value.extensionEnabled(Extension.MAX_SPEED)) {
-            Extension.MAX_SPEED_GAIN
+    private fun enemyAudioOffsets(): Pair<Float, Float> {
+        val state = _gameState.value
+        return Pair(state.robertX - state.playerX, state.robertY - state.playerY)
+    }
+
+    /**
+     * Plays any enemy sound at his real position inside the square arena:
+     * on the right ear when he really stands on the right, on the left ear
+     * when he stands on the left, quieter as he moves away and louder as he
+     * closes in.
+     */
+    private fun playEnemySound(key: String, volume: Float = 1.0f, rate: Float = 1.0f) {
+        val (lateral, depth) = enemyAudioOffsets()
+        playSound(
+            key,
+            volume = volume,
+            posX = lateral,
+            posY = 0f,
+            posZ = -depth,
+            rate = rate
+        )
+    }
+
+    /** Plays one of Robert's weapon sounds at his real position. */
+    private fun playEnemyWeaponSound(key: String, volume: Float = 1.0f, rate: Float = 1.0f) {
+        val (lateral, depth) = enemyAudioOffsets()
+        audioManager.playPositionalWeaponSound(
+            key,
+            lateralOffset = lateral,
+            depthOffset = depth,
+            volume = volume,
+            rate = rate
+        )
+    }
+
+    /** True while Robert still has a Gloo Wall Breaker charge for a wall. */
+    private fun robertHasBreaker(state: GameState = _gameState.value): Boolean =
+        RobertRules.hasUsableGlueBreaker(state.glueWallActive, state.robertGlueBreakers)
+
+    /**
+     * The Max Speed extension.
+     *
+     * While it is owned and enabled the fast running level is pushed to the
+     * absolute maximum the game allows ([Extension.MAX_SPEED_FAST_GAIN]): the
+     * character really runs as fast as possible on the battlefield, and the
+     * footstep loop follows at the top of its playback range while the
+     * positional volume keeps tracking the real distance. Every other level
+     * keeps the smaller 30 percent gain. It is exactly 1.0 while the
+     * extension is missing, disabled or removed.
+     */
+    private fun maxSpeedFactor(level: RunSpeed = _gameState.value.runSpeedLevel): Float {
+        if (!_inventory.value.extensionEnabled(Extension.MAX_SPEED)) return 1.0f
+        return if (level == RunSpeed.FAST) {
+            Extension.MAX_SPEED_FAST_GAIN
         } else {
-            1.0f
+            Extension.MAX_SPEED_GAIN
         }
+    }
 
     /**
      * The three-finger running speed gesture: swiping right steps one level
@@ -1087,10 +1182,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * just like his footsteps do.
      */
     fun cycleRunSpeed(direction: Int) {
+        if (battlePaused.value) return
         if (_currentScreen.value != Screen.BATTLE) return
         markExplicitAction()
         val current = _gameState.value.runSpeedLevel
-        val next = if (direction >= 0) current.faster() else current.slower()
+        val next = if (direction >= 0) {
+            if (current == RunSpeed.FAST) RunSpeed.SLOW else current.faster()
+        } else {
+            if (current == RunSpeed.SLOW) RunSpeed.FAST else current.slower()
+        }
         playSound("click")
         if (next == current) {
             msg("${t("runSpeed")}: ${t(next.nameKey)}. ${t("runSpeedLimit")}")
@@ -1106,7 +1206,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val speedMps = next.speedMps(
                 RunPressure.speedFactor(movePressure),
                 enemyFastSpeedMps()
-            ) * maxSpeedFactor()
+            ) * maxSpeedFactor(next)
             audioManager.updatePlayerWalkAudio(speedMps, next.volumeGain())
         }
         val maxSpeedNote = if (_inventory.value.extensionEnabled(Extension.MAX_SPEED)) {
@@ -1118,7 +1218,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Continuous player movement inside the 100 m battle zone, in all four
+     * Continuous player movement inside the 25 m square battle zone, in all four
      * directions:
      *  - forward / backward: towards or away from Robert (top and bottom
      *    portions of the battle screen);
@@ -1130,9 +1230,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * sound follows the same level: faster and louder when running fast,
      * slower and quieter when running slow. Touching one of the four
      * boundaries stops the run, plays the wall sound and announces "Wall";
-     * nobody ever gets beyond the 100 m perimeter.
+     * nobody ever gets beyond the 25 m perimeter.
      */
     fun startPlayerMove(direction: MoveDirection) {
+        if (battlePaused.value) return
         if (_currentScreen.value != Screen.BATTLE) return
         playerMoveJob?.cancel()
         moveDirection = direction
@@ -1143,8 +1244,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 if (state.playerHp <= 0 || state.robertHp <= 0) break
 
                 val speed = state.runSpeedLevel
-                val factor = speed.factor(RunPressure.speedFactor(movePressure), enemyFastSpeedMps()) *
-                    maxSpeedFactor()
+                val selectedFactor = speed.factor(RunPressure.speedFactor(movePressure), enemyFastSpeedMps()) *
+                    maxSpeedFactor(speed)
+                // Retreat is still controlled by the player: holding the back
+                // zone becomes a sprint under recent, damaging heavy fire.
+                val threatened = lastIncomingHitAtMs >= 0 && RetreatRules.underHeavyFire(
+                    recentIncomingHits, lastIncomingDamage, battleClock.nowMs() - lastIncomingHitAtMs
+                )
+                val factor = if (direction == MoveDirection.BACKWARD && threatened) {
+                    max(selectedFactor, RunSpeed.fastFactor(enemyFastSpeedMps()))
+                } else selectedFactor
                 val speedMps = RunPressure.BASE_SPEED_MPS * factor
                 val tickMs = (PLAYER_MOVE_TICK_MS * (RunPressure.BASE_SPEED_MPS / speedMps))
                     .toLong()
@@ -1163,11 +1272,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 if (blocked) {
-                    // A boundary of the 100 m zone: no movement, wall sound.
+                    // A boundary of the 25 m square zone: no movement, wall sound.
                     audioManager.stopSound("playerWalk")
                     announceWall()
                     playerAtWall = true
-                    delay(tickMs)
+                    battleClock.awaitDelay(tickMs)
                     continue
                 }
                 playerAtWall = false
@@ -1178,7 +1287,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 if (stepJob == null || stepJob?.isActive != true) {
                     planRobertStep(80L)
                 }
-                delay(tickMs)
+                battleClock.awaitDelay(tickMs)
             }
         }
     }
@@ -1195,7 +1304,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * run is *newly* stopped, so a long hold stays quiet.
      */
     private fun announceWall() {
-        val now = System.currentTimeMillis()
+        val now = battleClock.nowMs()
         if (now - lastWallAnnounceAtMs < WALL_ANNOUNCE_COOLDOWN_MS) return
         lastWallAnnounceAtMs = now
         audioManager.stopSound("wall")
@@ -1217,7 +1326,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun planRobertStep(delayMs: Long) {
         stepJob?.cancel()
         stepJob = viewModelScope.launch {
-            delay(delayMs)
+            battleClock.awaitDelay(delayMs)
             robertStep()
         }
     }
@@ -1278,15 +1387,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             playerHp = state.playerHp,
             playerMaxHp = state.playerMaxHp,
             deceptionShotsLeft = state.robertDeceptionShots,
-            robertHasSniper = robertHasUsableSniper(state),
+            robertHasBreaker = robertHasBreaker(state),
             playerWeapon = state.activeWeapon
         )
-    }
-
-    /** True when Robert owns a sniper rifle he may use and that is not damaged. */
-    private fun robertHasUsableSniper(state: GameState): Boolean {
-        val allowed = RobertRules.allowedWeapons(robertProfile, state.glueWallActive, state.robertHp)
-        return RobertRules.hasUsableSniper(allowed, isRobertWeaponDamaged(state, Weapon.SNIPER))
     }
 
     /** The arena distance Robert is walking to for his current band. */
@@ -1318,11 +1421,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * greater number of hits.
      */
     private fun beginRobertSprint() {
-        // A sprint is a movement decision, so cut the enemy's long
-        // automatic-weapon tail immediately.
-        _gameState.value.robertWeapon?.fireSoundKey?.let(audioManager::stopSound)
-        audioManager.stopSound("mp40")
-        audioManager.stopSound("machineGun")
         _gameState.update {
             it.copy(
                 robertState = "retreat",
@@ -1335,14 +1433,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         robertSprintTicks = RobertRules.SPRINT_TICKS
         rollRobertFireRange(allowDeception = true)
-        planRobertStep(120L)
+        planRobertStep(FLEE_TICK_MS)
     }
 
     /** Result of one of Robert's movement steps. */
     private data class StepOutcome(val state: GameState, val blocked: Boolean)
 
     /**
-     * Robert's movement step. He really walks inside the 100 m zone with all
+     * Robert's movement step. He really walks inside the 25 m square zone with all
      * four directions available (towards the player, away from him and both
      * sideways), and every single step is simulated against the four
      * boundaries *before* it is taken ([GameState.moveRobertSafely]). The
@@ -1371,15 +1469,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // missile or a bomb escape: those runs continue until they resolve.
         val pressure = isPlayerWeaponLocked(state)
         val running = state.robertState
-        if (pressure && running != "advance" && running != "missileFlee" && running != "bombFlee") {
+        if (pressure && running == "flank") {
             _gameState.update {
                 it.copy(robertState = "advance", robertTurnBackTicks = 0)
             }
             robertSprintTicks = 0
         }
 
-        // While the player's glue wall is up and Robert has no sniper rifle to
-        // break it, he refuses to approach and keeps running away instead.
+        // While the player's glue wall is up and Robert has no Gloo Wall
+        // Breaker charge to break it, he refuses to approach and keeps
+        // running away instead.
         ensureGlueWallAvoidance()
 
         val round = state.round
@@ -1455,14 +1554,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 // A full sprint: [RobertRules.SPRINT_TICKS] of running at
                 // twice the player's top speed before he comes back around.
                 val metres = RobertRules.fleeStep(round)
-                val strafing = RobertRules.shouldStrafe(Random)
                 var blocked = false
                 _gameState.update { current ->
-                    val outcome = if (strafing) {
-                        strafeStep(current, metres, RobertRules.strafeDirection(Random))
-                    } else {
-                        runAwayStep(current, metres)
-                    }
+                    val outcome = runAwayStep(current, metres)
                     blocked = outcome.blocked
                     outcome.state
                 }
@@ -1496,7 +1590,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             "flank" -> {
                 val current = _gameState.value
                 val target = robertTargetDistance(current)
-                val speed = (4.5f + round * 0.35f) * speedMultiplier
+                val speed = (0.60f + round * 0.06f) * speedMultiplier
                 var blocked = false
                 _gameState.update { now ->
                     val side = now.robertFlankSide
@@ -1532,7 +1626,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     return
                 }
                 val prox = Combat.proximityOf(current.distance) / 100f
-                val speed = (2.0f + prox * 4.0f + round * 0.25f) *
+                val speed = (0.35f + prox * 0.90f + round * 0.04f) *
                     speedMultiplier *
                     if (pressure) PRESSURE_SPEED_FACTOR else 1f
                 val metres = min(abs(delta), speed)
@@ -1694,19 +1788,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Keeps the "avoid" state in sync with the glue wall: while the player's
-     * glue wall is up and Robert owns no usable sniper rifle to break it, he
-     * runs away and stays away. As soon as the wall drops (or he does own a
-     * working sniper) he approaches again and fires continuously.
+     * Keeps the "avoid" state in sync with the gloo wall: while the player's
+     * wall is up and Robert has no Gloo Wall Breaker charge left to destroy
+     * it, he runs away and stays away. As soon as the wall drops (or while he
+     * still owns a breaker charge) he approaches again and uses it.
      */
     private fun ensureGlueWallAvoidance() {
         val state = _gameState.value
         if (state.playerHp <= 0 || state.robertHp <= 0) return
         if (state.missileInFlight || state.bombInFlight) return
-        val allowed = RobertRules.allowedWeapons(robertProfile, state.glueWallActive, state.robertHp)
-        val sniperDamaged = isRobertWeaponDamaged(state, Weapon.SNIPER)
-        val hasSniper = RobertRules.hasUsableSniper(allowed, sniperDamaged)
-        val shouldAvoid = RobertRules.shouldAvoidGlueWall(state.glueWallActive, hasSniper)
+        val hasBreaker = robertHasBreaker(state)
+        val shouldAvoid = RobertRules.shouldAvoidGlueWall(state.glueWallActive, hasBreaker) && !state.robertHasActiveDefence
         val avoiding = state.robertState == "avoid"
         if (shouldAvoid && !avoiding && state.robertState != "turnBack") {
             _gameState.update {
@@ -1725,13 +1817,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun startRobertFireLoop(initialDelayMs: Long) {
         robertFireJob?.cancel()
         robertFireJob = viewModelScope.launch {
-            delay(initialDelayMs)
+            battleClock.awaitDelay(initialDelayMs)
             while (true) {
                 if (!foreground || _currentScreen.value != Screen.BATTLE) break
                 val state = _gameState.value
                 if (state.playerHp <= 0 || state.robertHp <= 0) break
                 robertAttack()
-                delay(robertFireInterval())
+                battleClock.awaitDelay(robertFireInterval())
             }
         }
     }
@@ -1742,52 +1834,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         return state.robertDamaged.getOrElse(index) { false }
     }
 
-    /**
-     * The delay before Robert's next shot.
-     *
-     *  - while the timer picker is open he holds his fire completely (a short
-     *    internal tick keeps the loop alive without shooting);
-     *  - while he is fleeing he keeps a tactical 1.5 s or 2 s beat;
-     *  - while an exchange is running - or while he is coverless against a
-     *    covered player - he answers at exactly the player's own cadence,
-     *    never slower than one second in the coverless case;
-     *  - in every other case he presses only when the player's weapon is
-     *    damaged or the player is extremely weak, and otherwise waits a
-     *    random 1.5 s to 2 s, a bit longer while he is running.
-     */
+    /** A held action may delay a shot, but cannot move its deadline earlier. */
     private fun robertFireInterval(): Long {
-        val state = _gameState.value
-        // The player is choosing a timer: Robert does not fire at all until
-        // the choice is locked in or the picker is dismissed.
-        if (state.timerSelectActive) return TIMER_SELECTION_HOLD_MS
-        val fleeing = state.robertFleeing ||
-            state.robertState == "missileFlee" ||
-            state.robertState == "bombFlee" ||
-            state.robertState == "avoid"
-        if (fleeing) return RobertRules.normalTacticalInterval(Random)
-        // The enemy answers with the player's own rhythm. Face to face with
-        // no cover, only a gloo wall, or only a cover, he fires exactly as
-        // fast as the player; coverless against a covered player he never
-        // fires slower than once a second and matches any faster cadence.
-        if (mirrorDuelActive(state)) {
-            return RobertRules.mirroredFireInterval(
-                playerIntervalMs = playerShotIntervalMs,
-                enemyHasCover = state.robertCoverActive,
-                playerHasCover = state.coverActive
-            )
-        }
-        val situation = RobertRules.assessSituation(
-            state.robertHp, state.robertMaxHp, state.playerHp, state.playerMaxHp,
-            isPlayerWeaponLocked(state)
-        )
-        return RobertRules.tacticalFireInterval(
-            enemyHasDefence = state.robertHasActiveDefence,
-            playerHasDefence = state.playerHasActiveDefence,
-            playerWeaponDamaged = isPlayerWeaponLocked(state),
-            playerHpFraction = playerHpFraction(state),
-            random = Random,
-            enemyHasAdvantage = situation != RobertRules.CombatSituation.DISADVANTAGE
-        )
+        if (_gameState.value.timerSelectActive) return TIMER_SELECTION_HOLD_MS
+        val remaining = robertNextShotAtMs - battleClock.nowMs()
+        return if (remaining > 0) remaining else FLEE_TICK_MS
+    }
+
+    private fun markRobertShot(continuous: Boolean = false) {
+        robertNextShotAtMs = battleClock.nowMs() +
+            RobertRules.shotInterval(continuous, Random)
     }
 
     /** The player's health as a fraction of their own maximum. */
@@ -1802,46 +1858,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun robertHealthDropping(state: GameState): Boolean =
         state.playerBurstShots > 0 && state.robertHp < state.playerBurstRobertHp
 
-    /**
-     * Learns the player's real firing rhythm.
-     *
-     * Every shot is timed and folded into a running average, so Robert can
-     * answer a 0.5 second burst, a 0.25 second burst or any other cadence
-     * with exactly the same rhythm instead of a fixed clock. Gaps below
-     * [RobertRules.MIN_PLAYER_INTERVAL_MS] (one tap producing two events) and
-     * above [RobertRules.MAX_MIRRORED_INTERVAL_MS] (two unrelated single
-     * shots) are ignored, so a stray event can never wreck the average.
-     */
-    private fun recordPlayerShotCadence(now: Long) {
-        val previous = lastPlayerShotAtMs
-        lastPlayerShotAtMs = now
-        if (previous <= 0L) return
-        val gap = now - previous
-        if (gap < RobertRules.MIN_PLAYER_INTERVAL_MS) return
-        if (gap > RobertRules.MAX_MIRRORED_INTERVAL_MS) {
-            // A long pause starts a fresh rhythm on the next shot.
-            playerShotIntervalMs = RobertRules.DEFAULT_PLAYER_INTERVAL_MS
-            return
-        }
-        playerShotIntervalMs = (playerShotIntervalMs + gap) / 2L
-    }
-
-    /** True while the player is still inside his current firing exchange. */
     private fun playerFiringNow(): Boolean =
         lastPlayerShotAtMs > 0L &&
-            System.currentTimeMillis() - lastPlayerShotAtMs <= RobertRules.MIRROR_EXCHANGE_WINDOW_MS
+            battleClock.nowMs() - lastPlayerShotAtMs <= RobertRules.MIRROR_EXCHANGE_WINDOW_MS
 
-    /**
-     * True while Robert must trade shots at the player's own cadence: while
-     * an exchange is running, or whenever he is coverless and the player is
-     * standing behind a cover (he then presses at one second or faster).
-     */
-    private fun mirrorDuelActive(state: GameState): Boolean =
-        RobertRules.mirrorsPlayerCadence(
-            playerFiringNow = playerFiringNow(),
-            enemyHasCover = state.robertCoverActive,
-            playerHasCover = state.coverActive
-        )
+    private fun shouldRobertRetreat(state: GameState, damageFromLastHit: Int = 0): Boolean = RobertRules.shouldRetreatFromFight(
+        playerHits = state.fightPlayerHits,
+        enemyHits = state.fightRobertHits,
+        consecutiveHits = state.robertConsecutiveHits,
+        playerBurstShots = state.playerBurstShots,
+        enemyHealthDropping = robertHealthDropping(state),
+        enemyWall = state.robertHasActiveDefence,
+        playerWall = state.glueWallActive,
+        playerHasBreaker = _inventory.value.ownsWeapon(Weapon.GLUE_BREAKER),
+        proximityPercent = Combat.proximityOf(state.distance),
+        damageFromLastHit = damageFromLastHit
+    )
 
     /**
      * Registers one player shot in the burst counter that Robert reads. Shots
@@ -1851,25 +1883,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * If the player starts firing back continuously, Robert retreats immediately.
      */
     private fun registerPlayerBurstShot() {
-        val now = System.currentTimeMillis()
-        recordPlayerShotCadence(now)
-        var shouldRetreat = false
+        val now = battleClock.nowMs()
+        val fresh = lastPlayerShotAtMs == 0L || now - lastPlayerShotAtMs > RobertRules.PLAYER_BURST_WINDOW_MS
+        lastPlayerShotAtMs = now
         _gameState.update { state ->
-            val fresh = now - playerBurstStartedAtMs > RobertRules.PLAYER_BURST_WINDOW_MS
             if (fresh) playerBurstStartedAtMs = now
-            val newShots = if (fresh) 1 else state.playerBurstShots + 1
-            shouldRetreat = RobertRules.shouldRetreatWhenPlayerFiresBack(newShots)
             state.copy(
-                playerBurstShots = newShots,
+                playerBurstShots = if (fresh) 1 else state.playerBurstShots + 1,
                 playerBurstRobertHp = if (fresh) state.robertHp else state.playerBurstRobertHp,
                 playerBurstPlayerHp = if (fresh) state.playerHp else state.playerBurstPlayerHp
             )
-        }
-        if (shouldRetreat) {
-            val state = _gameState.value
-            if (state.robertState == "advance" || state.robertState == "flank") {
-                beginRobertSprint()
-            }
         }
     }
 
@@ -1877,7 +1900,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun expirePlayerBurstIfStale() {
         val state = _gameState.value
         if (state.playerBurstShots <= 0) return
-        if (System.currentTimeMillis() - playerBurstStartedAtMs <= RobertRules.PLAYER_BURST_WINDOW_MS) return
+        if (battleClock.nowMs() - lastPlayerShotAtMs <= RobertRules.PLAYER_BURST_WINDOW_MS) return
         _gameState.update {
             it.copy(
                 playerBurstShots = 0,
@@ -1887,105 +1910,27 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Robert's attack. It picks one of the weapons it is allowed to use right
-     * now (switching often to confuse the player), reloads after six shots
-     * without paying coins, and obeys the exact same proximity zones.
-     *
-     * [retaliate] marks the answering shot of [robertOnHit]: it bypasses
-     * every "maybe run instead of shooting" roll, because the one thing an
-     * enemy under fire must never do is stand there and take it. Only a
-     * projectile in the air, the timer picker or a gloo wall he cannot break
-     * can still keep him quiet.
-     */
-    private fun robertAttack(retaliate: Boolean = false) {
+    /** Normal attacks and breaker shots share one cadence; movement takes priority. */
+    private fun robertAttack() {
         if (!foreground || _currentScreen.value != Screen.BATTLE) return
         var state = _gameState.value
-        if (state.robertHp <= 0 || state.playerHp <= 0) return
-        // While the player is choosing a timer bomb duration he neither fires
-        // nor lands a hit: only a locked-in choice or a dismissed picker lets
-        // him start again.
-        if (state.timerSelectActive) return
-        // While a missile is in the air all normal fire is suspended: the
-        // target is running for its life and the outcome is already sealed.
-        if (state.missileInFlight) return
-        // The same holds for a bomb counting down towards him: he only runs.
+        if (state.robertHp <= 0 || state.playerHp <= 0 || state.timerSelectActive || state.missileInFlight) return
         if (state.bombInFlight && state.bombFromPlayer) return
         expirePlayerBurstIfStale()
-        // An exchange is running (or he is coverless against a covered
-        // player): he trades shots at the player's own cadence instead of
-        // pausing after one or two bullets or running away.
-        val mirrorDuel = mirrorDuelActive(state)
-
-        val situation = RobertRules.assessSituation(
-            robertHp = state.robertHp,
-            robertMaxHp = state.robertMaxHp,
-            playerHp = state.playerHp,
-            playerMaxHp = state.playerMaxHp,
-            playerWeaponDamaged = isPlayerWeaponLocked(state)
-        )
-        // A retreat is movement, not a hidden opportunity to keep shooting -
-        // unless the shot is a retaliation: an enemy that is being shot at
-        // answers over his shoulder while he runs.
-        if (!retaliate &&
-            state.robertState in setOf("retreat", "avoid", "missileFlee", "bombFlee")
-        ) return
-        if (!retaliate && !mirrorDuel &&
-            state.robertState == "turnBack" &&
-            !RobertRules.isContinuousPlayerFire(state.playerBurstShots)
-        ) return
-        val playerWeakFraction = playerHpFraction(state)
-        val pressing = robertPressing(state)
-
-        // Hit-exchange rule: as soon as the player lands more hits than
-        // Robert in this exchange (two against one, for example) Robert runs
-        // away immediately. A protected Robert is the one exception - he
-        // keeps firing from behind his barrier.
-        if (!retaliate && !pressing && !mirrorDuel && (
-                RobertRules.shouldFleeFight(state.fightPlayerHits, state.fightRobertHits) ||
-                    (situation == RobertRules.CombatSituation.DISADVANTAGE &&
-                        (state.robertState == "advance" || state.robertState == "flank"))
-            )
-        ) {
+        state = _gameState.value
+        ensureGlueWallAvoidance()
+        state = _gameState.value
+        if (state.robertState in setOf("retreat", "avoid", "missileFlee", "bombFlee", "turnBack")) return
+        if (shouldRobertRetreat(state)) {
             beginRobertSprint()
             return
         }
-
-        // A finished burst is never extended: he fired one or two shots, so
-        // now he pauses and very often repositions instead of shooting again.
-        // Only the pressing situations are allowed to fire continuously.
-        if (!retaliate && !pressing && !mirrorDuel &&
-            RobertRules.burstFinished(state.robertSuccessiveShots, state.robertBurstLimit)
-        ) {
-            _gameState.update {
-                it.copy(
-                    robertSuccessiveShots = 0,
-                    robertBurstLimit = RobertRules.burstLimit(Random)
-                )
-            }
-            val fresh = _gameState.value
-            if (RobertRules.shouldRunAfterBurst(Random) &&
-                (fresh.robertState == "advance" || fresh.robertState == "flank")
-            ) {
-                beginRobertSprint()
-            }
+        if (battleClock.nowMs() < robertNextShotAtMs) return
+        if (state.glueWallActive && fireRobertBreakerAtWall()) {
+            markRobertShot(continuous = true)
             return
         }
-
-        // He runs as readily as he shoots: unless the player is pinned down,
-        // a good share of his decisions is a reposition instead of a shot.
-        if (!retaliate && !pressing && !mirrorDuel && RobertRules.shouldRepositionInsteadOfFiring(
-                situation = situation,
-                playerWeaponDamaged = isPlayerWeaponLocked(state),
-                playerHpFraction = playerWeakFraction,
-                random = Random
-            )
-        ) {
-            if (state.robertState == "advance" || state.robertState == "flank") {
-                beginRobertSprint()
-                return
-            }
-        }
+        val mirrorDuel = playerFiringNow()
 
         // Round four and later he may spend his one missile power, but only
         // as a desperation weapon while he is clearly losing.
@@ -2045,25 +1990,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 state = _gameState.value
             }
         }
-        // Smart weapon selection based on health bands: 40-70%, 90-100%, 20-40%
-        // If enemy feels unsafe (low health or heavy damage streak) he retreats.
-        if (!retaliate && !mirrorDuel && RobertRules.shouldRetreatUnsafe(
-                state.robertHp,
-                state.robertMaxHp,
-                state.robertConsecutiveHits,
-                proximityNow
-            )
-        ) {
-            if (state.robertState == "advance" || state.robertState == "flank") {
-                beginRobertSprint()
-                return
-            }
-        }
-        // The player raised a gloo wall and Robert has no sniper rifle to
-        // break it: he does not trade shots, he runs away and stays away
+        // The player raised a gloo wall and Robert has no Gloo Wall Breaker
+        // charge left: he does not trade shots, he runs away and stays away
         // until the wall drops.
-        val robertHasSniperNow = RobertRules.hasUsableSniper(allowed, isRobertWeaponDamaged(state, Weapon.SNIPER))
-        if (state.glueWallActive && !robertHasSniperNow) {
+        if (state.glueWallActive && !state.robertHasActiveDefence) {
             if (state.robertState != "avoid") {
                 _gameState.update { it.copy(robertState = "avoid") }
                 planRobertStep(140L)
@@ -2077,12 +2007,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             robertMaxHp = state.robertMaxHp,
             proximityPercent = proximityNow,
             playerGlueWallActive = state.glueWallActive,
-            hasSniper = robertHasSniperNow
+            hasSniper = false
         )
         // Round 5 strategic logic: equal power — prioritize positioning over brute force
         val isStrategyRound = state.round == 5
         val chosen = when {
-            state.glueWallActive && pool.contains(Weapon.SNIPER) -> Weapon.SNIPER
             !isStrategyRound && state.activeWeapon.autoFire &&
                 pool.contains(Weapon.MP40) &&
                 Combat.zoneFor(proximityNow) != HitZone.MISS -> Weapon.MP40
@@ -2112,21 +2041,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             // Robert reloads silently: only the player ever hears the
             // mechanical gun-switch/reload recording.
             setLog(t("robertReloaded"))
-            return
+            state = _gameState.value
         }
 
         // A melee attack must not play its swing/switch sound before the
         // outcome is known: a miss uses only *-miss and a hit uses *-hit.
         // Firearm sounds are exclusive: his shot cuts whatever weapon sound
         // the player still has in the air, so the two never mix.
+        markRobertShot(continuous = chosen.autoFire || state.robertHasActiveDefence ||
+            RobertRules.shouldPressPlayer(state.activeWeaponDamaged, playerHpFraction(state)))
         if (!chosen.melee) {
-            audioManager.playWeaponSound(
+            playEnemyWeaponSound(
                 chosen.fireSoundKey,
                 volume = 0.9f,
                 // The recorded MP40 sample is a long burst; slightly faster
-                // playback gives a distinct, finite shot instead of a near-continuous rumble.
-                rate = if (chosen == Weapon.MP40) 1.8f else 1.0f,
-                posZ = -state.distance
+                // playback gives a distinct, finite shot instead of a
+                // near-continuous rumble.
+                rate = if (chosen == Weapon.MP40) 1.8f else 1.0f
             )
         }
         _gameState.update { s ->
@@ -2162,35 +2093,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         if (zone == HitZone.MISS) {
             if (chosen.melee) {
-                audioManager.playWeaponSound(chosen.missSoundKey, volume = 0.55f, posZ = -state.distance)
+                playEnemyWeaponSound(chosen.missSoundKey, volume = 0.55f)
             }
             _gameState.update { it.copy(consecutiveHeavyHits = 0) }
             setLog("${t("robertMissed")} ${t(chosen.nameKey)}.")
             return
         }
 
-        // The player's glue wall stops everything until three sniper hits break it.
-        if (state.glueWallActive) {
-            val breaks = Combat.canBreakGlueWall(chosen, proxPercent)
-            val progress = if (breaks) state.glueWallProgress + 1 else 0
-            _gameState.update { it.copy(glueWallProgress = progress) }
-            playSound("glueHit", volume = 0.9f)
-            if (progress >= Combat.GLUE_WALL_BREAK_HITS) {
-                _gameState.update {
-                    it.copy(glueWallActive = false, glueWallProgress = 0)
-                }
-                playSound("glueWallCrack", volume = 1.0f)
-                msg(t("glueWallDown"))
-            } else {
-                val progressText = if (breaks) {
-                    " ${t("glueWallBreaks")} $progress."
-                } else {
-                    ""
-                }
-                msg("${t("glueWallBlocked")}$progressText")
-            }
-            return
-        }
+        // The player's gloo wall stops everything: only the dedicated Gloo
+        // Wall Breaker hurts it (see fireRobertBreakerAtWall), and that is
+        // resolved before the enemy picks a weapon at all.
+        if (state.glueWallActive) return
 
         // The player's cover stops eleven hits and breaks on the twelfth.
         if (state.coverActive) {
@@ -2219,6 +2132,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val newPlayerHp = max(0, state.playerHp - dealt)
+        recordIncomingDamage(dealt)
 
         var streak = Combat.nextHeavyHitStreak(state.consecutiveHeavyHits, proxPercent)
         var brokeWeapon = false
@@ -2285,13 +2199,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         announceEnemyHit(text, mirrorDuel)
     }
 
+    private fun recordIncomingDamage(damage: Int) {
+        if (damage <= 0) return
+        val now = battleClock.nowMs()
+        recentIncomingHits = if (lastIncomingHitAtMs >= 0 &&
+            now - lastIncomingHitAtMs <= RetreatRules.PRESSURE_WINDOW_MS) recentIncomingHits + 1 else 1
+        lastIncomingHitAtMs = now
+        lastIncomingDamage = damage
+    }
+
     /**
      * Speaks the enemy hit report, keeping a fast exchange readable: the
      * sentence is always shown, but it is only read out loud at most once per
      * [FAST_EXCHANGE_SPEECH_MS] while the shots arrive faster than that.
      */
     private fun announceEnemyHit(text: String, fastExchange: Boolean) {
-        val now = System.currentTimeMillis()
+        val now = battleClock.nowMs()
         if (fastExchange && now - lastHitSpeechAtMs < FAST_EXCHANGE_SPEECH_MS) {
             setLog(text)
             return
@@ -2338,79 +2261,75 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Schedules Robert's answering shot.
+     * The moment the player raises a gloo wall.
      *
-     * A single hit is always answered: the shot leaves after
-     * [RobertRules.RETALIATION_DELAY_MS], so being shot at is never free and
-     * the enemy is never a passive punching bag.
+     * He may deploy his own wall only below 150 HP. A player who owns a
+     * breaker and has a wall up makes a walled-in Robert avoid the fight.
+     * Otherwise Robert arms his own breaker when he has a charge.
      */
-    private fun scheduleRobertRetaliation() {
-        // The first hit of an exchange is always answered; further hits inside
-        // the cooldown window do not stack extra answering shots on top of it.
-        val now = System.currentTimeMillis()
-        if (now - robertRetaliationAtMs < RobertRules.RETALIATION_COOLDOWN_MS) return
-        robertRetaliationAtMs = now
-        counterJob?.cancel()
-        counterJob = viewModelScope.launch {
-            delay(RobertRules.RETALIATION_DELAY_MS)
-            if (foreground &&
-                _currentScreen.value == Screen.BATTLE &&
-                _gameState.value.robertHp > 0 &&
-                _gameState.value.playerHp > 0
-            ) {
-                robertRetaliationAtMs = System.currentTimeMillis()
-                robertAttack(retaliate = true)
+    private fun onPlayerGlueWallRaised() {
+        val state = _gameState.value
+        if (RobertRules.shouldUseDefence(state.robertHp, state.robertDefenceArmed) &&
+            state.robertGlueWalls > 0 && !state.robertHasActiveDefence) {
+            deployRobertDefence(DefenceItem.GLUE_WALL)
+        }
+        val afterWall = _gameState.value
+        if (afterWall.robertGlueBreakers > 0) {
+            _gameState.update {
+                it.copy(
+                    robertBreakerArmed = true,
+                    robertBreakerHits = 0,
+                    robertState = if (it.robertState == "avoid") "advance" else it.robertState
+                )
             }
+            ensureRobertPositioned()
         }
     }
 
     /**
-     * Robert's reaction to a hit.
+     * Fires the enemy's Gloo Wall Breaker at the player's wall.
      *
-     * The rule is deliberately simple and human:
-     *  - the player hit him once  -> he fires straight back ([scheduleRobertRetaliation]);
-     *  - the player hit him twice, or is clearly out-firing him -> he sprints
-     *    far away at twice the player's running speed ([beginRobertSprint]);
-     *  - the player hid behind a gloo wall he cannot break -> he runs away and
-     *    stays away until the wall drops.
-     *
-     * [direct] is false for a shot that was stopped by one of his barriers:
-     * those do not count towards the hit streak, but he still answers them.
+     * Every shot that lands from the 90%-100% band cracks the wall, and the
+     * third consecutive one destroys it. The charge is spent only when a wall
+     * really comes down, and the number of charges is fixed per round: one in
+     * round one, two from round two. Returns true when the wall owned the
+     * enemy's action this tick, so no ordinary shot is fired.
      */
-    private fun robertOnHit(direct: Boolean = true) {
+    private fun fireRobertBreakerAtWall(): Boolean {
         val state = _gameState.value
-        if (state.robertHp <= 0 || state.playerHp <= 0) return
-        // While the player is choosing a timer bomb duration he holds his fire
-        // completely, and while a projectile is in the air he only runs.
-        if (state.timerSelectActive || state.missileInFlight) return
-        if (state.bombInFlight && state.bombFromPlayer) return
-        if (!direct) {
-            scheduleRobertRetaliation()
-            return
+        if (!state.glueWallActive) return false
+        if (state.robertGlueBreakers <= 0) return false
+        if (state.robertHp <= 0 || state.playerHp <= 0) return false
+        if (state.robertState == "missileFlee" || state.robertState == "bombFlee") return false
+
+        val proxPercent = Combat.proximityOf(state.distance)
+        playEnemyWeaponSound(Weapon.GLUE_BREAKER.fireSoundKey, volume = 0.95f)
+        val breaks = Combat.canBreakGlueWall(Weapon.GLUE_BREAKER, proxPercent)
+        val progress = if (breaks) state.robertBreakerHits + 1 else 0
+        _gameState.update {
+            it.copy(robertBreakerArmed = true, robertBreakerHits = progress)
         }
-        // A gloo wall he cannot break: he refuses the exchange entirely.
-        if (state.glueWallActive && !robertHasUsableSniper(state)) {
-            if (state.robertState != "avoid") {
-                _gameState.update { it.copy(robertState = "avoid") }
-                planRobertStep(140L)
+        if (progress >= Combat.GLUE_WALL_BREAK_HITS) {
+            _gameState.update {
+                it.copy(
+                    glueWallActive = false,
+                    glueWallProgress = 0,
+                    robertBreakerHits = 0,
+                    robertBreakerArmed = false,
+                    robertGlueBreakers = (it.robertGlueBreakers - 1).coerceAtLeast(0)
+                )
             }
-            return
+            playSound("glueWallCrack", volume = 1.0f)
+            msg("${t("glueWallDown")} ${t("enemyBreakerSpent")}")
+            ensureRobertPositioned()
+        } else if (breaks) {
+            playSound("glueHit", volume = 0.9f)
+            msg("${t("enemyBreakerCrack")} ${t("glueWallBreaks")} $progress.")
+        } else {
+            playSound("glueHit", volume = 0.6f)
+            msg(t("enemyBreakerTooFar"))
         }
-        // While he is trading shots at the player's own cadence he stands
-        // his ground: breaking contact here would silence the answer the
-        // player is hearing back.
-        if (!mirrorDuelActive(state) && RobertRules.shouldFleeFromPlayerFire(
-                hitsTakenInRow = state.robertConsecutiveHits,
-                playerHits = state.fightPlayerHits,
-                robertHits = state.fightRobertHits
-            )
-        ) {
-            beginRobertSprint()
-            return
-        }
-        if (RobertRules.shouldRetaliate(state.robertConsecutiveHits)) {
-            scheduleRobertRetaliation()
-        }
+        return true
     }
 
     /**
@@ -2421,6 +2340,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun deployRobertDefence(defence: DefenceItem): String {
         val current = _gameState.value
+        if (!RobertRules.shouldUseDefence(current.robertHp, current.robertDefenceArmed)) return ""
         return when (defence) {
             DefenceItem.MEDKIT -> {
                 if (current.robertMedkits <= 0) return ""
@@ -2432,12 +2352,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         robertConsecutiveHits = 0
                     )
                 }
-                playSound("medkit", posZ = -current.distance)
+                playEnemySound("medkit")
                 ensureRobertPositioned()
                 " ${t("robertMedkit")} ${t("enemyHealth")} ${_gameState.value.robertHp}."
             }
             DefenceItem.COVER -> {
-                if (current.robertCovers <= 0 || current.robertCoverActive) return ""
+                if (current.robertCovers <= 0 || current.robertHasActiveDefence) return ""
                 _gameState.update {
                     it.copy(
                         robertCoverActive = true,
@@ -2447,11 +2367,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         robertConsecutiveHits = 0
                     )
                 }
-                playSound("cover", posZ = -current.distance)
+                playEnemySound("cover")
                 " ${t("robertCoverUp")}"
             }
             DefenceItem.GLUE_WALL -> {
-                if (current.robertGlueWalls <= 0 || current.robertGlueWallActive) return ""
+                if (current.robertGlueWalls <= 0 || current.robertHasActiveDefence) return ""
                 _gameState.update {
                     it.copy(
                         robertGlueWallActive = true,
@@ -2461,7 +2381,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         robertConsecutiveHits = 0
                     )
                 }
-                playSound("glueSound", posZ = -current.distance)
+                playEnemySound("glueSound")
                 " ${t("robertGlueWall")}"
             }
             DefenceItem.ANTI_MISSILE, DefenceItem.ANTI_BOMB -> ""
@@ -2476,8 +2396,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         val defence = RobertRules.panicDefence(
             medikits = state.robertMedkits,
-            covers = state.robertCovers,
-            glueWalls = state.robertGlueWalls,
+            covers = if (state.robertHasActiveDefence) 0 else state.robertCovers,
+            glueWalls = if (state.robertHasActiveDefence) 0 else state.robertGlueWalls,
             antiBombs = state.robertAntiBombs,
             antiMissiles = state.robertAntiMissiles,
             robertHp = state.robertHp,
@@ -2493,98 +2413,30 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Robert's reaction after taking a hit: panic deploy, flee, heal, cover or glue wall. */
-    private fun robertAfterHit(): String {
+    /** React immediately to damage, without scheduling a shot outside the fire loop. */
+    private fun robertAfterHit(damageFromLastHit: Int = 0): String {
         val state = _gameState.value
         if (state.robertHp <= 0) return ""
-
-        val profile = robertProfile
-        val consecutive = state.robertConsecutiveHits
-
-        // The hit exchange is judged before anything else: when the player has
-        // landed more hits than Robert did (two against one, for example) he
-        // retreats very quickly, unless one of his own barriers is protecting
-        // him and the player has none.
-        val protectedPress = robertPressing(state) &&
-            state.robertHasActiveDefence &&
-            !state.playerHasActiveDefence
-        // An exchange Robert is answering at the player's exact cadence
-        // keeps him in the fight; only a genuine lull lets him reposition.
-        val answeringExchange = mirrorDuelActive(state)
-        if (!protectedPress && !answeringExchange &&
-            RobertRules.shouldFleeFight(state.fightPlayerHits, state.fightRobertHits)
-        ) {
-            beginRobertSprint()
-            return " ${t("robertFled")}"
-        }
-
-        // Panic deployment happens on the same frame as the hit, so a falling
-        // health bar really makes him spend a medkit or raise a barrier.
-        val panicSpoken = robertPanicDefence(state)?.let { deployRobertDefence(it) }
-        if (!panicSpoken.isNullOrBlank()) return panicSpoken
-
-        // He runs as fast as possible either after the round's hit streak, or
-        // immediately when a one-sided exchange turns against him.
-        val situation = RobertRules.assessSituation(
-            robertHp = state.robertHp,
-            robertMaxHp = state.robertMaxHp,
-            playerHp = state.playerHp,
-            playerMaxHp = state.playerMaxHp,
-            playerWeaponDamaged = isPlayerWeaponLocked(state)
-        )
-        val disadvantaged = situation == RobertRules.CombatSituation.DISADVANTAGE ||
-            state.robertHp < state.playerHp
-        val mustFlee = RobertRules.shouldFlee(consecutive, profile.fleeAfterHits) ||
-            RobertRules.shouldFleeFromExchange(
-                hitsTakenInRow = consecutive,
-                shotsFiredInExchange = state.robertExchangeShots,
-                proximityPercent = Combat.proximityOf(state.distance),
-                atDisadvantage = disadvantaged
-            )
-        // His own health dropping under continuous fire makes him run; the
-        // player's health dropping does the opposite, so Robert keeps firing.
-        val sustained = RobertRules.shouldRetreatFromSustainedFire(
-            playerBurstShots = state.playerBurstShots,
-            robertHealthDropping = robertHealthDropping(state),
-            playerHealthDropping = playerHealthDropping(state)
-        )
-        if (!answeringExchange &&
-            (state.robertState == "advance" || state.robertState == "flank") &&
-            (mustFlee || sustained)
-        ) {
-            beginRobertSprint()
-            return " ${t("robertFled")}"
-        }
-
-        // Re-arm the defence once Robert is healthy again for this round or
-        // after two hits. The health level depends on the round.
-        val threshold = RobertRules.defenceThresholdHp(state.round, state.robertMaxHp)
-        if (state.robertHp > threshold || consecutive >= 2) {
+        if (state.robertHp >= RobertRules.DEFENCE_THRESHOLD_HP || state.robertConsecutiveHits >= 2) {
             _gameState.update { it.copy(robertDefenceArmed = true) }
         }
-
-        val current = _gameState.value
-        if (!RobertRules.shouldUseDefence(
-                robertHp = current.robertHp,
-                defenceArmed = current.robertDefenceArmed,
-                thresholdHp = RobertRules.defenceThresholdHp(current.round, current.robertMaxHp)
-            )
-        ) {
-            return ""
+        // Decide from the damaging hit before panic defence resets hit counters
+        // or erects a wall. Continuous MP40 fire must never pin him in place.
+        val retreat = shouldRobertRetreat(state, damageFromLastHit)
+        val defence = robertPanicDefence(_gameState.value)?.let { deployRobertDefence(it) }.orEmpty()
+        val after = _gameState.value
+        var fledText = ""
+        if (retreat) {
+            if (after.robertState == "retreat") {
+                robertSprintTicks = RobertRules.SPRINT_TICKS
+                planRobertStep(FLEE_TICK_MS)
+            } else if (after.robertState in setOf("advance", "flank", "turnBack")) {
+                beginRobertSprint()
+                fledText = " ${t("robertFled")}"
+            }
         }
-
-        // He now picks situationally instead of always in the same order: a
-        // barrier when the player is close, a medkit when he is below half.
-        val defence = RobertRules.chooseDefence(
-            medikits = current.robertMedkits,
-            covers = current.robertCovers,
-            glueWalls = current.robertGlueWalls,
-            robertHp = current.robertHp,
-            robertMaxHp = current.robertMaxHp,
-            proximityPercent = Combat.proximityOf(current.distance)
-        ) ?: return ""
-
-        return deployRobertDefence(defence)
+        ensureGlueWallAvoidance()
+        return fledText + defence
     }
 
     // ---------------------------------------------------------------------
@@ -2613,7 +2465,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         prefs.saveInventory(updated)
 
         val fleeing = MissileRules.targetWillFlee(state.distance)
-        val intercept = MissileRules.willIntercept(
+        val intercept = RobertRules.shouldUseDefence(state.robertHp, true) && MissileRules.willIntercept(
             round = state.round,
             robertHp = state.robertHp,
             antiMissilesLeft = state.robertAntiMissiles,
@@ -2668,9 +2520,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun scheduleMissileImpact(delayMs: Long) {
         missileJob?.cancel()
-        missileImpactAtMs = System.currentTimeMillis() + delayMs
+        missileImpactAtMs = battleClock.nowMs() + delayMs
         missileJob = viewModelScope.launch {
-            delay(delayMs)
+            battleClock.awaitDelay(delayMs)
             onMissileImpact()
         }
     }
@@ -2678,10 +2530,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Missile impact. The looping flight sound stops at once and the
      * explosion plays, mixed with the hit sound of the destroyed fighter.
-     * The target drops directly to zero health through running, glue walls
-     * and covers alike — unless Robert's end-game anti-missile system
-     * (round four once, round five twice, his health below 100) destroys
-     * the player's missile in the air instead.
+     * The target takes up to 60 HP through running, glue walls and covers,
+     * unless an anti-missile interceptor destroys the projectile in the air.
      */
     private fun onMissileImpact() {
         val state = _gameState.value
@@ -2692,13 +2542,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         audioManager.stopSound("enemyWalk")
 
         if (state.missileFromPlayer) {
-            val intercepted = state.missileInterceptPlanned ||
+            val intercepted = RobertRules.shouldUseDefence(state.robertHp, true) && (state.missileInterceptPlanned ||
                 MissileRules.willIntercept(
                     round = state.round,
                     robertHp = state.robertHp,
                     antiMissilesLeft = state.robertAntiMissiles,
                     missileInFlight = state.missileInFlight
-                )
+                ))
             if (intercepted) {
                 playSound("explosion")
                 _gameState.update {
@@ -2716,47 +2566,54 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 planRobertStep(500L)
                 return
             }
+            val damage = min(state.robertHp, DamageTable.damage(Weapon.MISSILE, 100f, state.robertMaxHp))
+            val remaining = (state.robertHp - damage).coerceAtLeast(0)
             audioManager.playMixed(listOf("explosion", "enemyHit"))
             _gameState.update {
                 it.copy(
-                    robertHp = 0,
+                    robertHp = remaining,
                     missileInFlight = false,
                     missileFromPlayer = false,
                     missileInterceptPlanned = false,
-                    robertCoverActive = false,
-                    robertGlueWallActive = false,
-                    playerHits = it.playerHits + 1
+                    robertState = "advance",
+                    robertCoverActive = if (remaining == 0) false else it.robertCoverActive,
+                    robertGlueWallActive = if (remaining == 0) false else it.robertGlueWallActive,
+                    playerHits = it.playerHits + 1,
+                    fightPlayerHits = it.fightPlayerHits + 1
                 )
             }
-            msg(t("missileHitEnemy"))
-            // The enemy-hit sound and the explosion play together and the
-            // battle is only ended once the explosion has finished.
-            endGameAfterExplosion(won = true)
+            val reaction = if (remaining > 0) robertAfterHit(damage) else ""
+            msg("${t("missileHitEnemy")} ${t("hitFor")} $damage. ${t("enemyHealth")} $remaining.$reaction")
+            if (remaining == 0) endGameAfterExplosion(won = true)
+            else ensureRobertPositioned()
         } else {
-            // Enemy missile hit: play player-hit.mp3 alongside explosion-sound.mp3.
+            val damage = min(state.playerHp, DamageTable.damage(Weapon.MISSILE, 100f, state.playerMaxHp))
+            val remaining = (state.playerHp - damage).coerceAtLeast(0)
+            recordIncomingDamage(damage)
             audioManager.playMixed(listOf("explosion", "playerHit"))
             _gameState.update {
                 it.copy(
-                    playerHp = 0,
+                    playerHp = remaining,
                     missileInFlight = false,
                     missileFromPlayer = false,
                     missileInterceptPlanned = false,
-                    coverActive = false,
-                    glueWallActive = false,
-                    robertHits = it.robertHits + 1
+                    coverActive = if (remaining == 0) false else it.coverActive,
+                    glueWallActive = if (remaining == 0) false else it.glueWallActive,
+                    robertHits = it.robertHits + 1,
+                    fightRobertHits = it.fightRobertHits + 1,
+                    robertDamage = it.robertDamage + damage
                 )
             }
-            msg(t("missileHitPlayer"))
-            // A missile destroys completely: even the second chance does
-            // not apply to a direct missile hit. The result is spoken only
-            // after the explosion has run out.
-            endGameAfterExplosion(won = false)
+            val defence = if (remaining > 0) applyAutomaticDefences() else ""
+            msg("${t("missileHitPlayer")} ${t("hitFor")} $damage. ${t("yourHealth")} $remaining.$defence")
+            if (remaining == 0) endGameAfterExplosion(won = false)
+            else ensureRobertPositioned()
         }
     }
 
     /**
      * Swiping down with the missile selected buys one missile power for
-     * 600 coins, exactly as announced when no power is owned.
+     * 1000 coins, exactly as announced when no power is owned.
      */
     private fun buyMissilePowerInBattle() {
         if (_gameState.value.missileInFlight) {
@@ -2820,6 +2677,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Walks the timer picker one duration left (-1) or right (+1). */
     fun cycleTimerSelection(direction: Int) {
+        if (battlePaused.value) return
         val state = _gameState.value
         if (!state.timerSelectActive) return
         markExplicitAction()
@@ -2832,6 +2690,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /** A tap in the centre locks the highlighted duration and throws the bomb. */
     fun confirmTimerSelection() {
+        if (battlePaused.value) return
         val state = _gameState.value
         if (!state.timerSelectActive) return
         markExplicitAction()
@@ -2878,8 +2737,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Throws the selected bomb — now tracking the enemy like a missile.
-     * Requires one Bomb Power (1500 coins) per throw, similar to Missile Power.
-     * The bomb tracks the enemy, falls onto them, and detonates — guaranteed kill
+     * Requires one Bomb Power (850 coins) for an atom or timer throw; grenades are free.
+     * The bomb tracks the enemy, falls onto them, and detonates — a capped hit
      * like a missile unless intercepted by anti-bomb explosive.
      */
     private fun launchPlayerBomb() {
@@ -2916,7 +2775,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val hasCharge = s.ammo.getOrElse(idx) { 0 } > 0 || (needsPower && _inventory.value.bombPowers > 0)
             if (!hasCharge) return@update s
             spent = true
-            val intercept = BombRules.willIntercept(
+            val intercept = RobertRules.shouldUseDefence(s.robertHp, true) && BombRules.willIntercept(
                 round = s.round,
                 antiBombsLeft = s.robertAntiBombs,
                 bombInFlight = true
@@ -2951,7 +2810,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val after = _gameState.value
         val flightMs = BombRules.flightMs(kind, after.timerSeconds)
         startBombAudio(kind, distance = after.distance, timer = kind == BombKind.TIMER)
-        bombBlastAtMs = System.currentTimeMillis() + flightMs
+        bombBlastAtMs = battleClock.nowMs() + flightMs
 
         var text = "${t("bombThrown")} ${t(kind.nameKey)}."
         if (kind == BombKind.TIMER) {
@@ -2969,7 +2828,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Robert throws one of his own bombs (round three: one per game, rounds
      * four and five: two). The destination is the player's position and the
-     * player must sprint out of the 50 metres or deploy the anti-bomb
+     * player must sprint out of the 12 metres or deploy the anti-bomb
      * explosive defence while the bomb sound is still running.
      */
     private fun launchEnemyBomb() {
@@ -3010,7 +2869,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         startBombAudio(kind, distance = state.distance, timer = false)
-        bombBlastAtMs = System.currentTimeMillis() + flightMs
+        bombBlastAtMs = battleClock.nowMs() + flightMs
         startBombTracking(fromPlayer = false)
         val bombWarning = "${t("bombRunAway")} ${BombRules.SAFE_DISTANCE.toInt()} ${t("meters")}. ${t("bombTrackingPlayer")}"
         msg("${t("robertBombThrown")} ${t(kind.nameKey)}. $bombWarning")
@@ -3034,7 +2893,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun scheduleBombBlast(delayMs: Long) {
         bombJob?.cancel()
         bombJob = viewModelScope.launch {
-            delay(delayMs)
+            battleClock.awaitDelay(delayMs)
             onBombBlast()
         }
     }
@@ -3044,7 +2903,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         bombTrackJob?.cancel()
         bombTrackJob = viewModelScope.launch {
             while (true) {
-                delay(BombRules.TRACKING_UPDATE_MS)
+                battleClock.awaitDelay(BombRules.TRACKING_UPDATE_MS)
                 if (!foreground || _currentScreen.value != Screen.BATTLE) break
                 val s = _gameState.value
                 if (!s.bombInFlight) break
@@ -3060,9 +2919,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * The blast. The countdown sound stops at once and the explosion plays
      * mixed with the hit sound of whoever it caught - and it plays in every
-     * outcome: when the bomb destroys its target, when the target escaped the
-     * 50 metres, and when an anti-bomb explosive destroyed the bomb in the
-     * air. A finished battle is only ended after the explosion has run out.
+     * outcome: a hit or an anti-bomb interception in the air. A finished battle is only ended after the explosion has run out.
      */
     private fun onBombBlast() {
         val state = _gameState.value
@@ -3086,8 +2943,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val throwerDistance =
             if (fromPlayer) state.playerDistanceFromBomb else state.robertDistanceFromBomb
         val intercepted = if (fromPlayer) {
-            state.bombInterceptPlanned ||
-                BombRules.willIntercept(state.round, state.robertAntiBombs, bombInFlight = true)
+            RobertRules.shouldUseDefence(state.robertHp, true) && (state.bombInterceptPlanned ||
+                BombRules.willIntercept(state.round, state.robertAntiBombs, bombInFlight = true))
         } else {
             state.bombInterceptedByPlayer
         }
@@ -3119,79 +2976,64 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Bombs now kill enemies at any cost, tracking like missiles — guaranteed unless intercepted
-        val killsTarget = if (intercepted) false else BombRules.trackingKillGuaranteed()
-        // The timer bomb is the one bomb that also destroys its own thrower
-        // when the thrower stayed inside the 50 metre safety distance.
-        val killsThrower = kind == BombKind.TIMER &&
-            BombRules.timerBombKillsThrower(throwerDistance)
-
-        // Explosion and the hit sound of the destroyed fighter play together.
-        audioManager.playMixed(
-            listOf(kind.blastSoundKey, if (fromPlayer) "enemyHit" else "playerHit")
-        )
+        // Tracking guarantees a hit, not a kill. A timer bomb can also
+        // damage its thrower inside the safety radius, with the same cap.
+        val targetDamage = DamageTable.damage(kind.weapon, 100f,
+            if (fromPlayer) state.robertMaxHp else state.playerMaxHp)
+        val throwerHit = kind == BombKind.TIMER && BombRules.timerBombKillsThrower(throwerDistance)
+        val playerDamage = min(state.playerHp, if (fromPlayer) {
+            if (throwerHit) DamageTable.damage(kind.weapon, 100f, state.playerMaxHp) else 0
+        } else targetDamage)
+        val robertDamage = min(state.robertHp, if (fromPlayer) targetDamage else {
+            if (throwerHit) DamageTable.damage(kind.weapon, 100f, state.robertMaxHp) else 0
+        })
+        val playerRemaining = (state.playerHp - playerDamage).coerceAtLeast(0)
+        val robertRemaining = (state.robertHp - robertDamage).coerceAtLeast(0)
+        recordIncomingDamage(playerDamage)
+        val hitSounds = mutableListOf(kind.blastSoundKey)
+        if (robertDamage > 0) hitSounds.add("enemyHit")
+        if (playerDamage > 0) hitSounds.add("playerHit")
+        audioManager.playMixed(hitSounds)
 
         _gameState.update {
             it.copy(
-                // The target of the bomb, and - for a timer bomb only - its
-                // own thrower when the thrower stayed inside the 50 metres.
-                robertHp = when {
-                    fromPlayer && killsTarget -> 0
-                    !fromPlayer && killsThrower -> 0
-                    else -> it.robertHp
-                },
-                playerHp = when {
-                    !fromPlayer && killsTarget -> 0
-                    fromPlayer && killsThrower -> 0
-                    else -> it.playerHp
-                },
-                playerHits = if (fromPlayer && killsTarget) it.playerHits + 1 else it.playerHits,
-                robertHits = if (!fromPlayer && killsTarget) it.robertHits + 1 else it.robertHits,
+                robertHp = robertRemaining,
+                playerHp = playerRemaining,
+                playerHits = if (fromPlayer && robertDamage > 0) it.playerHits + 1 else it.playerHits,
+                fightPlayerHits = if (fromPlayer && robertDamage > 0) it.fightPlayerHits + 1 else it.fightPlayerHits,
+                robertHits = if (!fromPlayer && playerDamage > 0) it.robertHits + 1 else it.robertHits,
+                fightRobertHits = if (!fromPlayer && playerDamage > 0) it.fightRobertHits + 1 else it.fightRobertHits,
+                robertDamage = it.robertDamage + if (!fromPlayer) playerDamage else 0,
                 bombInFlight = false,
                 bombFromPlayer = false,
                 bombKind = "",
                 bombInterceptPlanned = false,
                 bombInterceptedByPlayer = false,
-                coverActive = if (!fromPlayer && killsTarget) false else it.coverActive,
-                glueWallActive = if (!fromPlayer && killsTarget) false else it.glueWallActive,
-                robertCoverActive = if (fromPlayer && killsTarget) false else it.robertCoverActive,
-                robertGlueWallActive = if (fromPlayer && killsTarget) false else it.robertGlueWallActive,
+                coverActive = if (playerRemaining == 0) false else it.coverActive,
+                glueWallActive = if (playerRemaining == 0) false else it.glueWallActive,
+                robertCoverActive = if (robertRemaining == 0) false else it.robertCoverActive,
+                robertGlueWallActive = if (robertRemaining == 0) false else it.robertGlueWallActive,
                 robertState = "advance",
                 robertTurnBackTicks = 0
             )
         }
-
-        val text = buildString {
-            append(t("bombExploded"))
-            append(" ")
-            append(
-                when {
-                    fromPlayer && killsTarget -> t("bombHitEnemy")
-                    !fromPlayer && killsTarget -> t("bombHitPlayer")
-                    else -> t("bombEscaped") +
-                        " ${targetDistance.toInt()} ${t("meters")}."
-                }
-            )
-            if (killsThrower) {
-                append(" ")
-                append(if (fromPlayer) t("bombKilledYou") else t("bombKilledRobert"))
-            }
-        }
+        val reaction = if (fromPlayer && robertRemaining > 0) robertAfterHit(robertDamage) else ""
+        val defence = if (playerRemaining > 0 && playerDamage > 0) applyAutomaticDefences() else ""
+        val text = "${t("bombExploded")} " +
+            (if (fromPlayer) t("bombHitEnemy") else t("bombHitPlayer")) +
+            " ${t("hitFor")} $targetDamage. ${t("enemyHealth")} $robertRemaining. " +
+            "${t("yourHealth")} $playerRemaining." +
+            (if (throwerHit) " ${if (fromPlayer) t("bombKilledYou") else t("bombKilledRobert")}" else "") +
+            reaction + defence
         msg(text)
 
-        val after = _gameState.value
-        val playerDead = after.playerHp <= 0
-        val robertDead = after.robertHp <= 0
         when {
-            // Both destroyed by a timer bomb: the thrower loses.
-            playerDead && robertDead -> endGameAfterExplosion(won = !fromPlayer)
-            robertDead -> endGameAfterExplosion(won = true)
-            playerDead -> endGameAfterExplosion(won = false)
+            playerRemaining == 0 && robertRemaining == 0 -> endGameAfterExplosion(won = !fromPlayer)
+            robertRemaining == 0 -> endGameAfterExplosion(won = true)
+            playerRemaining == 0 -> endGameAfterExplosion(won = false)
             else -> {
-                // The bomb exploded harmlessly: the battle simply goes on.
                 rollRobertFireRange(allowDeception = false)
                 ensureRobertPositioned()
-                planRobertStep(500L)
             }
         }
     }
@@ -3205,7 +3047,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private fun endGameAfterExplosion(won: Boolean) {
         if (endingJob != null) return
         endingJob = viewModelScope.launch {
-            delay(SoundDurations.EXPLOSION_MS)
+            battleClock.awaitDelay(SoundDurations.EXPLOSION_MS)
             endingJob = null
             if (foreground && _currentScreen.value == Screen.BATTLE) endGame(won)
         }
@@ -3218,12 +3060,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // Player firing
     // ---------------------------------------------------------------------
 
-    fun fire() {
+    fun fire(fromAutomatic: Boolean = false) {
+        if (battlePaused.value) return
         if (_currentScreen.value != Screen.BATTLE) return
         markExplicitAction()
 
-        val now = System.currentTimeMillis()
-        if (now - lastFireAt < 220L) return
+        val now = battleClock.nowMs()
         lastFireAt = now
 
         var state = _gameState.value
@@ -3311,9 +3153,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // A held automatic burst already has its sound on loop, so the single
         // shot sound is only played for taps and for every other weapon.
         if (!weapon.melee && !(weapon.autoFire && state.autoFireActive)) {
-            // Exclusive weapon channel: this shot cuts any weapon sound that is
-            // still playing (the enemy's, or an earlier one of ours), so two
-            // gunshots never mix or leak.
+            // Every shot is independent and mixes with all other effects.
             audioManager.playWeaponSound(weapon.fireSoundKey, volume = 1.0f)
         }
 
@@ -3333,12 +3173,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Robert's glue wall: only three continuous sniper hits break it.
+        // Robert's gloo wall: only three consecutive Gloo Wall Breaker shots
+        // from the 90%-100% band destroy it. Every other weapon bounces off.
         if (state.robertGlueWallActive) {
             val breaks = Combat.canBreakGlueWall(weapon, proxPercent)
             val progress = if (breaks) state.robertGlueWallProgress + 1 else 0
             _gameState.update { it.copy(robertGlueWallProgress = progress) }
-            playSound("glueHit", volume = 0.9f)
+            playEnemySound("glueHit", volume = 0.9f)
             if (progress >= Combat.GLUE_WALL_BREAK_HITS) {
                 _gameState.update {
                     it.copy(robertGlueWallActive = false, robertGlueWallProgress = 0)
@@ -3347,10 +3188,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 msg(t("robertGlueDown"))
             } else if (breaks) {
                 msg("${t("robertGlueCrack")} ${t("glueWallBreaks")} $progress.")
+            } else if (weapon != Weapon.GLUE_BREAKER) {
+                msg(t("robertGlueNeedsBreaker"))
             } else {
                 msg(t("robertGlueBlocked"))
             }
-            robertOnHit(direct = false)
             return
         }
 
@@ -3366,7 +3208,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 playSound("coverHit", volume = 0.8f)
                 msg("${t("coverHitsLeft")} ${Combat.COVER_MAX_HITS - hits}.")
             }
-            robertOnHit(direct = false)
             return
         }
 
@@ -3398,7 +3239,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         playSound(weapon.hitSoundKey, volume = if (zone == HitZone.HEAVY) 1f else 0.7f)
-        playSound("enemyHit", volume = if (zone == HitZone.HEAVY) 1f else 0.7f, posZ = -state.distance)
+        playEnemySound("enemyHit", volume = if (zone == HitZone.HEAVY) 1f else 0.7f)
 
         var text = "${
             when {
@@ -3419,7 +3260,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        text += robertAfterHit()
+        text += robertAfterHit(damage)
         text += autoReloadIfNeeded()?.let { " $it" } ?: ""
 
         // Ammo pickup chance (15%): merged into the hit report.
@@ -3440,7 +3281,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         msg(text)
-        robertOnHit()
     }
 
     /**
@@ -3457,6 +3297,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * the same millisecond and the next hold resumes it instantly.
      */
     fun startHoldFire() {
+        if (battlePaused.value) return
         if (_currentScreen.value != Screen.BATTLE) return
         val state = _gameState.value
         val weapon = state.activeWeapon
@@ -3479,12 +3320,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         )
         autoFireJob?.cancel()
         autoFireJob = viewModelScope.launch {
-            // The first bullet leaves at once, the rest follow the interval.
-            fireOneAutomaticShot()
             while (holdFireAllowed()) {
-                delay(weapon.burstIntervalMs)
-                if (!holdFireAllowed()) break
                 fireOneAutomaticShot()
+                battleClock.awaitDelay(weapon.burstIntervalMs)
             }
             stopHoldFire()
         }
@@ -3502,7 +3340,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // once. Both automatic loops are paused, whatever the current weapon
         // is, which also covers a weapon switch during a burst.
         audioManager.stopWeaponLoop(state.activeWeapon.fireSoundKey)
-        audioManager.stopMp40Loop()
         if (!state.autoFireActive) return
         _gameState.update { it.copy(autoFireActive = false) }
     }
@@ -3525,8 +3362,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             audioManager.refreshWeaponLoop(weapon.fireSoundKey, volume = 1.0f, posZ = -state.distance)
         }
-        lastFireAt = 0L
-        fire()
+        fire(fromAutomatic = true)
     }
 
     /** True while a held automatic burst may keep firing. */
@@ -3562,13 +3398,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun doReload() {
+        if (battlePaused.value) return
         if (_currentScreen.value != Screen.BATTLE) return
         markExplicitAction()
         val state = _gameState.value
         val weapon = state.activeWeapon
         if (weapon.missileLauncher) {
             // The missile has no magazine: swipe down buys one missile
-            // power for 600 coins, as announced when none is owned.
+            // power for 1000 coins, as announced when none is owned.
             buyMissilePowerInBattle()
             return
         }
@@ -3596,6 +3433,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * The chosen weapon is remembered for the next game.
      */
     fun switchWeapon(direction: Int) {
+        if (battlePaused.value) return
         if (_currentScreen.value != Screen.BATTLE) return
         markExplicitAction()
         // Switching weapons always ends a held burst first: the old gun's
@@ -3692,6 +3530,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * anti-bomb explosive, exit, recover.
      */
     fun cycleMenu(direction: Int) {
+        if (battlePaused.value) return
         if (_currentScreen.value != Screen.BATTLE) return
         markExplicitAction()
         val state = _gameState.value
@@ -3712,12 +3551,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * [DamageTable.MENU_PROTECTION_MS], so it can never become invulnerability.
      */
     private fun armMenuProtection() {
-        menuProtectUntilMs = System.currentTimeMillis() + DamageTable.MENU_PROTECTION_MS
+        menuProtectUntilMs = battleClock.nowMs() + DamageTable.MENU_PROTECTION_MS
     }
 
     /** True while the menu-protection window is still open. */
     private fun isMenuProtectionActive(): Boolean =
-        menuProtectUntilMs > 0L && System.currentTimeMillis() < menuProtectUntilMs
+        menuProtectUntilMs > 0L && battleClock.nowMs() < menuProtectUntilMs
 
     private fun speakBattleMenu() {
         val item = _gameState.value.menuItem
@@ -3746,6 +3585,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
      * owned asks for a confirming second tap and is then bought and used.
      */
     fun activateMenuItem() {
+        if (battlePaused.value) return
         if (_currentScreen.value != Screen.BATTLE) return
         markExplicitAction()
         val state = _gameState.value
@@ -3926,6 +3766,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 _gameState.update { it.copy(glueWallActive = true, glueWallProgress = 0) }
                 consumeDefence(item)
                 playSound("glueSound")
+                // Robert may deploy his wall only below the defence threshold.
+                onPlayerGlueWallRaised()
                 ensureRobertPositioned()
                 return if (automatic) t("autoGlueWallUsed") else t("glooWallDeployed")
             }
@@ -3981,6 +3823,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun speakStatus(own: Boolean) {
+        if (battlePaused.value) return
         if (_currentScreen.value != Screen.BATTLE) return
         markExplicitAction()
         val state = _gameState.value
@@ -4022,11 +3865,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 ""
             }
             // The three-finger running speed and the position inside the
-            // 100 metre zone belong to the own status too.
+            // 25 metre square belong to the own status too.
             val speedText = "${t("runSpeed")} ${t(state.runSpeedLevel.nameKey)}." +
                 if (inv.extensionEnabled(Extension.MAX_SPEED)) " ${t("maxSpeedOn")}" else ""
             val positionText = "${t("yourPosition")} ${state.playerX.roundToInt()}, " +
                 "${state.playerY.roundToInt()} ${t("meters")}."
+            // The direction the player is really aiming at: only an enemy
+            // inside this cone can be hit.
+            val facingText = "${t("yourFacing")} ${t(state.facing.nameKey)}."
             val bombText = if (state.bombInFlight) {
                 " ${t("bombDestination")} ${state.playerDistanceFromBomb.roundToInt()} ${t("meters")}."
             } else {
@@ -4034,7 +3880,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
             speak(
                 "${t("yourHealth")} ${state.playerHp}. ${t("ammo")} ${state.activeAmmo}. " +
-                    "$weaponState. $speedText $positionText $weapons. " +
+                    "$weaponState. $speedText $positionText $facingText $weapons. " +
                     "${t("medkits")} ${inv.medikits}. ${t("glooWall")} ${inv.glueWalls}. " +
                     "${t("cover")} ${inv.covers}. ${t("antiMissile")} ${inv.antiMissiles}. " +
                     "${t("antiBomb")} ${inv.antiBombs}.$antiBombText$bombText $timeText " +
@@ -4046,8 +3892,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 " ${t("cover")} ${Combat.COVER_MAX_HITS - state.robertCoverHits}."
             } else ""
             val glueText = if (state.robertGlueWallActive) {
-                " ${t("glooWall")} ${state.robertGlueWallProgress}."
+                " ${t("glooWall")} ${t("glueWallBreaks")} ${state.robertGlueWallProgress}."
             } else ""
+            // The enemy's own gloo wall and the breaker charges he has left
+            // are part of the enemy status: both are limited per match.
+            val enemyWallText = if (state.robertGlueBreakers > 0 && state.glueWallActive) {
+                " ${t("enemyBreakerArmed")} ${state.robertGlueBreakers}."
+            } else if (state.robertGlueBreakers <= 0) {
+                " ${t("enemyBreakerSpent")}"
+            } else {
+                ""
+            }
             val weaponText = state.robertWeapon?.let { t(it.nameKey) } ?: ""
             val positionText = "${t("enemyPosition")} ${state.robertX.roundToInt()}, " +
                 "${state.robertY.roundToInt()} ${t("meters")}."
@@ -4064,7 +3919,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             speak(
                 "${t("enemyHealth")} ${state.robertHp}. ${t("distance")} " +
                     "${state.distance.roundToInt()} ${t("meters")}. $positionText $weaponText." +
-                    "$coverText$glueText$bombText"
+                    "$coverText$glueText$enemyWallText$bombText"
             )
         }
     }
@@ -4104,15 +3959,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // A defeat costs the player 20 coins instead of earning any. A player
         // with no coins is the exception: nothing can be taken from them.
         val coinsLost = if (won) 0 else Progression.coinsLostOnDefeat(oldStats.coins)
-        val gain = if (won) {
+        val grossWinnings = if (won) {
             val earned = (150 + state.playerHits * 10 + max(0, state.playerHp) * 0.5f).roundToInt()
             max(earned, 20)
-        } else {
-            -coinsLost
-        }
+        } else 0
+        val repayment = Loans.repay(oldStats.loanBalance, grossWinnings)
+        val gain = if (won) repayment.credited else -coinsLost
 
         var updatedStats = oldStats.copy(
-            coins = (oldStats.coins + gain).coerceAtLeast(0),
+            coins = (oldStats.coins.toLong() + gain).coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(),
+            loanBalance = repayment.remaining,
             games = oldStats.games + 1,
             wins = if (won) oldStats.wins + 1 else oldStats.wins,
             kills = if (won) oldStats.kills + 1 else oldStats.kills
@@ -4144,22 +4000,35 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 reward += RewardBundle(mapOf(DefenceItem.ANTI_MISSILE to 1))
                 antiMissileReward = true
             }
-            if (!reward.isEmpty) {
-                var granted = Shop.grantBundle(_inventory.value, reward)
-                if (antiMissileReward) {
-                    granted = granted.copy(antiMissileRewardGranted = true)
-                }
-                _inventory.value = granted
-                prefs.saveInventory(granted)
-            }
         }
 
+        // Coins and the loan principal are saved in the same encrypted file.
+        // Do not show a completed result or grant rewards if that transaction
+        // failed; retry from the unchanged battle snapshot instead.
+        if (!prefs.saveStats(updatedStats)) {
+            setLog(t("profileSaveFailed"))
+            speak(t("profileSaveFailed"))
+            endingJob = viewModelScope.launch {
+                battleClock.awaitDelay(3_000L)
+                endingJob = null
+                if (_currentScreen.value == Screen.BATTLE) endGame(won, timeUp)
+            }
+            return
+        }
         _stats.value = updatedStats
-        prefs.saveStats(updatedStats)
+        if (!reward.isEmpty) {
+            var granted = Shop.grantBundle(_inventory.value, reward)
+            if (antiMissileReward) granted = granted.copy(antiMissileRewardGranted = true)
+            _inventory.value = granted
+            prefs.saveInventory(granted)
+        }
 
         _resultData.value = ResultData(
             won = won,
-            coins = gain,
+            coins = if (won) grossWinnings else gain,
+            loanDeducted = repayment.deducted,
+            loanRemaining = repayment.remaining,
+            loanWasActive = won && oldStats.loanBalance > 0,
             hits = state.playerHits,
             shots = state.playerShots,
             robertShots = state.robertShots,
@@ -4199,7 +4068,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             t("defeatMsg")
         }
         if (won) {
-            speech += " ${t("earned")} $gain."
+            speech += " ${t("earned")} $grossWinnings."
+            speech += " ${t("loanDeducted")} ${repayment.deducted}. " +
+                "${t("loanRemaining")} ${repayment.remaining}. ${t("loanNetWinnings")} $gain."
         } else if (coinsLost > 0) {
             speech += " ${t("coinsLostOnDefeat")} $coinsLost."
         } else {
@@ -4285,7 +4156,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     // ---------------------------------------------------------------------
 
     fun handleGesture(direction: String, fingers: Int) {
-        when (GestureRouter.route(_currentScreen.value, direction, fingers)) {
+        val action = GestureRouter.route(_currentScreen.value, direction, fingers)
+        if (_currentScreen.value == Screen.BATTLE && battlePaused.value && action != GameAction.TOGGLE_PAUSE && action != GameAction.EXIT_BATTLE) return
+        when (action) {
             GameAction.CONTINUE -> continueToJump()
             GameAction.BACK_TO_MENU -> navigateTo(Screen.MENU)
             GameAction.JUMP -> doJump()
@@ -4302,17 +4175,19 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             GameAction.STATUS_ENEMY -> speakStatus(own = false)
             GameAction.EXIT_BATTLE -> exitBattle()
             GameAction.PLAY_AGAIN -> playAgain()
-            // Three fingers: the running speed cycles slow, normal, fast.
+            // Right cycles speed faster; left cycles speed slower; down toggles pause; up exits.
             GameAction.SPEED_FASTER -> cycleRunSpeed(1)
             GameAction.SPEED_SLOWER -> cycleRunSpeed(-1)
+            GameAction.TOGGLE_PAUSE -> toggleBattlePause()
             GameAction.NONE -> {}
         }
     }
 
     fun handleCenterTap() {
+        if (battlePaused.value) return
         // Buttons and gestures set this marker; a tap immediately afterwards
         // belongs to that action and must not activate the menu as well.
-        if (System.currentTimeMillis() - lastExplicitActionAt < TAP_ACTION_DEBOUNCE_MS) return
+        if (battleClock.nowMs() - lastExplicitActionAt < TAP_ACTION_DEBOUNCE_MS) return
         // While the timer bomb picker is open a tap locks the highlighted
         // duration in and throws the bomb.
         if (_gameState.value.timerSelectActive) {
@@ -4331,22 +4206,29 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun markExplicitAction() {
-        lastExplicitActionAt = System.currentTimeMillis()
+        lastExplicitActionAt = battleClock.nowMs()
     }
 
     private fun stopTimers() {
+        if (battleClock.paused.value) {
+            // Do not restart paused effects when abandoning a battle.
+            audioManager.stopAllSounds()
+            battleClock.resume()
+            audioManager.resumeAllSounds()
+        }
+        manuallyPaused = false
         playerMoveJob?.cancel()
         playerMoveJob = null
         stepJob?.cancel()
         stepJob = null
-        counterJob?.cancel()
-        counterJob = null
         robertFireJob?.cancel()
         robertFireJob = null
         missileJob?.cancel()
         missileJob = null
         bombJob?.cancel()
         bombJob = null
+        bombTrackJob?.cancel()
+        bombTrackJob = null
         autoFireJob?.cancel()
         autoFireJob = null
         endingJob?.cancel()
@@ -4355,7 +4237,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         matchLimitJob = null
         matchDeadlineMs = 0L
         robertSprintTicks = 0
-        robertRetaliationAtMs = 0L
         playerAtWall = false
         // Stop a missile or a bomb still in the air (their countdown sounds
         // included), but never cut an explosion that has just impacted:

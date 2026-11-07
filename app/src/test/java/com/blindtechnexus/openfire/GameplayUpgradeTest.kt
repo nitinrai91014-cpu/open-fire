@@ -36,44 +36,27 @@ class GameplayUpgradeTest {
                 )
             }
         }
-        // The exact bug that was reported: 18 must never become 180.
-        assertEquals(18, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 1000))
-        assertEquals(18, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
-        assertEquals(18, RobertRules.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
+        // Damage must never be multiplied by the victim maximum health.
+        assertEquals(34, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 1000))
+        assertEquals(34, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
+        assertEquals(34, RobertRules.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
     }
 
     @Test
     fun normalFireIsBetweenOneAndAHalfAndTwoSeconds() {
         val random = Random(99)
-        repeat(300) {
-            val interval = RobertRules.tacticalFireInterval(
-                enemyHasDefence = false,
-                playerHasDefence = false,
-                playerWeaponDamaged = false,
-                playerHpFraction = 1f,
-                random = random
-            )
-            assertTrue("normal interval=$interval", interval in 1_500L..2_000L)
-        }
-        assertTrue(
-            "normal fire must use both tactical beats",
-            (1..100).map { RobertRules.normalTacticalInterval(random) }.toSet() == setOf(1_500L, 2_000L)
-        )
+        repeat(100) { assertEquals(1_500L, RobertRules.normalTacticalInterval(random)) }
+        assertEquals(1_500L, com.blindtechnexus.openfire.model.FireCadence.NORMAL_MS)
+        assertEquals(1_000L, com.blindtechnexus.openfire.model.FireCadence.CONTINUOUS_MS)
     }
 
     @Test
     fun protectedRobertFiresAtTheFastContinuousBeat() {
         val random = Random(5)
-        assertEquals(
-            1_500L,
-            RobertRules.tacticalFireInterval(
-                enemyHasDefence = true,
-                playerHasDefence = false,
-                playerWeaponDamaged = false,
-                playerHpFraction = 1f,
-                random = random
-            )
-        )
+        val intervals = (1..100).map {
+            RobertRules.tacticalFireInterval(true, false, false, 1f, random)
+        }
+        assertEquals(setOf(1_500L), intervals.toSet())
         // Damaged weapon and an extremely weak player also allow the press.
         assertTrue(
             RobertRules.shouldPressFromDefence(
@@ -99,7 +82,7 @@ class GameplayUpgradeTest {
             playerHpFraction = 1f,
             random = random
         )
-        assertTrue("matched barriers interval=$interval", interval in 1_500L..2_000L)
+        assertTrue("matched barriers interval=$interval", interval == 1_500L)
     }
 
     @Test
@@ -111,8 +94,8 @@ class GameplayUpgradeTest {
         assertFalse(RobertRules.shouldFleeFight(1, 2))
         assertFalse(RobertRules.shouldFleeFight(2, 2))
         assertFalse(RobertRules.shouldFleeFight(2, 3))
-        // A single hit is never enough to panic.
-        assertFalse(RobertRules.shouldFleeFight(1, 0))
+        // Even one unanswered hit gives the player the upper hand.
+        assertTrue(RobertRules.shouldFleeFight(1, 0))
     }
 
     @Test
@@ -168,19 +151,20 @@ class GameplayUpgradeTest {
     }
 
     @Test
-    fun weaponSoundsAreExclusiveAndNoStrayAliasesRemain() {
+    fun weaponSoundKeysAreRecognisedAndNoStrayAliasesRemain() {
         for (key in listOf(
             "assault", "shortGun", "pistol", "sniperRifle", "awm",
-            "mp40", "machineGun", "knifeSwish", "knifeMiss", "swordGlide", "swordMiss"
+            "mp40", "machineGun", "knifeSwish", "knifeMiss", "swordGlide", "swordMiss",
+            "glueWallBreaker"
         )) {
-            assertTrue("$key must be exclusive", key in AudioManager.WEAPON_SOUND_KEYS)
+            assertTrue("$key must be a recognised sound", key in AudioManager.WEAPON_SOUND_KEYS)
         }
         // Retired duplicate gunshot aliases can never fire a stray shot.
         for (retired in listOf("fire", "shotgun", "reload", "gloowall")) {
             assertFalse("$retired must not be a weapon key", retired in AudioManager.WEAPON_SOUND_KEYS)
         }
         for (footstep in listOf("walk", "playerWalk", "enemyWalk")) {
-            assertFalse("$footstep must not cut a weapon", footstep in AudioManager.WEAPON_SOUND_KEYS)
+            assertFalse("$footstep must not be a weapon key", footstep in AudioManager.WEAPON_SOUND_KEYS)
         }
     }
 }

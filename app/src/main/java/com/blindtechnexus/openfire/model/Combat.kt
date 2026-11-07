@@ -5,9 +5,9 @@ import kotlin.math.roundToInt
 /**
  * The four proximity zones that decide how much of a weapon's power lands.
  *
- * The arena is exactly [Combat.MAX_RANGE] metres across. Proximity is the
- * closeness of the target as a percentage of that range (100% = point blank,
- * 0% = the far edge of the arena).
+ * The square battlefield is exactly [Combat.MAX_RANGE] metres on every side.
+ * Proximity is the closeness of the target as a percentage of that range
+ * (100% = point blank, 0% = the far edge of the arena).
  */
 enum class HitZone {
     /** 0% - 40% proximity: the shot misses completely. */
@@ -61,6 +61,32 @@ enum class FireRange(
 }
 
 /**
+ * The four directions a fighter can face inside the square arena.
+ *
+ * Facing records the player's last movement direction for status reports.
+ * Shots are aimed automatically; facing does not restrict damage.
+ */
+enum class Facing(val id: String, val dx: Float, val dy: Float, val nameKey: String) {
+    FORWARD("forward", 0f, 1f, "facingForward"),
+    BACKWARD("backward", 0f, -1f, "facingBackward"),
+    LEFT("left", -1f, 0f, "facingLeft"),
+    RIGHT("right", 1f, 0f, "facingRight");
+
+    companion object {
+        fun fromId(id: String?): Facing =
+            entries.firstOrNull { it.id == id } ?: FORWARD
+
+        /** The facing that points at a target offset (dx, dy). */
+        fun toward(dx: Float, dy: Float): Facing =
+            if (kotlin.math.abs(dx) >= kotlin.math.abs(dy)) {
+                if (dx >= 0f) RIGHT else LEFT
+            } else {
+                if (dy >= 0f) FORWARD else BACKWARD
+            }
+    }
+}
+
+/**
  * Standard combat rules shared by the player and the Robert.
  *
  * Zone rules (proximity = how close the target is, in percent):
@@ -71,9 +97,8 @@ enum class FireRange(
  *
  * The exact health-point values per weapon and per zone live in one single
  * place, [DamageTable], and both fighters read their damage from it. Normal
- * weapons are flat HP values capped at 40 health points per hit - they never
- * scale with the victim's maximum health - while bombs and the missile are
- * lethal. The AWM is the one long-range exception: inside the 20% to 40% band
+ * weapons and explosives are flat HP values capped at 60 health points per
+ * hit; they never scale with the victim's maximum health. The AWM is the one long-range exception: inside the 20% to 40% band
  * it still lands a precision hit.
  *
  * There is no preset where a combatant loses after a fixed number of hits:
@@ -84,14 +109,21 @@ enum class FireRange(
  * repaired by the Recovery action, which costs [GUN_RECOVERY_COST] coins.
  */
 object Combat {
-    /** Full combat area width in metres (the arena is a 100 m range). */
-    const val MAX_RANGE = 100f
+    /**
+     * Side length of the square battlefield in metres.
+     *
+     * The arena is a balanced 25 m by 25 m square: every fighter lives inside
+     * that square, the fighting distance is the real two-dimensional distance
+     * between them, and the whole 0%..100% proximity scale is mapped onto
+     * those 25 metres (0 m = point blank, 25 m = the opposite corner).
+     */
+    const val MAX_RANGE = 25f
 
     /**
      * A movement that lands within this many metres of a wall counts as
      * "blocked by the wall": the fighter stops and has to turn back.
      */
-    const val WALL_TOLERANCE_M = 1.5f
+    const val WALL_TOLERANCE_M = 0.75f
 
     const val MISS_ZONE_MIN = 0f
     const val MISS_ZONE_MAX = 40f
@@ -117,14 +149,14 @@ object Combat {
     /** A cover blocks this many hits; the next (12th) hit breaks it. */
     const val COVER_MAX_HITS = 11
 
-    /** Sniper hits at 90%-100% proximity needed to break a glue wall. */
+    /** Gloo Wall Breaker hits at 90%-100% proximity needed to break a wall. */
     const val GLUE_WALL_BREAK_HITS = 3
 
-    /** Only a sniper shot at or above this proximity can damage a glue wall. */
+    /** Only a Gloo Wall Breaker shot at or above this proximity hurts a wall. */
     const val GLUE_WALL_BREAK_PROXIMITY = 90f
 
     /** Close-range shotgun power retained as a named combat constant. */
-    const val SHORT_GUN_CLOSE_POWER_PERCENT = 16
+    const val SHORT_GUN_CLOSE_POWER_PERCENT = 30
 
     /** Converts a distance (50 = far edge, 0 = point-blank) into 0..100% proximity. */
     fun proximityOf(distance: Float): Float =
@@ -176,7 +208,7 @@ object Combat {
     fun damageForDirectPower(powerPercent: Int, proximityPercent: Float, maxHp: Int): Int {
         if (maxHp <= 0 || powerPercent <= 0) return 0
         if (zoneFor(proximityPercent) == HitZone.MISS) return 0
-        return powerPercent.coerceAtMost(maxHp)
+        return powerPercent.coerceAtMost(maxHp).coerceAtMost(DamageTable.MAX_WEAPON_DAMAGE_HP)
     }
 
     /**
@@ -191,9 +223,13 @@ object Combat {
     fun menuProtectedDamage(victimMaxHp: Int): Int =
         DamageTable.menuProtectedDamage(victimMaxHp)
 
-    /** True when this shot can damage a glue wall (sniper rifle, point blank). */
+    /**
+     * True when this shot can damage a glue wall: only the dedicated Gloo
+     * Wall Breaker gun does, and only from the 90%-100% proximity band.
+     * Every other weapon - the sniper rifle included - bounces off a wall.
+     */
     fun canBreakGlueWall(weapon: Weapon, proximityPercent: Float): Boolean =
-        weapon == Weapon.SNIPER && proximityPercent >= GLUE_WALL_BREAK_PROXIMITY
+        weapon == Weapon.GLUE_BREAKER && proximityPercent >= GLUE_WALL_BREAK_PROXIMITY
 
     /** Health granted by the one-per-fight second chance. */
     fun secondChanceHealth(maxHp: Int): Int =

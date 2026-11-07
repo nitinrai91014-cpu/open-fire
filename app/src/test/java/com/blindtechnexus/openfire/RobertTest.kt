@@ -210,7 +210,7 @@ class RobertTest {
 
     @Test
     fun aGlueWallHeCannotBreakKeepsHimAway() {
-        // With a working sniper he closes in to break the wall.
+        // With a Gloo Wall Breaker charge he closes in to break the wall.
         assertEquals(
             FireRange.CLOSE,
             RobertRules.situationalRange(
@@ -222,7 +222,7 @@ class RobertTest {
                 playerHp = 900,
                 playerMaxHp = 1000,
                 deceptionShotsLeft = 0,
-                robertHasSniper = true
+                robertHasBreaker = true
             )
         )
         // Without one he refuses to approach and stays at the far edge.
@@ -237,61 +237,79 @@ class RobertTest {
                 playerHp = 900,
                 playerMaxHp = 1000,
                 deceptionShotsLeft = 0,
-                robertHasSniper = false
+                robertHasBreaker = false
             )
         )
-        assertTrue(RobertRules.shouldAvoidGlueWall(playerGlueWallActive = true, robertHasSniper = false))
-        assertFalse(RobertRules.shouldAvoidGlueWall(playerGlueWallActive = true, robertHasSniper = true))
-        assertFalse(RobertRules.shouldAvoidGlueWall(playerGlueWallActive = false, robertHasSniper = false))
+        assertTrue(RobertRules.shouldAvoidGlueWall(playerGlueWallActive = true, robertHasBreaker = false))
+        assertFalse(RobertRules.shouldAvoidGlueWall(playerGlueWallActive = true, robertHasBreaker = true))
+        assertFalse(RobertRules.shouldAvoidGlueWall(playerGlueWallActive = false, robertHasBreaker = false))
         assertEquals(
             FireRange.CLOSE,
-            RobertRules.fireRangeFor(FireRange.MID, false, true, robertHasSniper = true)
+            RobertRules.fireRangeFor(FireRange.MID, false, true, robertHasBreaker = true)
         )
         assertEquals(
             FireRange.FAR,
-            RobertRules.fireRangeFor(FireRange.MID, false, true, robertHasSniper = false)
+            RobertRules.fireRangeFor(FireRange.MID, false, true, robertHasBreaker = false)
         )
-        // A damaged sniper is no sniper at all.
-        assertTrue(
-            RobertRules.hasUsableSniper(listOf(Weapon.SNIPER, Weapon.MP40), sniperDamaged = false)
-        )
-        assertFalse(
-            RobertRules.hasUsableSniper(listOf(Weapon.SNIPER, Weapon.MP40), sniperDamaged = true)
-        )
-        assertFalse(RobertRules.hasUsableSniper(listOf(Weapon.MP40), sniperDamaged = false))
+        // His breaker is a per-match charge that reacts to a raised wall only.
+        assertTrue(RobertRules.hasUsableGlueBreaker(playerGlueWallActive = true, breakerCharges = 1))
+        assertTrue(RobertRules.hasUsableGlueBreaker(playerGlueWallActive = true, breakerCharges = 2))
+        assertFalse(RobertRules.hasUsableGlueBreaker(playerGlueWallActive = true, breakerCharges = 0))
+        assertFalse(RobertRules.hasUsableGlueBreaker(playerGlueWallActive = false, breakerCharges = 2))
     }
 
     @Test
-    fun defenceThresholdsFollowTheRound() {
-        // Rounds one and two: below 60 percent of health, never below 100.
-        assertEquals(120, RobertRules.defenceThresholdHp(1, 200))
-        assertEquals(360, RobertRules.defenceThresholdHp(1, 600))
-        assertEquals(420, RobertRules.defenceThresholdHp(2, 700))
-        assertEquals(100, RobertRules.defenceThresholdHp(1, 100))
-        assertEquals(100, RobertRules.defenceThresholdHp(2, 50))
-        // Round three: below 200 health.
-        assertEquals(200, RobertRules.defenceThresholdHp(3, 900))
-        assertEquals(200, RobertRules.defenceThresholdHp(3, 150))
-        // Rounds four and five: below 300 health.
-        assertEquals(300, RobertRules.defenceThresholdHp(4, 1300))
-        assertEquals(300, RobertRules.defenceThresholdHp(5, 2600))
-        assertEquals(300, RobertRules.defenceThresholdHp(5, 100))
+    fun theBreakerAndTheEnemyWallsAreLimitedPerMatch() {
+        // One use in round one, two from round two on.
+        assertEquals(1, RobertRules.glueWallBreakerLimitForRound(1))
+        assertEquals(2, RobertRules.glueWallBreakerLimitForRound(2))
+        assertEquals(2, RobertRules.glueWallBreakerLimitForRound(3))
+        assertEquals(2, RobertRules.glueWallBreakerLimitForRound(5))
+        // One wall in round one (only while the player carries one) and two
+        // from round two.
+        assertEquals(0, RobertRules.profile(1, 1).glueWalls)
+        assertEquals(1, RobertRules.profile(1, 1, playerGlueWalls = 1).glueWalls)
+        assertEquals(2, RobertRules.profile(2, 1).glueWalls)
+        // The sniper rifle is never mirrored any more, the pistol always is.
+        assertTrue(RobertRules.profile(1, 1, playerOwnsPistol = true).weapons.contains(Weapon.PISTOL))
+        assertFalse(RobertRules.profile(1, 1, playerOwnsPistol = false).weapons.contains(Weapon.PISTOL))
+        assertFalse(RobertRules.profile(1, 1, playerOwnsPistol = true).weapons.contains(Weapon.GLUE_BREAKER))
+    }
 
-        // The round aware threshold really drives the defence decision.
-        assertTrue(
-            RobertRules.shouldUseDefence(
-                robertHp = 250,
-                defenceArmed = true,
-                thresholdHp = RobertRules.defenceThresholdHp(4, 1300)
-            )
-        )
-        assertFalse(
-            RobertRules.shouldUseDefence(
-                robertHp = 350,
-                defenceArmed = true,
-                thresholdHp = RobertRules.defenceThresholdHp(4, 1300)
-            )
-        )
+    @Test
+    fun defencesStartStrictlyBelow150InEveryRound() {
+        for (round in 1..5) for (maxHp in listOf(200, 700, 2600)) {
+            assertEquals(150, RobertRules.defenceThresholdHp(round, maxHp))
+            assertFalse(RobertRules.shouldUseDefence(151, true))
+            assertFalse(RobertRules.shouldUseDefence(150, true))
+            assertTrue(RobertRules.shouldUseDefence(149, true))
+            assertFalse(RobertRules.shouldUseDefence(0, true))
+            assertFalse(RobertRules.shouldUseDefence(149, false))
+            assertFalse(RobertRules.shouldPanic(150, maxHp))
+            assertTrue(RobertRules.shouldPanic(149, maxHp))
+        }
+    }
+
+    @Test
+    fun retreatRequiresRealDamageAndProtectionTakesPriority() {
+        fun retreat(hits: Int = 0, landed: Int = 0, consecutive: Int = 0,
+                    shots: Int = 0, weakened: Boolean = false, protected: Boolean = false) =
+            RobertRules.shouldRetreatFromFight(hits, landed, consecutive, shots, weakened,
+                protected, false, false, 50f)
+        assertFalse(retreat(hits = 1))
+        assertTrue(retreat(hits = 2, landed = 1))
+        assertTrue(retreat(consecutive = 2))
+        assertTrue(retreat(shots = 3, weakened = true))
+        assertFalse(retreat(shots = 3))
+        assertFalse(retreat(hits = 2, landed = 1, protected = true))
+        assertFalse(retreat(shots = 4, weakened = true, protected = true))
+    }
+
+    @Test
+    fun actualShotCadenceDependsOnGlooWall() {
+        val random = Random(61)
+        assertEquals(setOf(1000L), (1..100).map { RobertRules.shotInterval(true, random) }.toSet())
+        assertEquals(setOf(1500L), (1..100).map { RobertRules.shotInterval(false, random) }.toSet())
     }
 
     @Test
@@ -398,7 +416,7 @@ class RobertTest {
             )
         )
 
-        // Continuous fire uses the tactical 1.5 / 2 second sequence.
+        // Continuous fire uses the one-second beat.
         val random = Random(3)
         val continuous = (1..60).map {
             RobertRules.fireIntervalMs(
@@ -408,8 +426,8 @@ class RobertTest {
                 continuous = true
             )
         }
-        assertTrue(continuous.all { it == 1_500L || it == 2_000L })
-        // While fleeing he never answers continuously and stays on the 2 s beat.
+        assertTrue(continuous.all { it == 1_000L })
+        // Continuous firing remains one second apart while fleeing.
         assertTrue(
             (1..30).map {
                 RobertRules.fireIntervalMs(
@@ -418,7 +436,7 @@ class RobertTest {
                     random = random,
                     continuous = true
                 )
-            }.all { it == 2_000L }
+            }.all { it == 1_000L }
         )
     }
 
@@ -435,7 +453,7 @@ class RobertTest {
         assertTrue("strafe chance", strafed in 120..290)
         assertEquals(setOf(1, -1), directions)
         assertEquals(0.20f, RobertRules.STRAFE_CHANCE, 0.0001f)
-        assertEquals(6f, RobertRules.STRAFE_STEP_M, 0.0001f)
+        assertEquals(1.2f, RobertRules.STRAFE_STEP_M, 0.0001f)
 
         // A wall makes him turn back for a few ticks instead of grinding.
         assertEquals(3, RobertRules.TURN_BACK_TICKS)
@@ -487,25 +505,34 @@ class RobertTest {
         assertFalse(RobertRules.shouldFleeFromPlayerFire(1, 3, 3))
         assertFalse(RobertRules.shouldFleeFromPlayerFire(1, 2, 2))
         // Nothing happens before the first hit, and a sprint always lasts
-        // long enough to really cross the zone.
+        // long enough to really cross the zone once his fastest speed mode is
+        // unlocked - which happens automatically from round three.
         assertFalse(RobertRules.shouldRetaliate(0))
         assertTrue(RobertRules.SPRINT_TICKS >= 3)
         assertTrue(
-            RobertRules.fleeStep(1) * RobertRules.SPRINT_TICKS >= Arena.SIZE
+            RobertRules.fleeStep(3) * RobertRules.SPRINT_TICKS >= Arena.SIZE
         )
+        assertTrue(RobertRules.enemyMaxSpeedUnlocked(3))
+        assertTrue(RobertRules.enemyMaxSpeedUnlocked(5))
+        assertFalse(RobertRules.enemyMaxSpeedUnlocked(2))
     }
 
     @Test
     fun bombRulesBalanceTheEscapeRace() {
-        assertEquals(50f, BombRules.BLAST_RADIUS, 0.0001f)
-        assertEquals(50f, BombRules.SAFE_DISTANCE, 0.0001f)
+        // Scaled to the 25 m square battlefield: the blast covers the open
+        // half of the arena, so both the target and the timer bomb thrower
+        // have a real escape race to run.
+        assertEquals(12f, BombRules.BLAST_RADIUS, 0.0001f)
+        assertEquals(12f, BombRules.SAFE_DISTANCE, 0.0001f)
+        assertTrue(BombRules.SAFE_DISTANCE < Arena.SIZE)
         assertEquals(listOf(15, 30, 40, 50, 60), BombRules.TIMER_SECONDS)
         assertEquals(30, BombRules.timerSecondsAt(BombRules.DEFAULT_TIMER_INDEX))
         assertEquals(60, BombRules.MAX_TIMER_SECONDS)
-        // A clean escape takes longer than an atom bomb flight and about as
-        // long as a grenade flight, which is what makes the race real.
+        // A clean escape really fits inside every bomb flight, which is what
+        // makes the race winnable instead of a guaranteed death.
         val escape = BombRules.escapeSeconds()
-        assertTrue(escape > BombRules.flightMs(BombKind.ATOM) / 1000f)
+        assertTrue(escape > 0f)
+        assertTrue(escape < BombRules.flightMs(BombKind.ATOM) / 1000f)
         assertTrue(escape < BombRules.flightMs(BombKind.GRENADE) / 1000f)
         // The timer bomb always lets its target out.
         assertTrue(escape < BombRules.flightMs(BombKind.TIMER, 15) / 1000f)
@@ -517,14 +544,16 @@ class RobertTest {
                 0.0001f
             )
         }
-        // Inside 50 metres the blast kills, outside it does not.
-        assertTrue(BombRules.blastKills(49.9f))
-        assertFalse(BombRules.blastKills(50f))
-        assertTrue(BombRules.timerBombKillsThrower(20f))
-        assertFalse(BombRules.timerBombKillsThrower(60f))
-        assertTrue(BombRules.mustEscape(30f))
-        assertFalse(BombRules.mustEscape(60f))
-        assertEquals(80f, BombRules.escapeDistance(30f), 0.0001f)
+        // Inside 12 metres the blast kills, outside it does not.
+        assertTrue(BombRules.blastKills(11.9f))
+        assertFalse(BombRules.blastKills(12f))
+        assertTrue(BombRules.timerBombKillsThrower(6f))
+        assertFalse(BombRules.timerBombKillsThrower(24f))
+        assertTrue(BombRules.mustEscape(6f))
+        assertFalse(BombRules.mustEscape(24f))
+        // The escape target never leaves the 25 m square.
+        assertEquals(22f, BombRules.escapeDistance(10f), 0.0001f)
+        assertEquals(Arena.SIZE, BombRules.escapeDistance(20f), 0.0001f)
     }
 
     @Test
@@ -606,17 +635,17 @@ class RobertTest {
     }
 
     @Test
-    fun situationalFireIntervalsUseUnpredictableOneAndTwoSecondBeats() {
+    fun situationalFireIntervalsRespectTheSharedCadence() {
         val random = Random(7)
         for (situation in RobertRules.CombatSituation.entries) {
             val samples = (1..60).map { RobertRules.fireIntervalMs(situation, false, random) }
-            assertTrue("$situation=$samples", samples.all { it == 1_500L || it == 2_000L })
-            assertEquals(setOf(1_500L, 2_000L), samples.toSet())
+            assertTrue("$situation=$samples", samples.all { it == 1_500L })
+            assertEquals(setOf(1_500L), samples.toSet())
         }
         val fleeing = (1..30).map {
             RobertRules.fireIntervalMs(RobertRules.CombatSituation.ADVANTAGE, true, random)
         }
-        assertTrue(fleeing.all { it == 2_000L })
+        assertEquals(setOf(1_500L), fleeing.toSet())
 
         val continuous = (1..60).map {
             RobertRules.tacticalFireInterval(
@@ -627,7 +656,7 @@ class RobertTest {
                 random = random
             )
         }
-        assertTrue(continuous.all { it == RobertRules.CONTINUOUS_FIRE_MS })
+        assertEquals(setOf(1_500L), continuous.toSet())
         val losing = (1..30).map {
             RobertRules.tacticalFireInterval(
                 enemyHasDefence = true,
@@ -638,7 +667,7 @@ class RobertTest {
                 enemyHasAdvantage = false
             )
         }
-        assertTrue(losing.all { it == 1_500L || it == 2_000L })
+        assertTrue(losing.all { it == 1_500L })
     }
 
     @Test
@@ -680,28 +709,29 @@ class RobertTest {
     }
 
     @Test
-    fun lockedSniperIsAlwaysUnlockedAgainstAGlueWall() {
+    fun theSniperRifleNeverBreaksAGlueWallAnyMore() {
+        // Round one: the rifle is locked, and a raised gloo wall no longer
+        // unlocks it - the Gloo Wall Breaker replaced it.
         val profile = RobertRules.profile(1, 1)
+        assertTrue(profile.sniperLocked)
         assertFalse(RobertRules.sniperAllowed(profile, false, 50))
-        // A gloo wall is always detected and answered with the sniper rifle.
-        assertTrue(RobertRules.sniperAllowed(profile, true, 150))
-        assertTrue(RobertRules.sniperAllowed(profile, true, 99))
-        assertTrue(RobertRules.sniperAllowed(profile, true, 1))
-
-        val withoutWall = RobertRules.allowedWeapons(profile, false, 200)
-        assertFalse(withoutWall.contains(Weapon.SNIPER))
-        val situationMet = RobertRules.allowedWeapons(profile, true, 90)
-        assertTrue(situationMet.contains(Weapon.SNIPER))
+        assertFalse(RobertRules.sniperAllowed(profile, true, 150))
+        assertFalse(RobertRules.sniperAllowed(profile, true, 99))
+        assertFalse(RobertRules.sniperAllowed(profile, true, 1))
+        assertFalse(RobertRules.allowedWeapons(profile, true, 90).contains(Weapon.SNIPER))
+        // From round three the rifle is simply one of his weapons.
+        assertTrue(RobertRules.allowedWeapons(RobertRules.profile(3, 1), false, 900).contains(Weapon.SNIPER))
     }
 
     @Test
-    fun roundOneMirrorsThePlayersSniperRifleAndGlooWall() {
-        // Without the player's sniper the rifle stays locked in round one.
-        assertTrue(RobertRules.profile(1, 1).sniperLocked)
-        // Buying one hands Robert an unlocked sniper rifle as well.
-        assertFalse(RobertRules.profile(1, 1, playerOwnsSniper = true).sniperLocked)
-        // The mirror only exists in round one; from round three it is free.
-        assertFalse(RobertRules.profile(3, 1, playerOwnsSniper = true).sniperLocked)
+    fun roundOneMirrorsThePistolAndTheGlooWall() {
+        // Without the player's pistol Robert has none either.
+        assertFalse(RobertRules.profile(1, 1).weapons.contains(Weapon.PISTOL))
+        // The moment the player owns one, Robert carries one too.
+        assertTrue(RobertRules.profile(1, 1, playerOwnsPistol = true).weapons.contains(Weapon.PISTOL))
+        // The rifle is never mirrored, in any round.
+        assertTrue(RobertRules.profile(1, 1, playerOwnsPistol = true).sniperLocked)
+        assertFalse(RobertRules.profile(3, 1).sniperLocked)
 
         // A player gloo wall gives him exactly one of his own in round one.
         assertEquals(0, RobertRules.profile(1, 1, playerGlueWalls = 0).glueWalls)
@@ -738,10 +768,10 @@ class RobertTest {
     }
 
     @Test
-    fun defencesStartBelowSixtyHealthAndAlternate() {
-        assertFalse(RobertRules.shouldUseDefence(60, true))
-        assertTrue(RobertRules.shouldUseDefence(59, true))
-        assertFalse(RobertRules.shouldUseDefence(59, false))
+    fun defencesStartBelow150HealthAndAlternate() {
+        assertFalse(RobertRules.shouldUseDefence(150, true))
+        assertTrue(RobertRules.shouldUseDefence(149, true))
+        assertFalse(RobertRules.shouldUseDefence(149, false))
         assertEquals(DefenceItem.MEDKIT, RobertRules.nextDefence(1, 1, 1))
         assertEquals(DefenceItem.COVER, RobertRules.nextDefence(0, 1, 1))
         assertEquals(DefenceItem.GLUE_WALL, RobertRules.nextDefence(0, 0, 1))
@@ -757,15 +787,21 @@ class RobertTest {
     }
 
     @Test
-    fun movementGetsFasterInEveryRound() {
+    fun movementGetsFasterUntilTheFastestModeUnlocksInRoundThree() {
         var previous = 0f
-        for (round in 1..5) {
+        for (round in 1..3) {
             val speed = RobertRules.movementSpeedMultiplier(round)
             assertTrue("Round $round must be faster", speed > previous)
             previous = speed
         }
         assertEquals(1.2f, RobertRules.movementSpeedMultiplier(1), 0.0001f)
+        assertEquals(1.4f, RobertRules.movementSpeedMultiplier(2), 0.0001f)
+        // From round three his fastest speed mode is unlocked automatically
+        // and stays at the maximum for the rest of the match.
+        assertEquals(2.0f, RobertRules.movementSpeedMultiplier(3), 0.0001f)
+        assertEquals(2.0f, RobertRules.movementSpeedMultiplier(4), 0.0001f)
         assertEquals(2.0f, RobertRules.movementSpeedMultiplier(5), 0.0001f)
+        assertEquals(2.0f, RobertRules.MAX_SPEED_MULTIPLIER, 0.0001f)
     }
 
     @Test

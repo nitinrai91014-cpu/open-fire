@@ -8,11 +8,8 @@ package com.blindtechnexus.openfire.model
  * can still be damaged by three consecutive point-blank hits, exactly like
  * firearms.
  *
- * All damage comes from the single [DamageTable], which is capped at 40
- * percent of the victim's maximum health for normal weapons and keeps the
- * full 100 percent capacity for the explosives (bombs and the missile). The
- * `powerPercent` / `closeRangePowerPercent` values below are the exact
- * 40%-70% and 90%-100% figures of that same table.
+ * Both fighters use [DamageTable]. Every hit, including explosives, is
+ * capped at 60 flat health points; proximity controls ordinary weapons.
  *
  * Three weapon families behave differently in battle:
  *  - classic firearms and melee weapons fire one shot per swipe up;
@@ -30,9 +27,9 @@ package com.blindtechnexus.openfire.model
 enum class Weapon(
     val id: String,
     val nameKey: String,
-    /** Damage in percent of maximum health inside the 40%-70% (light) band. */
+    /** Flat health-point damage inside the 40%-70% (light) band. */
     val powerPercent: Int,
-    /** Damage in percent of maximum health at 90%-100% proximity. */
+    /** Flat health-point damage at 90%-100% proximity. */
     val closeRangePowerPercent: Int,
     /** Rounds in a full magazine. Melee weapons, bombs and the missile use 0 or 1. */
     val magazine: Int,
@@ -79,8 +76,8 @@ enum class Weapon(
     SHORT_GUN(
         id = "shortGun",
         nameKey = "gunShotgun",
-        powerPercent = 6,
-        closeRangePowerPercent = 16,
+        powerPercent = 14,
+        closeRangePowerPercent = 30,
         magazine = 6,
         price = 0,
         ownedByDefault = true,
@@ -93,8 +90,8 @@ enum class Weapon(
     ASSAULT_GUN(
         id = "assaultGun",
         nameKey = "gunAssault",
-        powerPercent = 8,
-        closeRangePowerPercent = 18,
+        powerPercent = 16,
+        closeRangePowerPercent = 34,
         magazine = 6,
         price = 0,
         ownedByDefault = true,
@@ -107,10 +104,10 @@ enum class Weapon(
     PISTOL(
         id = "pistol",
         nameKey = "gunPistol",
-        powerPercent = 9,
-        closeRangePowerPercent = 20,
+        powerPercent = 18,
+        closeRangePowerPercent = 36,
         magazine = 6,
-        price = 550,
+        price = 450,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "pistol",
@@ -121,10 +118,10 @@ enum class Weapon(
     SNIPER(
         id = "sniper",
         nameKey = "gunSniper",
-        powerPercent = 10,
-        closeRangePowerPercent = 22,
+        powerPercent = 22,
+        closeRangePowerPercent = 48,
         magazine = 6,
-        price = 1000,
+        price = 850,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "sniperRifle",
@@ -132,13 +129,36 @@ enum class Weapon(
         hitSoundKey = "gunHit",
         missSoundKey = "click"
     ),
+    /**
+     * The Gloo Wall Breaker: the one and only gun that can destroy a gloo
+     * wall. Three consecutive shots from the 90%-100% band break any wall;
+     * every other weapon - the sniper rifle included - bounces off it.
+     *
+     * It is a light utility firearm (it is bought to break barriers, not to
+     * win a straight firefight), and it is available
+     * from round one.
+     */
+    GLUE_BREAKER(
+        id = "glueBreaker",
+        nameKey = "gunGlueBreaker",
+        powerPercent = 12,
+        closeRangePowerPercent = 28,
+        magazine = 6,
+        price = 750,
+        ownedByDefault = false,
+        melee = false,
+        fireSoundKey = "glueWallBreaker",
+        switchSoundKey = "gunReload",
+        hitSoundKey = "gunHit",
+        missSoundKey = "click"
+    ),
     KNIFE(
         id = "knife",
         nameKey = "gunKnife",
-        powerPercent = 8,
-        closeRangePowerPercent = 14,
+        powerPercent = 12,
+        closeRangePowerPercent = 26,
         magazine = 0,
-        price = 300,
+        price = 220,
         ownedByDefault = false,
         melee = true,
         fireSoundKey = "knifeSwish",
@@ -149,10 +169,10 @@ enum class Weapon(
     SWORD(
         id = "sword",
         nameKey = "gunSword",
-        powerPercent = 10,
-        closeRangePowerPercent = 22,
+        powerPercent = 20,
+        closeRangePowerPercent = 42,
         magazine = 0,
-        price = 750,
+        price = 650,
         ownedByDefault = false,
         melee = true,
         fireSoundKey = "swordGlide",
@@ -162,16 +182,16 @@ enum class Weapon(
     ),
     /**
      * The MP40 submachine gun: it fires continuously while the up-swipe is
-     * held, one bullet every half second for as long as the trigger is down,
+     * held, one bullet every second for as long as the trigger is down,
      * and its sound runs on one gapless loop for the whole burst.
      */
     MP40(
         id = "mp40",
         nameKey = "gunMp40",
-        powerPercent = 5,
-        closeRangePowerPercent = 11,
+        powerPercent = 14,
+        closeRangePowerPercent = 28,
         magazine = 20,
-        price = 900,
+        price = 800,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "mp40",
@@ -181,22 +201,22 @@ enum class Weapon(
         unlockRound = 2,
         issuedFreeFromRound = 2,
         autoFire = true,
-        burstIntervalMs = 500L,
+        burstIntervalMs = FireCadence.CONTINUOUS_MS,
         maxBurstMs = 4_000L
     ),
     /**
      * The AWM long-range rifle. Inside the 20% to 40% proximity band, where
      * every other weapon misses, it still lands a precision hit worth
      * [DamageTable.AWM_LONG_RANGE_DAMAGE_HP] health points, and its heavy
-     * close-range row is the full 40 point ceiling of the damage table.
+     * close-range row is the full 60 point ceiling of the damage table.
      */
     AWM(
         id = "awm",
         nameKey = "gunAwm",
-        powerPercent = 16,
-        closeRangePowerPercent = 40,
+        powerPercent = 28,
+        closeRangePowerPercent = 60,
         magazine = 5,
-        price = 1400,
+        price = 1200,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "awm",
@@ -208,17 +228,17 @@ enum class Weapon(
     ),
     /**
      * The machine gun: the same continuous-fire behaviour as the MP40 with a
-     * slightly stronger health reduction and a slightly faster bullet rate.
+     * stronger health reduction at the same one-second bullet rate.
      * It can be unlocked from round four, but it is never handed out as a
      * reward.
      */
     MACHINE_GUN(
         id = "machineGun",
         nameKey = "gunMachineGun",
-        powerPercent = 7,
-        closeRangePowerPercent = 15,
+        powerPercent = 18,
+        closeRangePowerPercent = 38,
         magazine = 30,
-        price = 1900,
+        price = 1700,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "machineGun",
@@ -227,16 +247,16 @@ enum class Weapon(
         missSoundKey = "click",
         unlockRound = 4,
         autoFire = true,
-        burstIntervalMs = 400L,
+        burstIntervalMs = FireCadence.CONTINUOUS_MS,
         maxBurstMs = 5_000L
     ),
     GRENADE(
         id = "grenade",
         nameKey = "gunGrenade",
-        powerPercent = DamageTable.EXPLOSIVE_PERCENT,
-        closeRangePowerPercent = DamageTable.EXPLOSIVE_PERCENT,
+        powerPercent = 40,
+        closeRangePowerPercent = 40,
         magazine = 1,
-        price = 700,
+        price = 600,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "grenade",
@@ -250,10 +270,10 @@ enum class Weapon(
     ATOM_BOMB(
         id = "atomBomb",
         nameKey = "gunAtomBomb",
-        powerPercent = DamageTable.EXPLOSIVE_PERCENT,
-        closeRangePowerPercent = DamageTable.EXPLOSIVE_PERCENT,
+        powerPercent = 60,
+        closeRangePowerPercent = 60,
         magazine = 1,
-        price = 2400,
+        price = 2000,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "atomBomb",
@@ -266,10 +286,10 @@ enum class Weapon(
     TIMER_BOMB(
         id = "timerBomb",
         nameKey = "gunTimerBomb",
-        powerPercent = DamageTable.EXPLOSIVE_PERCENT,
-        closeRangePowerPercent = DamageTable.EXPLOSIVE_PERCENT,
+        powerPercent = 50,
+        closeRangePowerPercent = 50,
         magazine = 1,
-        price = 2000,
+        price = 1700,
         ownedByDefault = false,
         melee = false,
         fireSoundKey = "timerLoop",
@@ -283,10 +303,9 @@ enum class Weapon(
     MISSILE(
         id = "missile",
         nameKey = "gunMissile",
-        // Display value only: a missile hit reduces the target directly to
-        // zero health, so the normal zone damage tables never apply to it.
-        powerPercent = 100,
-        closeRangePowerPercent = 100,
+        // A direct missile hit uses the same 60 HP ceiling as every weapon.
+        powerPercent = 60,
+        closeRangePowerPercent = 60,
         magazine = 0,
         price = MissileRules.MISSILE_PRICE,
         ownedByDefault = false,
@@ -326,7 +345,7 @@ enum class Weapon(
         fun defaults(): List<Weapon> = Weapon.entries.filter { it.ownedByDefault }
 
         /** The weapons that appear in the shop. */
-        fun forSale(): List<Weapon> = Weapon.entries.filter { it.price > 0 }
+        fun forSale(): List<Weapon> = Weapon.entries.filter { it.price > 0 }.sortedBy { it.price }
 
         /** Every automatic (hold to keep firing) weapon. */
         fun automatic(): List<Weapon> = Weapon.entries.filter { it.autoFire }
@@ -358,21 +377,21 @@ enum class DefenceItem(
         id = "medkit",
         nameKey = "medkit",
         pluralKey = "medkitsPlural",
-        price = 300,
+        price = 250,
         descriptionKey = "defenceMedkitInfo"
     ),
     GLUE_WALL(
         id = "glueWall",
         nameKey = "glooWall",
         pluralKey = "glueWallsPlural",
-        price = 650,
+        price = 550,
         descriptionKey = "defenceGlueWallInfo"
     ),
     COVER(
         id = "cover",
         nameKey = "cover",
         pluralKey = "coversPlural",
-        price = 450,
+        price = 400,
         descriptionKey = "defenceCoverInfo"
     ),
     ANTI_MISSILE(
@@ -421,10 +440,10 @@ enum class Extension(
     val price: Int,
     val descriptionKey: String
 ) {
-    AUTO_RELOAD("autoReload", "extAutoReload", 100, "extAutoReloadInfo"),
-    AUTO_MEDKIT("autoMedkit", "extAutoMedkit", 190, "extAutoMedkitInfo"),
-    AUTO_COVER("autoCover", "extAutoCover", 250, "extAutoCoverInfo"),
-    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 250, "extAutoGlueWallInfo"),
+    AUTO_RELOAD("autoReload", "extAutoReload", 75, "extAutoReloadInfo"),
+    AUTO_MEDKIT("autoMedkit", "extAutoMedkit", 140, "extAutoMedkitInfo"),
+    AUTO_COVER("autoCover", "extAutoCover", 180, "extAutoCoverInfo"),
+    AUTO_GLUE_WALL("autoGlueWall", "extAutoGlueWall", 200, "extAutoGlueWallInfo"),
 
     /**
      * Max Speed: the only extension that changes movement instead of items.
@@ -432,11 +451,21 @@ enum class Extension(
      * the running-speed level chosen with the three-finger gesture, in every
      * direction, for the whole battle.
      */
-    MAX_SPEED("maxSpeed", "extMaxSpeed", 300, "extMaxSpeedInfo");
+    MAX_SPEED("maxSpeed", "extMaxSpeed", 250, "extMaxSpeedInfo");
 
     companion object {
         /** Extra running speed of the Max Speed extension, as a multiplier. */
         const val MAX_SPEED_GAIN = 1.30f
+
+        /**
+         * The multiplier Max Speed gives the FAST running level.
+         *
+         * While the extension is bought and enabled the fast level is not
+         * merely 30 percent quicker: it is pushed to the absolute maximum the
+         * game allows, so the character really runs as fast as possible and
+         * the footstep sound follows at the top of its playback range.
+         */
+        const val MAX_SPEED_FAST_GAIN = 2.20f
 
         fun fromId(id: String?): Extension? = Extension.entries.firstOrNull { it.id == id }
     }
@@ -472,9 +501,8 @@ data class Inventory(
      */
     val missilePowers: Int = 0,
     /**
-     * Stacked bomb powers. Each Bomb Power costs 1500 coins and allows each bomb
-     * to be used once (1 Bomb Power = 1 use of any bomb type: grenade, atom bomb,
-     * or timer bomb). Like missile powers, they stack and are consumed per throw.
+     * Stacked bomb powers. One power is consumed per atom or timer bomb;
+     * grenades are free of power charges.
      */
     val bombPowers: Int = 0,
     /**
@@ -699,8 +727,8 @@ object Shop {
         inventory.withMissilePowers(inventory.missilePowers - 1)
 
     /**
-     * Buys exactly one bomb power. Each bomb power costs 1500 coins and allows
-     * any bomb (grenade, atom bomb, timer bomb) to be used once.
+     * Buys exactly one bomb power. Each bomb power costs 850 coins and allows
+     * one atom or timer bomb throw. Grenades do not consume a power.
      * Similar to missile power, it stacks.
      */
     fun buyBombPower(

@@ -142,6 +142,7 @@ object Progression {
         wins = stats.wins.coerceAtLeast(0),
         kills = stats.kills.coerceAtLeast(0),
         coins = stats.coins.coerceAtLeast(0),
+        loanBalance = stats.loanBalance.coerceIn(0, Loans.AMOUNTS.last()),
         round = stats.round.coerceIn(1, ROUNDS_PER_MATCH),
         level = stats.level.coerceIn(1, LEVELS_PER_ROUND),
         levelWins = ((stats.levelWins % WINS_PER_LEVEL) + WINS_PER_LEVEL) % WINS_PER_LEVEL,

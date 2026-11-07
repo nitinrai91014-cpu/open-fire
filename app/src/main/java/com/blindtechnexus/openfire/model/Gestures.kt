@@ -8,8 +8,8 @@ package com.blindtechnexus.openfire.model
  *                 right next weapon, left previous weapon.
  *  - Two fingers: up / down move the quick menu selection, right own status,
  *                 left enemy status.
- *  - Three fingers: right runs faster, left runs slower. The running speed
- *                 cycles slow -> normal -> fast and starts at normal.
+ *  - Three fingers: up exits the game; down toggles pause/resume;
+ *                 right / left change running speed.
  *  - A single tap activates the highlighted quick-menu item (and confirms a
  *                 timer-bomb duration while the timer picker is open).
  */
@@ -34,7 +34,9 @@ enum class GameAction {
     /** Three-finger swipe right: one running speed step faster. */
     SPEED_FASTER,
     /** Three-finger swipe left: one running speed step slower. */
-    SPEED_SLOWER
+    SPEED_SLOWER,
+    /** Three-finger swipe down: freeze or resume the current battle. */
+    TOGGLE_PAUSE
 }
 
 object GestureRouter {
@@ -62,8 +64,10 @@ object GestureRouter {
         }
         Screen.BATTLE -> when {
             fingers <= 0 -> GameAction.NONE
-            // Three (or more) fingers: the running-speed gesture.
+            // Three (or more) fingers: up exits, down pauses/resumes, right/left changes speed.
             fingers >= 3 -> when (direction) {
+                "up" -> GameAction.EXIT_BATTLE
+                "down" -> GameAction.TOGGLE_PAUSE
                 "right" -> GameAction.SPEED_FASTER
                 "left" -> GameAction.SPEED_SLOWER
                 else -> GameAction.NONE
@@ -97,7 +101,7 @@ object GestureRouter {
 }
 
 /**
- * The four running directions of the 100 m battle zone.
+ * The four running directions of the 25 m square battle zone.
  *
  * The top and bottom portions of the battle screen run towards and away from
  * the enemy; the center portion is split in half, so holding its left half
@@ -150,11 +154,15 @@ object RunPressure {
      * The player's walking speed in metres per second at the default press.
      * Every running speed level is expressed as a multiple of it, which is
      * what lets the fast level match Robert's real fleeing speed exactly.
+     *
+     * It is tuned for the 25 m square arena: a normal run crosses the whole
+     * battlefield in about ten seconds, a fast run in about three, and the
+     * Max Speed extension can push it under two.
      */
-    const val BASE_SPEED_MPS = 6.5f
+    const val BASE_SPEED_MPS = 2.6f
 
     /** One movement step per 100 ms tick at the default speed. */
-    const val BASE_STEP_METRES = 0.65f
+    const val BASE_STEP_METRES = 0.26f
 
     /**
      * Maps a raw touch pressure (0..1 on most devices, sometimes larger)
@@ -172,8 +180,8 @@ object RunPressure {
 /**
  * The three running speed levels toggled by a three-finger swipe.
  *
- * Swiping right with three fingers steps one level faster, swiping left steps
- * one level slower, and the battle always starts at [NORMAL]. The fast level
+ * Swiping right with three fingers cycles through the three levels. The
+ * last selected speed is remembered between battles. The fast level
  * matches Robert's own fast (fleeing) speed for the current round exactly, so
  * a sprinting player and a sprinting enemy cover ground at the same rate; the
  * slow level is half of the player's base walking speed.
@@ -255,8 +263,8 @@ enum class RunSpeed(val id: String, val nameKey: String) {
         const val MAX_FAST_FACTOR = 12.0f
 
         /** Running-sound volume per level. */
-        const val SLOW_VOLUME_GAIN = 0.60f
-        const val NORMAL_VOLUME_GAIN = 0.80f
+        const val SLOW_VOLUME_GAIN = 0.70f
+        const val NORMAL_VOLUME_GAIN = 0.85f
         const val FAST_VOLUME_GAIN = 1.00f
 
         fun fromId(id: String?): RunSpeed =

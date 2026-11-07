@@ -3,7 +3,11 @@ package com.blindtechnexus.openfire
 import com.blindtechnexus.openfire.model.Combat
 import com.blindtechnexus.openfire.model.DamageTable
 import com.blindtechnexus.openfire.model.DefenceItem
+import com.blindtechnexus.openfire.model.Facing
 import com.blindtechnexus.openfire.model.FireRange
+import com.blindtechnexus.openfire.model.GameState
+import com.blindtechnexus.openfire.model.movePlayerLateral
+import com.blindtechnexus.openfire.model.withPositions
 import com.blindtechnexus.openfire.model.HitZone
 import com.blindtechnexus.openfire.model.RobertRules
 import com.blindtechnexus.openfire.model.Weapon
@@ -54,15 +58,16 @@ class CombatTest {
     fun weaponPowersMatchTheSingleDamageTable() {
         // light band HP, strong band HP, heavy band HP
         val expected = mapOf(
-            Weapon.KNIFE to Triple(8, 12, 14),
-            Weapon.SHORT_GUN to Triple(6, 11, 16),
-            Weapon.ASSAULT_GUN to Triple(8, 13, 18),
-            Weapon.PISTOL to Triple(9, 14, 20),
-            Weapon.SNIPER to Triple(10, 16, 22),
-            Weapon.SWORD to Triple(10, 16, 22),
-            Weapon.AWM to Triple(16, 26, 40),
-            Weapon.MP40 to Triple(5, 8, 11),
-            Weapon.MACHINE_GUN to Triple(7, 11, 15)
+            Weapon.KNIFE to Triple(12, 18, 26),
+            Weapon.SHORT_GUN to Triple(14, 22, 30),
+            Weapon.ASSAULT_GUN to Triple(16, 26, 34),
+            Weapon.PISTOL to Triple(18, 28, 36),
+            Weapon.SNIPER to Triple(22, 36, 48),
+            Weapon.GLUE_BREAKER to Triple(12, 20, 28),
+            Weapon.SWORD to Triple(20, 30, 42),
+            Weapon.AWM to Triple(28, 44, 60),
+            Weapon.MP40 to Triple(14, 21, 28),
+            Weapon.MACHINE_GUN to Triple(18, 28, 38)
         )
         for ((weapon, row) in expected) {
             assertEquals("${weapon.id} light", row.first, weapon.powerPercent)
@@ -77,90 +82,48 @@ class CombatTest {
 
     @Test
     fun everyHitDeductsExactlyTheTableNumberOfHealthPoints() {
-        // Point blank: the flat HP value of the table, independent of max HP.
-        assertEquals(14, Combat.weaponDamage(Weapon.KNIFE, 100f, 1000))
-        assertEquals(16, Combat.weaponDamage(Weapon.SHORT_GUN, 100f, 1000))
-        assertEquals(18, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 1000))
-        assertEquals(20, Combat.weaponDamage(Weapon.PISTOL, 100f, 1000))
-        assertEquals(22, Combat.weaponDamage(Weapon.SNIPER, 100f, 1000))
-        assertEquals(22, Combat.weaponDamage(Weapon.SWORD, 100f, 1000))
-        assertEquals(40, Combat.weaponDamage(Weapon.AWM, 100f, 1000))
-        assertEquals(11, Combat.weaponDamage(Weapon.MP40, 100f, 1000))
-        assertEquals(15, Combat.weaponDamage(Weapon.MACHINE_GUN, 100f, 1000))
-
-        assertEquals(6, Combat.weaponDamage(Weapon.SHORT_GUN, 50f, 1000))
-        assertEquals(11, Combat.weaponDamage(Weapon.SHORT_GUN, 80f, 1000))
-        assertEquals(8, Combat.weaponDamage(Weapon.ASSAULT_GUN, 50f, 1000))
-        assertEquals(13, Combat.weaponDamage(Weapon.ASSAULT_GUN, 80f, 1000))
-        assertEquals(0, Combat.weaponDamage(Weapon.SWORD, 20f, 1000))
-
-        // The old bug: a "14" weapon used to deal 140 damage to a 1000 HP
-        // victim. Maximum health must not change a single hit any more.
-        for (maxHp in listOf(200, 1000, 2600)) {
-            assertEquals("assault at $maxHp", 18, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, maxHp))
-            assertEquals("AWM at $maxHp", 40, Combat.weaponDamage(Weapon.AWM, 100f, maxHp))
-        }
-
-        // The same table drives Robert: both fighters deduct exactly the
-        // documented health points, never 100 or 150 by surprise.
         for (weapon in RobertRules.ALL_STANDARD_WEAPONS) {
             for (proximity in listOf(10f, 50f, 80f, 95f)) {
-                assertEquals(
-                    "${weapon.id} at $proximity",
-                    Combat.weaponDamage(weapon, proximity, 1000),
-                    RobertRules.weaponDamage(weapon, proximity, 1000)
-                )
-                assertEquals(
-                    Combat.powerPercentOf(weapon, proximity),
-                    RobertRules.powerFor(weapon, proximity)
-                )
+                val expected = DamageTable.percentAt(weapon, proximity)
+                for (maxHp in listOf(200, 1000, 2600)) {
+                    assertEquals("${weapon.id} at $proximity and $maxHp", expected, Combat.weaponDamage(weapon, proximity, maxHp))
+                    assertEquals(expected, RobertRules.weaponDamage(weapon, proximity, maxHp))
+                }
             }
         }
+        assertEquals(34, Combat.weaponDamage(Weapon.ASSAULT_GUN, 100f, 2600))
+        assertEquals(12, Combat.weaponDamage(Weapon.KNIFE, 50f, 200))
     }
 
     @Test
-    fun theAwmReachesTheFullFortyPointCeiling() {
-        // The rebalance makes the AWM the only normal weapon that reaches the
-        // documented maximum 40 percent health reduction of one hit.
-        assertEquals(40, DamageTable.percentOf(Weapon.AWM, HitZone.HEAVY))
-        assertEquals(40, Combat.weaponDamage(Weapon.AWM, 100f, 200))
-        // Every other normal weapon stays strictly below it, in capacity order.
-        val heavy = listOf(
-            Weapon.MP40, Weapon.KNIFE, Weapon.MACHINE_GUN, Weapon.SHORT_GUN,
-            Weapon.ASSAULT_GUN, Weapon.PISTOL, Weapon.SNIPER, Weapon.SWORD
-        ).map { DamageTable.percentOf(it, HitZone.HEAVY) }
-        assertEquals(heavy.sorted(), heavy)
-        assertTrue(heavy.all { it < 40 })
+    fun theAwmReachesTheSixtyPointCeiling() {
+        assertEquals(60, DamageTable.percentOf(Weapon.AWM, HitZone.HEAVY))
+        assertEquals(60, Combat.weaponDamage(Weapon.AWM, 100f, 200))
+        assertTrue(RobertRules.ALL_STANDARD_WEAPONS.filter { it != Weapon.AWM }
+            .all { DamageTable.percentOf(it, HitZone.HEAVY) < 60 })
     }
 
     @Test
-    fun noNormalWeaponCanTakeMoreThanFortyHealthPointsInOneHit() {
-        assertEquals(40, DamageTable.MAX_WEAPON_DAMAGE_HP)
-        assertEquals(DamageTable.MAX_WEAPON_DAMAGE_HP, DamageTable.MAX_WEAPON_PERCENT)
+    fun noWeaponCanTakeMoreThanSixtyHealthPointsInOneHit() {
+        assertEquals(60, DamageTable.MAX_WEAPON_DAMAGE_HP)
         assertTrue(DamageTable.isValid())
-        for (weapon in RobertRules.ALL_STANDARD_WEAPONS) {
+        for (weapon in Weapon.entries) {
             for (zone in HitZone.entries) {
-                assertTrue(
-                    "${weapon.id} ${zone.name} must stay under the cap",
-                    DamageTable.percentOf(weapon, zone) <= DamageTable.MAX_WEAPON_DAMAGE_HP
-                )
+                assertTrue("${weapon.id} ${zone.name}", DamageTable.percentOf(weapon, zone) in 0..60)
             }
-            // Even a point blank hit of the strongest rifle stays capped.
-            assertTrue(Combat.weaponDamage(weapon, 100f, 2600) <= 40)
+            assertTrue(Combat.weaponDamage(weapon, 100f, 2600) <= 60)
         }
     }
 
     @Test
-    fun explosivesAreLethalButNormalWeaponsNeverAre() {
-        assertEquals(100, DamageTable.EXPLOSIVE_PERCENT)
-        for (weapon in listOf(
-            Weapon.MISSILE, Weapon.GRENADE, Weapon.ATOM_BOMB, Weapon.TIMER_BOMB
-        )) {
+    fun explosivesAreCappedLikeOtherHits() {
+        val damages = mapOf(Weapon.GRENADE to 40, Weapon.TIMER_BOMB to 50,
+            Weapon.ATOM_BOMB to 60, Weapon.MISSILE to 60)
+        for ((weapon, expected) in damages) {
             assertTrue(DamageTable.isExplosive(weapon))
-            for (zone in HitZone.entries) {
-                assertEquals(100, DamageTable.percentOf(weapon, zone))
-            }
-            assertEquals(1000, Combat.weaponDamage(weapon, 100f, 1000))
+            for (zone in HitZone.entries) assertEquals(expected, DamageTable.percentOf(weapon, zone))
+            assertEquals(expected, Combat.weaponDamage(weapon, 100f, 1000))
+            assertEquals(20, Combat.weaponDamage(weapon, 100f, 20))
         }
         assertFalse(DamageTable.isExplosive(Weapon.SNIPER))
     }
@@ -172,16 +135,9 @@ class CombatTest {
         assertFalse(DamageTable.isAwmLongRangeBand(Weapon.AWM, 19.9f))
         assertFalse(DamageTable.isAwmLongRangeBand(Weapon.AWM, 40f))
         assertFalse(DamageTable.isAwmLongRangeBand(Weapon.SNIPER, 30f))
-
-        // Exactly 14 health points in the long-range band, at any max health.
-        assertEquals(14, Combat.weaponDamage(Weapon.AWM, 30f, 1000))
-        assertEquals(14, DamageTable.awmLongRangeDamage(1000))
-        assertEquals(14, DamageTable.awmLongRangeDamage(200))
-        assertEquals(14, DamageTable.awmLongRangeDamage(50))
-        assertEquals(DamageTable.AWM_LONG_RANGE_DAMAGE_HP, DamageTable.awmLongRangeDamage(1000))
-        // Outside the band the normal table applies.
+        for (hp in listOf(200, 1000, 2600)) assertEquals(24, Combat.weaponDamage(Weapon.AWM, 30f, hp))
         assertEquals(0, Combat.weaponDamage(Weapon.AWM, 10f, 1000))
-        assertEquals(16, Combat.weaponDamage(Weapon.AWM, 50f, 1000))
+        assertEquals(28, Combat.weaponDamage(Weapon.AWM, 50f, 1000))
     }
 
     @Test
@@ -196,17 +152,18 @@ class CombatTest {
 
     @Test
     fun theWallToleranceDecidesWhenABoundaryBlocksAMove() {
-        assertEquals(1.5f, Combat.WALL_TOLERANCE_M, 0.0001f)
+        assertEquals(0.75f, Combat.WALL_TOLERANCE_M, 0.0001f)
     }
 
     @Test
-    fun proximityUsesTheOneHundredMeterArena() {
-        assertEquals(0f, Combat.proximityOf(100f), 0.001f)
-        assertEquals(40f, Combat.proximityOf(60f), 0.001f)
-        assertEquals(70f, Combat.proximityOf(30f), 0.001f)
-        assertEquals(90f, Combat.proximityOf(10f), 0.001f)
+    fun proximityUsesTheTwentyFiveMeterSquare() {
+        assertEquals(25f, Combat.MAX_RANGE, 0.001f)
+        assertEquals(0f, Combat.proximityOf(25f), 0.001f)
+        assertEquals(40f, Combat.proximityOf(15f), 0.001f)
+        assertEquals(70f, Combat.proximityOf(7.5f), 0.001f)
+        assertEquals(90f, Combat.proximityOf(2.5f), 0.001f)
         assertEquals(100f, Combat.proximityOf(0f), 0.001f)
-        assertEquals(0f, Combat.proximityOf(150f), 0.001f)
+        assertEquals(0f, Combat.proximityOf(40f), 0.001f)
         assertEquals(100f, Combat.proximityOf(-20f), 0.001f)
     }
 
@@ -215,10 +172,10 @@ class CombatTest {
         for (proximity in listOf(0f, 15f, 40f, 55f, 70f, 95f, 100f)) {
             assertEquals(proximity, Combat.proximityOf(Combat.distanceFor(proximity)), 0.001f)
         }
-        assertEquals(80f, FireRange.FAR.targetDistance, 0.001f)
-        assertEquals(45f, FireRange.MID.targetDistance, 0.001f)
-        assertEquals(20f, FireRange.STRONG.targetDistance, 0.001f)
-        assertEquals(5f, FireRange.CLOSE.targetDistance, 0.001f)
+        assertEquals(20f, FireRange.FAR.targetDistance, 0.001f)
+        assertEquals(11.25f, FireRange.MID.targetDistance, 0.001f)
+        assertEquals(5f, FireRange.STRONG.targetDistance, 0.001f)
+        assertEquals(1.25f, FireRange.CLOSE.targetDistance, 0.001f)
     }
 
     @Test
@@ -230,24 +187,56 @@ class CombatTest {
     }
 
     @Test
-    fun onlySniperShotsAtPointBlankCanBreakAGlueWall() {
-        assertTrue(Combat.canBreakGlueWall(Weapon.SNIPER, 90f))
-        assertTrue(Combat.canBreakGlueWall(Weapon.SNIPER, 100f))
-        assertFalse(Combat.canBreakGlueWall(Weapon.SNIPER, 89.9f))
+    fun onlyTheGlooWallBreakerAtPointBlankCanBreakAGlueWall() {
+        assertTrue(Combat.canBreakGlueWall(Weapon.GLUE_BREAKER, 90f))
+        assertTrue(Combat.canBreakGlueWall(Weapon.GLUE_BREAKER, 100f))
+        assertFalse(Combat.canBreakGlueWall(Weapon.GLUE_BREAKER, 89.9f))
         assertFalse(Combat.canBreakGlueWall(Weapon.ASSAULT_GUN, 100f))
+        // The sniper rifle no longer breaks walls: the breaker replaced it.
+        assertFalse(Combat.canBreakGlueWall(Weapon.SNIPER, 90f))
+        assertFalse(Combat.canBreakGlueWall(Weapon.SNIPER, 100f))
         assertEquals(3, Combat.GLUE_WALL_BREAK_HITS)
+        assertEquals(90f, Combat.GLUE_WALL_BREAK_PROXIMITY, 0.001f)
+    }
+
+    @Test
+    fun shotsUseDistanceNotMovementOrFacing() {
+        // Robert is to the right while the player has just moved left. The
+        // enemy can also move further right: neither direction blocks a hit.
+        val initial = GameState().withPositions(
+            playerX = 10f, playerY = 12f, robertX = 15f, robertY = 12f
+        )
+        val movingLeft = initial.movePlayerLateral(right = false, metres = 1f).state
+            .withPositions(robertX = 16f)
+        assertEquals(Facing.LEFT, movingLeft.facing)
+        assertEquals(7f, movingLeft.distance, 0.001f)
+
+        for (facing in Facing.entries) {
+            val state = movingLeft.copy(playerFacing = facing.id)
+            val proximity = Combat.proximityOf(state.distance)
+            assertEquals(HitZone.STRONG, Combat.zoneFor(proximity))
+            assertEquals(26, Combat.weaponDamage(Weapon.ASSAULT_GUN, proximity, 200))
+        }
+
+        // Being genuinely out of range still misses, regardless of facing.
+        val far = movingLeft.withPositions(robertX = 25f, robertY = 25f)
+        assertEquals(HitZone.MISS, Combat.zoneFor(Combat.proximityOf(far.distance)))
+        assertEquals(0, Combat.weaponDamage(Weapon.ASSAULT_GUN, Combat.proximityOf(far.distance), 200))
+        // The AWM's existing long-range exception still applies.
+        val awmRange = initial.withPositions(playerX = 6f, robertX = 25f, robertY = 12f)
+        assertEquals(24, Combat.weaponDamage(Weapon.AWM, Combat.proximityOf(awmRange.distance), 200))
     }
 
     @Test
     fun coverAndRecoveryRulesAreStable() {
         assertEquals(11, Combat.COVER_MAX_HITS)
         assertEquals(100, Combat.GUN_RECOVERY_COST)
-        // Every defence costs 200 coins less than before.
-        assertEquals(300, DefenceItem.MEDKIT.price)
-        assertEquals(650, DefenceItem.GLUE_WALL.price)
-        assertEquals(450, DefenceItem.COVER.price)
-        assertEquals(2800, DefenceItem.ANTI_MISSILE.price)
-        assertEquals(2600, DefenceItem.ANTI_BOMB.price)
+        // Defences have been rebalanced and remain below the price cap.
+        assertEquals(250, DefenceItem.MEDKIT.price)
+        assertEquals(550, DefenceItem.GLUE_WALL.price)
+        assertEquals(400, DefenceItem.COVER.price)
+        assertEquals(1800, DefenceItem.ANTI_MISSILE.price)
+        assertEquals(1700, DefenceItem.ANTI_BOMB.price)
     }
 
     @Test

@@ -77,6 +77,8 @@ data class GameStats(
     val wins: Int = 0,
     val kills: Int = 0,
     val coins: Int = 100,
+    /** Unpaid principal; zero means no loan is active. */
+    val loanBalance: Int = 0,
     val round: Int = 1,
     val level: Int = 1,
     /** Wins collected inside the current level. Five wins promote a level. */
@@ -113,7 +115,7 @@ data class GameStats(
  * Health, weapons, ammo, positions and defences of both fighters live here so
  * the interface can render the whole battle from one state object.
  *
- * The battle is played inside a real 100 m by 100 m zone ([Arena]): both
+ * The battle is played inside a real 25 m by 25 m square zone ([Arena]): both
  * fighters own an (x, y) position, the fighting distance is derived from those
  * positions, and running into one of the four boundaries is a wall hit.
  */
@@ -135,9 +137,9 @@ data class GameState(
     val distance: Float = Combat.MAX_RANGE,
 
     // ------------------------------------------------------------------
-    // Real positions inside the 100 m battle zone. Y is the depth axis: the
+    // Real positions inside the 25 m square battle zone. Y is the depth axis: the
     // player starts at the near edge, Robert at the far edge, so the fight
-    // begins exactly 100 m apart. X is the width of the zone and is what the
+    // begins exactly 25 m apart. X is the width of the zone and is what the
     // left and right halves of the center portion run along.
     // ------------------------------------------------------------------
     val playerX: Float = Arena.PLAYER_START_X,
@@ -148,10 +150,16 @@ data class GameState(
     /** The running speed level toggled by a three-finger swipe ([RunSpeed.id]). */
     val runSpeed: String = RunSpeed.NORMAL.id,
 
+    /** Last movement direction ([Facing.id]), used for status, not aiming. */
+    val playerFacing: String = Facing.FORWARD.id,
+
     /** A cover blocks 11 hits; the 12th breaks it. */
     val coverActive: Boolean = false,
     val coverHits: Int = 0,
-    /** A glue wall stops everything except three consecutive sniper hits. */
+    /**
+     * A player gloo wall stops everything except three consecutive
+     * Gloo Wall Breaker shots from the 90%-100% band.
+     */
     val glueWallActive: Boolean = false,
     val glueWallProgress: Int = 0,
 
@@ -159,6 +167,16 @@ data class GameState(
     val robertCoverHits: Int = 0,
     val robertGlueWallActive: Boolean = false,
     val robertGlueWallProgress: Int = 0,
+    /**
+     * Gloo Wall Breaker charges Robert may still spend this match. The enemy
+     * only ever receives the breaker when the player raises a gloo wall: once
+     * in round one, twice in round two, and he uses it automatically.
+     */
+    val robertGlueBreakers: Int = 0,
+    /** True while Robert is firing his breaker at the player's wall. */
+    val robertBreakerArmed: Boolean = false,
+    /** Gloo Wall Breaker shots Robert has already landed on the current wall. */
+    val robertBreakerHits: Int = 0,
     val robertWeapons: List<String> = emptyList(),
     val robertWeaponIndex: Int = 0,
     val robertAmmo: List<Int> = emptyList(),
@@ -342,6 +360,18 @@ data class GameState(
     val runSpeedLevel: RunSpeed
         get() = RunSpeed.fromId(runSpeed)
 
+    /** The player's last movement direction, reported in status. */
+    val facing: Facing
+        get() = Facing.fromId(playerFacing)
+
+    /** True while Robert may still raise a gloo wall of his own. */
+    val robertGlueWallAvailable: Boolean
+        get() = robertGlueWalls > 0
+
+    /** True while Robert may still use his Gloo Wall Breaker. */
+    val robertGlueBreakerAvailable: Boolean
+        get() = robertGlueBreakers > 0
+
     /** The bomb currently in the air, or null. */
     val bomb: BombKind?
         get() = BombKind.fromId(bombKind)
@@ -399,6 +429,10 @@ data class ResultData(
     val rewardWeapons: List<String> = emptyList(),
     /** Coins deducted for a defeat (0 when the player had none). */
     val coinsLost: Int = 0,
+    /** Portion of gross winnings applied to the loan, and principal still owed. */
+    val loanDeducted: Int = 0,
+    val loanRemaining: Int = 0,
+    val loanWasActive: Boolean = false,
     /** True when the round five time limit ran out: Robert survived. */
     val timeUp: Boolean = false
 ) {
